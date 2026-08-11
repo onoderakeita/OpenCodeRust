@@ -20,6 +20,7 @@ members = [
     "crates/opencode-command",
     "crates/opencode-plugin",
     "crates/opencode-tui",
+    "crates/opencode-pty",
 ]
 
 [workspace.package]
@@ -79,3 +80,4 @@ sha2 = "0.10"
 base64 = "0.22"
 tree-sitter = "0.24"
 tree-sitter-bash = "0.23"
+tempfile = "3.16.0"

@@ -68,6 +68,12 @@ pub struct Config {
     pub username: Option<String>,
 
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub permissions: Option<Vec<String>>,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub agents: Option<HashMap<String, AgentConfig>>,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub mode: Option<AgentConfigs>,
 
     #[serde(skip_serializing_if = "Option::is_none")]

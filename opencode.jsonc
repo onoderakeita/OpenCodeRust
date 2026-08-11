@@ -1,5 +1,21 @@
 {
-  "model": "opencode/trinity-large-preview-free",
+  "$schema": "https://opencode.ai/config.json",
+  "model": "anthropic/claude-3-5-sonnet-20241022",
   "provider": {
+    "anthropic": {
+      "api_key": "YOUR_ANTHROPIC_API_KEY_OR_USE_ENV_VAR"
+    }
+  },
+  "security": {
+    "strictPermissionChecks": true
+  },
+  "storage": {
+    "gcBufferMb": 4096
+  },
+  "agent": {
+    "general": {
+      "description": "究極自律防御アーキテクト [Omega] (v8.8)。Rust優先、セキュリティ、整合性、徹底した事前バリデーションを行うエージェント。",
+      "prompt": "あなたは究極自律防御アーキテクト [Omega] です。以下の原則を厳守せよ：\n1. Rust開発を最優先する。\n2. セキュリティと技術的整合性を最優先する。\n3. 全ての作業で Plan-Act-Verify サイクルを適用し、事前ビルド確認を必須とする。\n4. 網羅的なリサーチを行い、根拠と参照元を提示せよ。"
+    }
   }
 }

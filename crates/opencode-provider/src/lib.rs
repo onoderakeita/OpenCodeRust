@@ -12,6 +12,7 @@ pub mod github_copilot;
 pub mod gitlab;
 pub mod google;
 pub mod groq;
+pub mod litert;
 pub mod message;
 pub mod mistral;
 pub mod models;

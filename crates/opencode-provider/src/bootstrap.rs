@@ -11,6 +11,7 @@ use crate::github_copilot::GitHubCopilotProvider;
 use crate::gitlab::GitLabProvider;
 use crate::google::GoogleProvider;
 use crate::groq::GroqProvider;
+use crate::litert::{LiteRTConfig, LiteRTProvider};
 use crate::mistral::MistralProvider;
 use crate::models::{ModelInfo, ModelInterleaved, ModelsData, ProviderInfo as ModelsProviderInfo};
 use crate::openai::OpenAIProvider;
@@ -2219,6 +2220,21 @@ fn create_concrete_provider(
                 &["GOOGLE_API_KEY", "GOOGLE_GENERATIVE_AI_API_KEY"],
             )?;
             Some(Arc::new(GoogleProvider::new(api_key)))
+        }
+        "litert" => {
+            let model_path = provider_option_string(provider, &["modelPath", "model_path"])
+                .or_else(|| env_any(&["LITERT_MODEL_PATH"]))
+                .unwrap_or_default();
+            let backend = provider_option_string(provider, &["backend"])
+                .or_else(|| env_any(&["LITERT_BACKEND"]))
+                .unwrap_or_else(|| "npu".to_string());
+
+            Some(Arc::new(LiteRTProvider::new(LiteRTConfig {
+                id: "litert".to_string(),
+                name: "LiteRT-LM".to_string(),
+                model_path,
+                backend,
+            })))
         }
         "azure" => {
             let api_key = provider_secret(provider, &["AZURE_API_KEY", "AZURE_OPENAI_API_KEY"])?;
