@@ -314,13 +314,17 @@ impl Log {
         logger
     }
 
-    pub fn default() -> Logger {
+    pub fn default_logger() -> Logger {
         let mut tags = HashMap::new();
         tags.insert("service".to_string(), "default".to_string());
         Self::create(Some(tags))
     }
 
-    pub fn init(_level: Option<LogLevel>, log_dir: Option<PathBuf>, print: bool) -> Option<PathBuf> {
+    pub fn init(
+        _level: Option<LogLevel>,
+        log_dir: Option<PathBuf>,
+        print: bool,
+    ) -> Option<PathBuf> {
         if print {
             return None;
         }
@@ -353,7 +357,11 @@ impl Log {
     }
 }
 
-pub fn init_tracing(_level: Option<&str>, log_dir: Option<PathBuf>, print: bool) -> Option<PathBuf> {
+pub fn init_tracing(
+    _level: Option<&str>,
+    log_dir: Option<PathBuf>,
+    print: bool,
+) -> Option<PathBuf> {
     if print {
         let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
         tracing_subscriber::registry()

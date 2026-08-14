@@ -110,9 +110,11 @@ impl SessionView {
         frame.render_widget(underlay, sidebar_area);
 
         self.sidebar_close_button_area = Some(Rect {
-            x: sidebar_area
-                .x
-                .saturating_add(sidebar_area.width.saturating_sub(SIDEBAR_CLOSE_BUTTON_WIDTH)),
+            x: sidebar_area.x.saturating_add(
+                sidebar_area
+                    .width
+                    .saturating_sub(SIDEBAR_CLOSE_BUTTON_WIDTH),
+            ),
             y: sidebar_area.y,
             width: SIDEBAR_CLOSE_BUTTON_WIDTH.min(sidebar_area.width),
             height: 1,
@@ -137,7 +139,10 @@ impl SessionView {
             x: area
                 .x
                 .saturating_add(area.width.saturating_sub(SIDEBAR_OPEN_BUTTON_WIDTH)),
-            y: area.y.saturating_add(1).min(area.y + area.height.saturating_sub(1)),
+            y: area
+                .y
+                .saturating_add(1)
+                .min(area.y + area.height.saturating_sub(1)),
             width: SIDEBAR_OPEN_BUTTON_WIDTH.min(area.width),
             height: 1,
         };
@@ -167,7 +172,7 @@ impl SessionView {
 
         let show_header = {
             let user_pref = *self.context.show_header.read();
-            if !user_pref { false } else { true }
+            !!user_pref
         };
         let header_height = if show_header {
             if area.width < HEADER_NARROW_THRESHOLD {
@@ -615,8 +620,11 @@ impl SessionView {
                     };
 
                     if msg.parts.is_empty() {
-                        let mut text_lines =
-                            super::session_text::render_text_part(&msg.content, &theme, assistant_marker);
+                        let mut text_lines = super::session_text::render_text_part(
+                            &msg.content,
+                            &theme,
+                            assistant_marker,
+                        );
                         if semantic_hl {
                             text_lines =
                                 super::semantic_highlight::highlight_lines(text_lines, &theme);
@@ -647,12 +655,11 @@ impl SessionView {
                                             vec![Line::from("")],
                                         );
                                     }
-                                    let mut text_lines =
-                                        super::session_text::render_text_part(
-                                            text,
-                                            &theme,
-                                            assistant_marker,
-                                        );
+                                    let mut text_lines = super::session_text::render_text_part(
+                                        text,
+                                        &theme,
+                                        assistant_marker,
+                                    );
                                     if semantic_hl {
                                         text_lines = super::semantic_highlight::highlight_lines(
                                             text_lines, &theme,
@@ -772,10 +779,7 @@ impl SessionView {
                                 MessagePart::ToolResult { .. } => {}
                                 MessagePart::File { path, mime } => {
                                     let file_line = Line::from(vec![
-                                        Span::styled(
-                                            "▸ ",
-                                            Style::default().fg(assistant_marker),
-                                        ),
+                                        Span::styled("▸ ", Style::default().fg(assistant_marker)),
                                         Span::styled("[file] ", Style::default().fg(theme.info)),
                                         Span::styled(path.clone(), Style::default().fg(theme.text)),
                                         Span::styled(
@@ -797,10 +801,7 @@ impl SessionView {
                                 }
                                 MessagePart::Image { url } => {
                                     let image_line = Line::from(vec![
-                                        Span::styled(
-                                            "▸ ",
-                                            Style::default().fg(assistant_marker),
-                                        ),
+                                        Span::styled("▸ ", Style::default().fg(assistant_marker)),
                                         Span::styled("[image] ", Style::default().fg(theme.info)),
                                         Span::styled(
                                             url.clone(),

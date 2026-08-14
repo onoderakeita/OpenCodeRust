@@ -496,7 +496,7 @@ pub struct ModelVariantConfig {
 #[serde(untagged)]
 pub enum McpServerConfig {
     Enabled { enabled: bool },
-    Full(McpServer),
+    Full(Box<McpServer>),
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -1079,7 +1079,7 @@ impl DeepMerge for McpServerConfig {
                 McpServerConfig::Full(target_server) => target_server.enabled = Some(enabled),
             },
             McpServerConfig::Full(mut source_server) => match self {
-                McpServerConfig::Full(target_server) => target_server.deep_merge(source_server),
+                McpServerConfig::Full(target_server) => target_server.deep_merge(*source_server),
                 McpServerConfig::Enabled { enabled } => {
                     if source_server.enabled.is_none() {
                         source_server.enabled = Some(*enabled);
@@ -1355,11 +1355,11 @@ mod tests {
         let mut base = Config {
             mcp: Some(HashMap::from([(
                 "repo".to_string(),
-                McpServerConfig::Full(McpServer {
+                McpServerConfig::Full(Box::new(McpServer {
                     command: vec!["node".to_string(), "mcp.js".to_string()],
                     timeout: Some(3000),
                     ..Default::default()
-                }),
+                })),
             )])),
             ..Default::default()
         };

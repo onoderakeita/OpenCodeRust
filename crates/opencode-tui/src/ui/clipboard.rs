@@ -73,10 +73,10 @@ impl Clipboard {
         }
 
         // Linux: try native clipboard tools, fall back to OSC 52 only.
-        if std::env::var("WAYLAND_DISPLAY").is_ok() {
-            if write_with_command("wl-copy", &[], text).is_ok() {
-                return Ok(());
-            }
+        if std::env::var("WAYLAND_DISPLAY").is_ok()
+            && write_with_command("wl-copy", &[], text).is_ok()
+        {
+            return Ok(());
         }
 
         if write_with_command("xclip", &["-selection", "clipboard"], text).is_ok() {
@@ -251,7 +251,7 @@ fn read_image_windows() -> anyhow::Result<String> {
     );
 
     let output = Command::new("powershell")
-        .args(&["-NoProfile", "-Command", ps_script])
+        .args(["-NoProfile", "-Command", ps_script])
         .output()
         .context("failed to execute PowerShell for clipboard image")?;
 

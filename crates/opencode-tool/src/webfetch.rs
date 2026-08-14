@@ -311,12 +311,10 @@ fn strip_html(html: &str) -> String {
                         in_script = false;
                     }
                 }
-            } else if in_style {
-                if i >= 7 {
-                    let end_tag: String = chars[i - 7..=i].iter().collect();
-                    if end_tag.to_lowercase() == "</style>" {
-                        in_style = false;
-                    }
+            } else if in_style && i >= 7 {
+                let end_tag: String = chars[i - 7..=i].iter().collect();
+                if end_tag.to_lowercase() == "</style>" {
+                    in_style = false;
                 }
             }
             in_tag = false;

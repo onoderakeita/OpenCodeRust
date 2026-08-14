@@ -183,11 +183,68 @@ impl ServerState {
         let stored_sessions = session_repo.list(None, 100_000).await?;
         let mut manager = self.sessions.lock().await;
 
-        for mut stored in stored_sessions {
-            let stored_messages = message_repo.list_for_session(&stored.id).await?;
-            stored.messages = stored_messages;
-            let session: opencode_session::Session =
-                serde_json::from_value(serde_json::to_value(stored)?)?;
+        for stored in stored_sessions {
+            let stored_messages: Vec<opencode_session::SessionMessage> = serde_json::from_value(
+                serde_json::to_value(message_repo.list_for_session(&stored.id.0).await?)?,
+            )?;
+            let session = opencode_session::Session {
+                id: stored.id.0,
+                slug: stored.slug,
+                project_id: stored.project_id.0,
+                directory: stored.directory,
+                parent_id: stored.parent_id.map(|id| id.0),
+                title: stored.title,
+                version: stored.version,
+                time: opencode_session::SessionTime {
+                    created: stored.time.created as i64,
+                    updated: stored.time.updated as i64,
+                    compacting: stored.time.compacting.map(|t| t as i64),
+                    archived: stored.time.archived.map(|t| t as i64),
+                },
+                messages: stored_messages,
+                summary: None,
+                share: stored
+                    .share
+                    .map(|s| opencode_session::SessionShare { url: s.url }),
+                revert: stored.revert.map(|r| opencode_session::SessionRevert {
+                    message_id: r.message_id,
+                    part_id: r.part_id,
+                    snapshot: r.snapshot,
+                    diff: r.diff,
+                }),
+                permission: stored
+                    .permission
+                    .map(|p| opencode_session::PermissionRuleset {
+                        allow: p.allow,
+                        deny: p.deny,
+                        mode: p.mode,
+                    }),
+                usage: stored.usage.map(|u| opencode_session::SessionUsage {
+                    input_tokens: u.input as u64,
+                    output_tokens: u.output as u64,
+                    reasoning_tokens: u.reasoning as u64,
+                    cache_write_tokens: u.cache.write as u64,
+                    cache_read_tokens: u.cache.read as u64,
+                    total_cost: u.input + u.output,
+                }),
+                status: match stored.status {
+                    opencode_types::SessionStatus::Active => {
+                        opencode_session::SessionStatus::Active
+                    }
+                    opencode_types::SessionStatus::Completed => {
+                        opencode_session::SessionStatus::Completed
+                    }
+                    opencode_types::SessionStatus::Archived => {
+                        opencode_session::SessionStatus::Archived
+                    }
+                    opencode_types::SessionStatus::Compacting => {
+                        opencode_session::SessionStatus::Compacting
+                    }
+                },
+                metadata: HashMap::new(),
+                created_at: stored.created_at,
+                updated_at: stored.updated_at,
+            };
             manager.update(session);
         }
 
@@ -209,27 +266,30 @@ impl ServerState {
         let persisted = session_repo.list(None, 100_000).await?;
 
         for stale in persisted {
-            if !snapshot_ids.contains(&stale.id) {
-                message_repo.delete_for_session(&stale.id).await?;
-                session_repo.delete(&stale.id).await?;
+            if !snapshot_ids.contains(&stale.id.0) {
+                message_repo.delete_for_session(&stale.id.0).await?;
+                session_repo.delete(&stale.id.0).await?;
             }
         }
 
         for session in snapshot {
-            let mut stored_session: opencode_types::Session =
+            let stored_session: opencode_types::Session =
                 serde_json::from_value(serde_json::to_value(&session)?)?;
-            let stored_messages: Vec<opencode_types::SessionMessage> =
-                stored_session.messages.clone();
-            stored_session.messages.clear();
 
-            if session_repo.get(&stored_session.id).await?.is_some() {
+            // Convert messages to opencode_types::SessionMessage
+            let messages: Vec<opencode_types::SessionMessage> =
+                serde_json::from_value(serde_json::to_value(&session.messages)?)?;
+
+            if session_repo.get(&stored_session.id.0).await?.is_some() {
                 session_repo.update(&stored_session).await?;
             } else {
                 session_repo.create(&stored_session).await?;
             }
 
-            message_repo.delete_for_session(&stored_session.id).await?;
-            for message in stored_messages {
+            message_repo
+                .delete_for_session(&stored_session.id.0)
+                .await?;
+            for message in messages {
                 message_repo.create(&message).await?;
             }
         }

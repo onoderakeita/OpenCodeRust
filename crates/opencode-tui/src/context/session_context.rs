@@ -88,8 +88,9 @@ pub struct SessionContext {
     pub revert: HashMap<String, RevertInfo>,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Default)]
 pub enum SessionStatus {
+    #[default]
     Idle,
     Running,
     Retrying {
@@ -97,12 +98,6 @@ pub enum SessionStatus {
         attempt: u32,
         next: i64,
     },
-}
-
-impl Default for SessionStatus {
-    fn default() -> Self {
-        Self::Idle
-    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

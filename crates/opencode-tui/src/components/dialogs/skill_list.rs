@@ -30,7 +30,7 @@ impl SkillListDialog {
     }
 
     pub fn set_skills(&mut self, mut skills: Vec<String>) {
-        skills.sort_by(|a, b| a.to_ascii_lowercase().cmp(&b.to_ascii_lowercase()));
+        skills.sort_by_key(|a| a.to_ascii_lowercase());
         skills.dedup_by(|a, b| a.eq_ignore_ascii_case(b));
         self.skills = skills;
         self.filter();
@@ -176,4 +176,3 @@ impl Default for SkillListDialog {
 fn centered_rect(width: u16, height: u16, area: Rect) -> Rect {
     super::centered_rect(width, height, area)
 }
-

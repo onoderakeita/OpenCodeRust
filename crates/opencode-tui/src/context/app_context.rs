@@ -289,7 +289,7 @@ impl AppContext {
             .into_iter()
             .flat_map(|name| [format!("{name}@dark"), format!("{name}@light")])
             .collect::<Vec<_>>();
-        names.sort_by(|a, b| a.to_lowercase().cmp(&b.to_lowercase()));
+        names.sort_by_key(|a| a.to_lowercase());
         names
     }
 

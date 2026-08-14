@@ -1,3 +1,13 @@
+#![allow(
+    clippy::empty_line_after_doc_comments,
+    clippy::module_inception,
+    clippy::too_many_arguments,
+    clippy::unnecessary_sort_by,
+    clippy::manual_clamp,
+    clippy::nonminimal_bool,
+    clippy::if_same_then_else
+)]
+
 pub mod api;
 pub mod app;
 pub mod branding;

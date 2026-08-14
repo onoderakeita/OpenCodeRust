@@ -143,8 +143,8 @@ impl ModelsRegistry {
             .send()
             .await
         {
-            Ok(response) if response.status().is_success() => match response.text().await {
-                Ok(text) => {
+            Ok(response) if response.status().is_success() => {
+                if let Ok(text) = response.text().await {
                     if let Ok(parsed) = serde_json::from_str::<ModelsData>(&text) {
                         let _ = tokio::fs::write(&self.cache_path, &text).await;
                         let mut data = self.data.write().await;
@@ -152,8 +152,7 @@ impl ModelsRegistry {
                         return parsed;
                     }
                 }
-                _ => {}
-            },
+            }
             _ => {}
         }
 
@@ -194,7 +193,7 @@ impl ModelsRegistry {
 impl Default for ModelsRegistry {
     fn default() -> Self {
         let cache_path = dirs::cache_dir()
-            .unwrap_or_else(|| std::env::temp_dir())
+            .unwrap_or_else(std::env::temp_dir)
             .join("opencode")
             .join("models.json");
         Self::new(cache_path)

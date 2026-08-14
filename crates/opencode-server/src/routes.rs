@@ -5,8 +5,8 @@ use axum::{
     },
     http::Request,
     middleware::{self, Next},
-    response::{Html, IntoResponse, Response},
     response::sse::{Event, Sse},
+    response::{Html, IntoResponse, Response},
     routing::{delete, get, patch, post, put},
     Json, Router,
 };
@@ -55,7 +55,10 @@ pub fn router() -> Router<Arc<ServerState>> {
         .route("/auth/{id}", put(set_auth).delete(delete_auth))
         .route("/doc", get(get_doc))
         .route("/log", post(write_log))
-        .nest("/session", session_routes().layer(middleware::from_fn(inject_opencode_directory)))
+        .nest(
+            "/session",
+            session_routes().layer(middleware::from_fn(inject_opencode_directory)),
+        )
         .nest("/provider", provider_routes())
         .nest("/config", config_routes())
         .nest("/mcp", mcp_routes())
@@ -257,7 +260,9 @@ async fn list_sessions(
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "lowercase")]
+#[derive(Default)]
 enum SessionRunStatus {
+    #[default]
     Idle,
     Busy,
     Retry {
@@ -265,12 +270,6 @@ enum SessionRunStatus {
         message: String,
         next: i64,
     },
-}
-
-impl Default for SessionRunStatus {
-    fn default() -> Self {
-        Self::Idle
-    }
 }
 
 static SESSION_RUN_STATUS: Lazy<RwLock<HashMap<String, SessionRunStatus>>> =
@@ -419,9 +418,7 @@ async fn get_session(
     Path(id): Path<String>,
 ) -> Result<Json<SessionInfo>> {
     let sessions = state.sessions.lock().await;
-    let session = sessions
-        .get(&id)
-        .ok_or_else(|| ApiError::SessionNotFound(id))?;
+    let session = sessions.get(&id).ok_or(ApiError::SessionNotFound(id))?;
     Ok(Json(session_to_info(session)))
 }
 
@@ -499,7 +496,7 @@ async fn fork_session(
         .lock()
         .await
         .fork(&id, req.message_id.as_deref())
-        .ok_or_else(|| ApiError::SessionNotFound(id))?;
+        .ok_or(ApiError::SessionNotFound(id))?;
     persist_sessions_if_enabled(&state).await;
     Ok(Json(session_to_info(&forked)))
 }
@@ -2001,10 +1998,14 @@ async fn prompt_async(
         .message
         .clone()
         .or_else(|| {
-            req.parts.as_ref().map(|p| {
+            req.parts.as_ref().and_then(|p| {
                 let s = text_from_parts(p);
-                if s.is_empty() { None } else { Some(s) }
-            }).flatten()
+                if s.is_empty() {
+                    None
+                } else {
+                    Some(s)
+                }
+            })
         })
         .unwrap_or_default();
     session.add_user_message(&message_text);
@@ -2110,9 +2111,7 @@ async fn get_session_diff(
     Path(id): Path<String>,
 ) -> Result<Json<Vec<FileDiffInfo>>> {
     let sessions = state.sessions.lock().await;
-    let session = sessions
-        .get(&id)
-        .ok_or_else(|| ApiError::SessionNotFound(id))?;
+    let session = sessions.get(&id).ok_or(ApiError::SessionNotFound(id))?;
     let diffs = session
         .summary
         .as_ref()

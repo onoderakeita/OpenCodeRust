@@ -1,3 +1,14 @@
+#![allow(
+    clippy::needless_return,
+    clippy::needless_range_loop,
+    clippy::unnecessary_sort_by,
+    clippy::ptr_arg,
+    clippy::redundant_closure,
+    clippy::to_string_in_format_args,
+    clippy::type_complexity,
+    clippy::wildcard_in_or_patterns
+)]
+
 pub mod apply_patch;
 pub mod bash;
 pub mod batch;

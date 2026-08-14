@@ -353,7 +353,6 @@ fn centered_rect(width: u16, height: u16, area: Rect) -> Rect {
     super::centered_rect(width, height, area)
 }
 
-
 fn format_session_time(updated_at_ms: i64) -> (String, String) {
     let Some(updated_local) = Local.timestamp_millis_opt(updated_at_ms).single() else {
         return ("Unknown".to_string(), "--:--".to_string());

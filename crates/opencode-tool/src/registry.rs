@@ -153,7 +153,9 @@ impl ToolRegistry {
     }
 }
 
-fn hook_payload_object(payload: &serde_json::Value) -> Option<&serde_json::Map<String, serde_json::Value>> {
+fn hook_payload_object(
+    payload: &serde_json::Value,
+) -> Option<&serde_json::Map<String, serde_json::Value>> {
     payload
         .get("output")
         .and_then(|value| value.as_object())

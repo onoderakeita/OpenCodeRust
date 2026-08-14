@@ -151,22 +151,18 @@ pub struct SessionError {
 // Session Status
 // ============================================================================
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
 pub enum SessionStatus {
+    #[default]
     Active,
     Completed,
     Archived,
     Compacting,
 }
 
-impl Default for SessionStatus {
-    fn default() -> Self {
-        Self::Active
-    }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
 pub enum RunStatus {
+    #[default]
     Idle,
     Busy,
     Retrying {
@@ -177,12 +173,6 @@ pub enum RunStatus {
         #[serde(default)]
         next: i64,
     },
-}
-
-impl Default for RunStatus {
-    fn default() -> Self {
-        Self::Idle
-    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -119,10 +119,11 @@ impl Ripgrep {
 
             if !options.glob.is_empty() {
                 let matches_glob = options.glob.iter().any(|g| {
-                    if g.starts_with("!") {
-                        return !glob_match::glob_match(&g[1..], entry_path);
+                    if let Some(stripped) = g.strip_prefix('!') {
+                        !glob_match::glob_match(stripped, entry_path)
+                    } else {
+                        glob_match::glob_match(g, entry_path)
                     }
-                    glob_match::glob_match(g, entry_path)
                 });
                 if !matches_glob {
                     continue;
@@ -190,8 +191,8 @@ impl Ripgrep {
 
             let children_to_add: Vec<(String, String)> = node
                 .children
-                .iter()
-                .map(|(_, child)| {
+                .values()
+                .map(|child| {
                     let child_json = serde_json::to_string(child).unwrap_or_default();
                     (format!("{}/{}", path_str, child.name), child_json)
                 })

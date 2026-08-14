@@ -112,7 +112,7 @@ impl Tool for GlobTool {
                 let mtime = path
                     .metadata()
                     .and_then(|m| m.modified())
-                    .unwrap_or_else(|_| SystemTime::UNIX_EPOCH);
+                    .unwrap_or(SystemTime::UNIX_EPOCH);
                 files_with_mtime.push((path.to_string_lossy().to_string(), mtime));
             }
         }

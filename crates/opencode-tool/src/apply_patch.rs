@@ -377,9 +377,7 @@ fn parse_multi_file_patch(patch_text: &str) -> Result<Vec<FilePatch>, ToolError>
             let path = if operation.is_add() {
                 new_path.clone()
             } else {
-                old_path.clone().unwrap_or_else(|| {
-                    new_path.clone()
-                })
+                old_path.clone().unwrap_or_else(|| new_path.clone())
             };
 
             if path == "/dev/null" || path.is_empty() {
@@ -491,9 +489,7 @@ fn parse_model_patch(patch_text: &str) -> Result<Vec<FilePatch>, ToolError> {
         if let Some(caps) = move_to.captures(line) {
             if let Some(ref mut file) = current_file {
                 let target = caps[1].trim().to_string();
-                file.operation = PatchOperation::Move {
-                    move_path: target,
-                };
+                file.operation = PatchOperation::Move { move_path: target };
             }
             continue;
         }

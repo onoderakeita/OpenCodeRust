@@ -10,11 +10,11 @@ use ratatui::{
     Frame,
 };
 
+use crate::branding::{APP_NAME, APP_SHORT_NAME, APP_VERSION_DATE};
 use crate::context::{
     AppContext, LspConnectionStatus, McpConnectionStatus, MessageRole, TodoStatus,
 };
 use crate::theme::Theme;
-use crate::branding::{APP_NAME, APP_SHORT_NAME, APP_VERSION_DATE};
 
 pub struct Sidebar {
     context: Arc<AppContext>,
@@ -584,10 +584,7 @@ impl Sidebar {
                     format!("{} ({}) ", APP_NAME, APP_SHORT_NAME),
                     Style::default().fg(theme.text).bold(),
                 ),
-                Span::styled(
-                    APP_VERSION_DATE,
-                    Style::default().fg(theme.text_muted),
-                ),
+                Span::styled(APP_VERSION_DATE, Style::default().fg(theme.text_muted)),
             ]),
         ];
 

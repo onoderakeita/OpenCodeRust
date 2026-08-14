@@ -101,7 +101,7 @@ pub fn apply_caching(messages: &mut [Message], provider_type: ProviderType) {
     let final_indices: Vec<usize> = (total.saturating_sub(2)..total).collect();
 
     let mut indices_to_cache: Vec<usize> = Vec::new();
-    for idx in system_indices.into_iter().chain(final_indices.into_iter()) {
+    for idx in system_indices.into_iter().chain(final_indices) {
         if !indices_to_cache.contains(&idx) {
             indices_to_cache.push(idx);
         }
@@ -309,7 +309,7 @@ fn normalize_interleaved_field(_messages: &mut Vec<Message>, _model_id: &str) {
 
 /// Normalize messages for models that store reasoning in a specific provider field.
 /// Matches the TS: `if (typeof model.capabilities.interleaved === "object" && model.capabilities.interleaved.field)`
-pub fn normalize_messages_with_interleaved_field(messages: &mut Vec<Message>, field: &str) {
+pub fn normalize_messages_with_interleaved_field(messages: &mut [Message], field: &str) {
     use serde_json::json;
     for msg in messages.iter_mut() {
         if !matches!(msg.role, crate::Role::Assistant) {
@@ -685,7 +685,7 @@ fn remap_provider_options(messages: &mut [Message], npm: &str, provider_id: &str
 /// For providers that don't support interleaved thinking, strip thinking blocks
 /// from all but the last assistant message.
 pub fn normalize_interleaved_thinking(
-    messages: &mut Vec<Message>,
+    messages: &mut [Message],
     _provider_type: &ProviderType,
     supports_interleaved: bool,
 ) {
@@ -726,33 +726,30 @@ pub fn normalize_interleaved_thinking(
 
 /// Apply cache control markers at the part level.
 pub fn apply_caching_per_part(messages: &mut [Message], provider_type: &ProviderType) {
-    match provider_type {
-        ProviderType::Anthropic => {
-            if let Some(last_user) = messages
-                .iter_mut()
-                .rev()
-                .find(|m| matches!(m.role, crate::Role::User))
-            {
-                if let Content::Parts(ref mut parts) = last_user.content {
+    if let ProviderType::Anthropic = provider_type {
+        if let Some(last_user) = messages
+            .iter_mut()
+            .rev()
+            .find(|m| matches!(m.role, crate::Role::User))
+        {
+            if let Content::Parts(ref mut parts) = last_user.content {
+                if let Some(last_part) = parts.last_mut() {
+                    last_part.cache_control = Some(CacheControl::ephemeral());
+                }
+            }
+            last_user.cache_control = Some(CacheControl::ephemeral());
+        }
+
+        for msg in messages.iter_mut() {
+            if matches!(msg.role, crate::Role::System) {
+                msg.cache_control = Some(CacheControl::ephemeral());
+                if let Content::Parts(ref mut parts) = msg.content {
                     if let Some(last_part) = parts.last_mut() {
                         last_part.cache_control = Some(CacheControl::ephemeral());
                     }
                 }
-                last_user.cache_control = Some(CacheControl::ephemeral());
-            }
-
-            for msg in messages.iter_mut() {
-                if matches!(msg.role, crate::Role::System) {
-                    msg.cache_control = Some(CacheControl::ephemeral());
-                    if let Content::Parts(ref mut parts) = msg.content {
-                        if let Some(last_part) = parts.last_mut() {
-                            last_part.cache_control = Some(CacheControl::ephemeral());
-                        }
-                    }
-                }
             }
         }
-        _ => {}
     }
 }
 

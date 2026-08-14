@@ -189,7 +189,7 @@ impl Provider for DeepInfraProvider {
                     Err(e) => vec![Err(ProviderError::StreamError(e.to_string()))],
                 }
             })
-            .flat_map(|events| futures::stream::iter(events));
+            .flat_map(futures::stream::iter);
 
         Ok(Box::pin(stream))
     }

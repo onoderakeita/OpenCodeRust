@@ -276,10 +276,8 @@ impl MarkdownRenderer {
                             flush_line(&mut lines, &mut current);
                         }
                     }
-                    Tag::TableRow => {
-                        if table.is_none() {
-                            flush_line(&mut lines, &mut current);
-                        }
+                    Tag::TableRow if table.is_none() => {
+                        flush_line(&mut lines, &mut current);
                     }
                     Tag::TableCell => {
                         if table.is_some() {
@@ -321,10 +319,10 @@ impl MarkdownRenderer {
                     TagEnd::Item => {
                         flush_line(&mut lines, &mut current);
                     }
-                    TagEnd::Emphasis | TagEnd::Strong | TagEnd::Strikethrough => {
-                        if styles.len() > 1 {
-                            styles.pop();
-                        }
+                    TagEnd::Emphasis | TagEnd::Strong | TagEnd::Strikethrough
+                        if styles.len() > 1 =>
+                    {
+                        styles.pop();
                     }
                     TagEnd::Link => {
                         if styles.len() > 1 {

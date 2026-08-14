@@ -42,7 +42,7 @@ impl FileSystem for FileSystemImpl {
         let full_path = self.root.join(path);
         let mut entries = Vec::new();
         let mut dir = fs::read_dir(full_path).await?;
-        
+
         while let Some(entry) = dir.next_entry().await? {
             let file_type = entry.file_type().await?;
             let entry_type = if file_type.is_dir() {
@@ -68,14 +68,16 @@ mod tests {
     async fn test_fs_read_list() {
         let root = tempdir().unwrap();
         let fs_impl = FileSystemImpl::new(root.path().to_path_buf());
-        
+
         // Create file
-        fs::write(root.path().join("test.txt"), b"hello").await.unwrap();
-        
+        fs::write(root.path().join("test.txt"), b"hello")
+            .await
+            .unwrap();
+
         // Read file
         let content = fs_impl.read(Path::new("test.txt")).await.unwrap();
         assert_eq!(content, b"hello");
-        
+
         // List directory
         let entries = fs_impl.list(Path::new("")).await.unwrap();
         assert_eq!(entries.len(), 1);

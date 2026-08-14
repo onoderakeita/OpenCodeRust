@@ -7,7 +7,10 @@ pub fn set_title(title: &str) -> io::Result<()> {
 }
 
 pub fn set_session_title(session_title: &str) -> io::Result<()> {
-    set_title(&format!("{} ({}) - {}", APP_NAME, APP_SHORT_NAME, session_title))
+    set_title(&format!(
+        "{} ({}) - {}",
+        APP_NAME, APP_SHORT_NAME, session_title
+    ))
 }
 
 pub fn reset_title() -> io::Result<()> {

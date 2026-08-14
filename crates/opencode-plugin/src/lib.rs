@@ -181,7 +181,7 @@ impl PluginSystem {
         let mut hooks = self.hooks.write().await;
         let entry = hooks.entry(hook.event.clone()).or_insert_with(Vec::new);
         entry.push(Arc::new(hook));
-        entry.sort_by(|a, b| b.priority.cmp(&a.priority));
+        entry.sort_by_key(|h| std::cmp::Reverse(h.priority));
     }
 
     pub async fn trigger(&self, context: HookContext) -> Vec<HookResult> {

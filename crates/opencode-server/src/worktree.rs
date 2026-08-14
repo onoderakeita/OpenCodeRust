@@ -69,8 +69,7 @@ pub fn list_worktrees(repo_path: &Path) -> Result<Vec<WorktreeInfo>, WorktreeErr
             current_head = None;
         } else if line.starts_with("HEAD ") {
             current_head = Some(line["HEAD ".len()..].to_string());
-        } else if line.starts_with("branch ") {
-            let branch_full = &line["branch ".len()..];
+        } else if let Some(branch_full) = line.strip_prefix("branch ") {
             let branch = branch_full
                 .strip_prefix("refs/heads/")
                 .unwrap_or(branch_full);

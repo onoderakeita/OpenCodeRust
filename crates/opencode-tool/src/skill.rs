@@ -29,7 +29,7 @@ struct SkillInfo {
 }
 
 fn home_dir() -> Option<PathBuf> {
-    std::env::var_os("HOME").map(PathBuf::from).or_else(|| {
+    std::env::var_os("HOME").map(PathBuf::from).or({
         #[cfg(windows)]
         {
             std::env::var_os("USERPROFILE").map(PathBuf::from)
@@ -105,12 +105,11 @@ fn parse_frontmatter_value(frontmatter: &str, key: &str) -> Option<String> {
         }
         if let Some(value) = trimmed.strip_prefix(&format!("{key}:")) {
             let value = value.trim();
-            if value.len() >= 2 {
-                if (value.starts_with('"') && value.ends_with('"'))
-                    || (value.starts_with('\'') && value.ends_with('\''))
-                {
-                    return Some(value[1..value.len() - 1].to_string());
-                }
+            if value.len() >= 2
+                && ((value.starts_with('"') && value.ends_with('"'))
+                    || (value.starts_with('\'') && value.ends_with('\'')))
+            {
+                return Some(value[1..value.len() - 1].to_string());
             }
             return Some(value.to_string());
         }

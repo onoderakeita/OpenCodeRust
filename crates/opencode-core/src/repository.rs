@@ -1,5 +1,5 @@
-use serde::{Deserialize, Serialize};
 use regex::Regex;
+use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct BaseReference {
@@ -37,7 +37,7 @@ fn normalize_input(input: &str) -> String {
     let re_git = Regex::new(r"^git\+").unwrap();
     let re_hash = Regex::new(r"#.*$").unwrap();
     let re_slash = Regex::new(r"/+$").unwrap();
-    
+
     let cleaned = re_git.replace(input, "");
     let cleaned = re_hash.replace(&cleaned, "");
     re_slash.replace(&cleaned, "").trim().to_string()
@@ -48,7 +48,8 @@ fn trim_git_suffix(input: &str) -> String {
 }
 
 fn get_parts(input: &str) -> Vec<String> {
-    input.split('/')
+    input
+        .split('/')
         .map(|s| trim_git_suffix(s.trim()))
         .filter(|s| !s.is_empty())
         .collect()
@@ -59,33 +60,53 @@ fn safe_host(input: &str) -> bool {
 }
 
 fn safe_segment(input: &str) -> bool {
-    input != "." && input != ".." && !input.contains(':') && !Regex::new(r"[\s/\\]").unwrap().is_match(input)
+    input != "."
+        && input != ".."
+        && !input.contains(':')
+        && !Regex::new(r"[\s/\\]").unwrap().is_match(input)
 }
 
 fn host_like(input: &str) -> bool {
     input.contains('.') || input.contains(':') || input == "localhost"
 }
 
-fn build_remote(host: &str, segments: Vec<String>, remote: Option<String>, protocol: Option<String>) -> Option<RemoteReference> {
-    let segments: Vec<String> = segments.into_iter().map(|s| trim_git_suffix(&s)).filter(|s| !s.is_empty()).collect();
-    
+fn build_remote(
+    host: &str,
+    segments: Vec<String>,
+    remote: Option<String>,
+    protocol: Option<String>,
+) -> Option<RemoteReference> {
+    let segments: Vec<String> = segments
+        .into_iter()
+        .map(|s| trim_git_suffix(&s))
+        .filter(|s| !s.is_empty())
+        .collect();
+
     if !safe_host(host) || segments.is_empty() || segments.iter().any(|s| !safe_segment(s)) {
         return None;
     }
-    
+
     let repository_path = segments.join("/");
     let host_lower = host.to_lowercase();
     let repo = segments.last().unwrap().clone();
-    
+
     Some(RemoteReference {
         base: BaseReference {
             host: host_lower.clone(),
             path: repository_path.clone(),
             segments: segments.clone(),
-            owner: if segments.len() == 2 { Some(segments[0].clone()) } else { None },
+            owner: if segments.len() == 2 {
+                Some(segments[0].clone())
+            } else {
+                None
+            },
             repo,
             remote: remote.unwrap_or_else(|| format!("https://{}/{}", host_lower, repository_path)),
-            label: if host_lower == "github.com" && segments.len() == 2 { repository_path } else { format!("{}/{}", host_lower, repository_path) },
+            label: if host_lower == "github.com" && segments.len() == 2 {
+                repository_path
+            } else {
+                format!("{}/{}", host_lower, repository_path)
+            },
         },
         protocol,
     })
@@ -93,32 +114,35 @@ fn build_remote(host: &str, segments: Vec<String>, remote: Option<String>, proto
 
 pub fn parse(input: &str) -> Option<Reference> {
     let cleaned = normalize_input(input);
-    
+
     let re_github = Regex::new(r"^github:([^/\s]+)/([^/\s]+)$").unwrap();
     if let Some(caps) = re_github.captures(&cleaned) {
-        return build_remote("github.com", vec![caps[1].to_string(), caps[2].to_string()], None, None)
-            .map(Reference::Remote);
+        return build_remote(
+            "github.com",
+            vec![caps[1].to_string(), caps[2].to_string()],
+            None,
+            None,
+        )
+        .map(Reference::Remote);
     }
-    
+
     if !cleaned.contains("://") {
         let re_scp = Regex::new(r"^(?:[^@/\s]+@)?([^:/\s]+):(.+)$").unwrap();
         if let Some(caps) = re_scp.captures(&cleaned) {
             return build_remote(&caps[1], get_parts(&caps[2]), Some(cleaned.clone()), None)
                 .map(Reference::Remote);
         }
-        
+
         let direct = get_parts(&cleaned);
         if direct.len() >= 2 && host_like(&direct[0]) {
             let host = direct[0].clone();
-            return build_remote(&host, direct[1..].to_vec(), None, None)
-                .map(Reference::Remote);
+            return build_remote(&host, direct[1..].to_vec(), None, None).map(Reference::Remote);
         }
         if direct.len() == 2 {
-            return build_remote("github.com", direct, None, None)
-                .map(Reference::Remote);
+            return build_remote("github.com", direct, None, None).map(Reference::Remote);
         }
     }
-    
+
     None
 }
 

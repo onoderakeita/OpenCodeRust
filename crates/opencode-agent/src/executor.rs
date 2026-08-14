@@ -168,14 +168,17 @@ impl AgentExecutor {
                 .await
                 .map_err(|e| AgentError::ProviderError(e.to_string()))?;
 
-            let (response, tool_calls) = self.process_stream(stream).await?;
+            let (response, reasoning, tool_calls) = self.process_stream(stream).await?;
 
             if tool_calls.is_empty() {
-                final_response = response;
+                final_response = response.clone();
+                self.conversation
+                    .add_assistant_message(response, Some(reasoning.clone()));
                 break;
             }
 
-            self.conversation.add_assistant_message(&response);
+            self.conversation
+                .add_assistant_message(response, Some(reasoning));
 
             for tool_call in tool_calls {
                 let result = self.execute_tool(&tool_call).await;
@@ -230,14 +233,17 @@ impl AgentExecutor {
                 .await
                 .map_err(|e| AgentError::ProviderError(e.to_string()))?;
 
-            let (response, tool_calls) = self.process_stream(stream).await?;
+            let (response, reasoning, tool_calls) = self.process_stream(stream).await?;
 
             if tool_calls.is_empty() {
-                final_response = response;
+                final_response = response.clone();
+                self.conversation
+                    .add_assistant_message(response, Some(reasoning.clone()));
                 break;
             }
 
-            self.conversation.add_assistant_message(&response);
+            self.conversation
+                .add_assistant_message(response, Some(reasoning));
 
             for tool_call in tool_calls {
                 let result = self.execute_tool_without_subsessions(&tool_call).await;
@@ -309,27 +315,38 @@ impl AgentExecutor {
     async fn process_stream(
         &mut self,
         mut stream: opencode_provider::StreamResult,
-    ) -> Result<(String, Vec<ToolCall>), AgentError> {
+    ) -> Result<(String, String, Vec<ToolCall>), AgentError> {
         let mut content = String::new();
+        let mut reasoning = String::new();
         let mut tool_calls: Vec<ToolCall> = Vec::new();
+        let mut tool_args_buffers: HashMap<String, String> = HashMap::new();
 
         while let Some(event) = stream.next().await {
             match event {
                 Ok(StreamEvent::TextDelta(text)) => {
                     content.push_str(&text);
                 }
+                Ok(StreamEvent::ReasoningDelta { text, .. }) => {
+                    reasoning.push_str(&text);
+                }
                 Ok(StreamEvent::ToolCallStart { id, name }) => {
                     tool_calls.push(ToolCall {
-                        id,
+                        id: id.clone(),
                         name,
                         arguments: serde_json::Value::Null,
                     });
+                    tool_args_buffers.insert(id, String::new());
                 }
                 Ok(StreamEvent::ToolCallDelta { id, input }) => {
-                    if let Some(tc) = tool_calls.iter_mut().find(|t| t.id == id) {
-                        if tc.arguments.is_null() {
+                    if let Some(buf) = tool_args_buffers.get_mut(&id) {
+                        buf.push_str(&input);
+                    }
+                }
+                Ok(StreamEvent::ToolCallEnd { id, .. }) => {
+                    if let Some(args_str) = tool_args_buffers.remove(&id) {
+                        if let Some(tc) = tool_calls.iter_mut().find(|t| t.id == id) {
                             tc.arguments =
-                                serde_json::from_str(&input).unwrap_or(serde_json::Value::Null);
+                                serde_json::from_str(&args_str).unwrap_or(serde_json::Value::Null);
                         }
                     }
                 }
@@ -344,7 +361,7 @@ impl AgentExecutor {
             }
         }
 
-        Ok((content, tool_calls))
+        Ok((content, reasoning, tool_calls))
     }
 
     async fn execute_tool(&self, tool_call: &ToolCall) -> Result<String, ToolError> {
@@ -558,7 +575,7 @@ mod tests {
     async fn persisted_subsessions_roundtrip() {
         let mut conversation = Conversation::with_system_prompt("subagent prompt");
         conversation.add_user_message("inspect project");
-        conversation.add_assistant_message("working on it");
+        conversation.add_assistant_message("working on it", None);
 
         let mut persisted = HashMap::new();
         persisted.insert(

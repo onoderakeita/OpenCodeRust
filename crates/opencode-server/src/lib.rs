@@ -1,4 +1,9 @@
-#![allow(ambiguous_glob_reexports)]
+#![allow(
+    ambiguous_glob_reexports,
+    clippy::manual_unwrap_or_default,
+    clippy::redundant_guards,
+    clippy::manual_strip
+)]
 
 pub mod error;
 pub mod mcp_oauth;

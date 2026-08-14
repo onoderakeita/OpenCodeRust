@@ -129,7 +129,7 @@ impl McpTransport for StdioTransport {
                 })?;
 
                 let content = String::from_utf8_lossy(&content_buf);
-                let message = JsonRpcMessage::from_str(&content).map_err(|e| {
+                let message = JsonRpcMessage::parse_json_str(&content).map_err(|e| {
                     McpClientError::ProtocolError(format!("Failed to parse message: {}", e))
                 })?;
 
@@ -229,7 +229,7 @@ impl McpTransport for HttpTransport {
                     if data.is_empty() || data == "[DONE]" {
                         continue;
                     }
-                    if let Ok(message) = JsonRpcMessage::from_str(data) {
+                    if let Ok(message) = JsonRpcMessage::parse_json_str(data) {
                         let _ = self.response_tx.send(message);
                     }
                 }
@@ -240,7 +240,7 @@ impl McpTransport for HttpTransport {
                 McpClientError::TransportError(format!("Failed to read response body: {}", e))
             })?;
             if !text.is_empty() {
-                let message = JsonRpcMessage::from_str(&text).map_err(|e| {
+                let message = JsonRpcMessage::parse_json_str(&text).map_err(|e| {
                     McpClientError::ProtocolError(format!("Failed to parse response: {}", e))
                 })?;
                 let _ = self.response_tx.send(message);
@@ -319,7 +319,7 @@ impl SseTransport {
                         if data.is_empty() || data == "[DONE]" {
                             continue;
                         }
-                        match JsonRpcMessage::from_str(&data) {
+                        match JsonRpcMessage::parse_json_str(&data) {
                             Ok(msg) => {
                                 if tx.send(msg).is_err() {
                                     break;

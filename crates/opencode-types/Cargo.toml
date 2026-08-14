@@ -8,7 +8,9 @@ license.workspace = true
 [dependencies]
 serde = { workspace = true }
 serde_json = { workspace = true }
-chrono = { workspace = true }
+sqlx = { workspace = true, features = ["macros"] }
 uuid = { workspace = true }
+chrono = { workspace = true }
+
 anyhow = { workspace = true }
 thiserror = { workspace = true }

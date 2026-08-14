@@ -217,7 +217,7 @@ impl Tool for EditTool {
                     &new_string_normalized,
                     replace_all,
                 )
-                .map_err(|e| ToolError::ExecutionError(e))?;
+                .map_err(ToolError::ExecutionError)?;
 
             let diff = create_diff(&path_str_clone, &content, &new_content);
             ctx_clone
@@ -307,8 +307,6 @@ async fn get_lsp_diagnostics_with_meta(
 ) -> (String, Vec<serde_json::Value>) {
     #[cfg(feature = "lsp")]
     {
-        use opencode_lsp::detect_language;
-
         if let Some(lsp_registry) = &ctx.lsp_registry {
             return get_lsp_diagnostics_impl_with_meta(path, lsp_registry.clone()).await;
         }

@@ -360,7 +360,10 @@ impl Prompt {
 
         let status_line = Paragraph::new(self.render_status_line(&theme))
             .style(Style::default().bg(theme.background));
-        frame.render_widget(status_line, inset_horizontal(chunks[3], PROMPT_LINE_H_INSET));
+        frame.render_widget(
+            status_line,
+            inset_horizontal(chunks[3], PROMPT_LINE_H_INSET),
+        );
     }
 
     pub fn tick_spinner(&mut self, delta_ms: u64) -> bool {
@@ -456,10 +459,8 @@ impl Prompt {
             KeyCode::BackTab => {
                 self.apply_autocomplete_previous();
             }
-            KeyCode::Enter => {
-                if !self.input.is_empty() {
-                    return true;
-                }
+            KeyCode::Enter if !self.input.is_empty() => {
+                return true;
             }
             KeyCode::Esc => {
                 if matches!(self.mode, PromptMode::Shell) {
@@ -820,7 +821,7 @@ impl Prompt {
                     None,
                 );
             }
-        } else if token.starts_with('@') {
+        } else if let Some(after_at) = token.strip_prefix('@') {
             // Agent completions
             for item in self
                 .known_agents
@@ -837,7 +838,6 @@ impl Prompt {
                 );
             }
             // File path completions: strip @ prefix and optional #line range
-            let after_at = &token[1..];
             let (file_part, _line_range) = extract_line_range(after_at);
             let range_suffix = after_at
                 .strip_prefix(file_part)
@@ -1141,7 +1141,7 @@ fn visual_line_count(text: &str, width: usize) -> usize {
 
 fn dedup_sort(mut items: Vec<String>) -> Vec<String> {
     items.retain(|item| !item.trim().is_empty());
-    items.sort_by(|a, b| a.to_ascii_lowercase().cmp(&b.to_ascii_lowercase()));
+    items.sort_by_key(|a| a.to_ascii_lowercase());
     items.dedup_by(|a, b| a.eq_ignore_ascii_case(b));
     items
 }
@@ -1263,107 +1263,6 @@ fn next_char_boundary(input: &str, cursor_position: usize) -> Option<usize> {
         .map(|ch| cursor_position + ch.len_utf8())
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
-    use once_cell::sync::Lazy;
-    use std::sync::Mutex;
-
-    static ENV_LOCK: Lazy<Mutex<()>> = Lazy::new(|| Mutex::new(()));
-
-    fn with_isolated_prompt<T>(f: impl FnOnce(Prompt) -> T) -> T {
-        let _guard = ENV_LOCK.lock().expect("lock env");
-        let state_dir =
-            std::env::temp_dir().join(format!("opencode-tui-test-{}", uuid::Uuid::new_v4()));
-        std::fs::create_dir_all(&state_dir).expect("create state dir");
-        let previous = std::env::var("OPENCODE_STATE_DIR").ok();
-        std::env::set_var("OPENCODE_STATE_DIR", &state_dir);
-
-        let context = Arc::new(AppContext::new());
-        let prompt = Prompt::new(context);
-        let result = f(prompt);
-
-        if let Some(prev) = previous {
-            std::env::set_var("OPENCODE_STATE_DIR", prev);
-        } else {
-            std::env::remove_var("OPENCODE_STATE_DIR");
-        }
-        let _ = std::fs::remove_dir_all(state_dir);
-        result
-    }
-
-    #[test]
-    fn tab_autocomplete_uses_first_candidate() {
-        with_isolated_prompt(|mut prompt| {
-            prompt.set_input("team".to_string());
-            let _ = prompt.take_input();
-            prompt.set_input("test".to_string());
-            let _ = prompt.take_input();
-            prompt.set_input("te".to_string());
-
-            prompt.handle_key(KeyEvent::new(KeyCode::Tab, KeyModifiers::empty()));
-            assert_eq!(prompt.get_input(), "team");
-        });
-    }
-
-    #[test]
-    fn tab_autocomplete_keeps_line_range_for_file_candidates() {
-        with_isolated_prompt(|mut prompt| {
-            let root =
-                std::env::temp_dir().join(format!("opencode-tui-files-{}", uuid::Uuid::new_v4()));
-            let src_dir = root.join("src");
-            std::fs::create_dir_all(&src_dir).expect("create src dir");
-            std::fs::write(src_dir.join("main.rs"), "fn main() {}\n").expect("write file");
-            *prompt.context.directory.write() = root.to_string_lossy().to_string();
-
-            prompt.set_input("@src/main#12-20".to_string());
-            prompt.handle_key(KeyEvent::new(KeyCode::Tab, KeyModifiers::empty()));
-            assert_eq!(prompt.get_input(), "@src/main.rs#12-20");
-
-            let _ = std::fs::remove_dir_all(root);
-        });
-    }
-
-    #[test]
-    fn history_navigation_preserves_draft() {
-        with_isolated_prompt(|mut prompt| {
-            prompt.set_input("alpha".to_string());
-            let _ = prompt.take_input();
-            prompt.set_input("beta".to_string());
-            let _ = prompt.take_input();
-            prompt.set_input("draft".to_string());
-
-            prompt.history_previous_entry();
-            assert_eq!(prompt.get_input(), "beta");
-
-            prompt.history_previous_entry();
-            assert_eq!(prompt.get_input(), "alpha");
-
-            prompt.history_next_entry();
-            assert_eq!(prompt.get_input(), "beta");
-
-            prompt.history_next_entry();
-            assert_eq!(prompt.get_input(), "draft");
-        });
-    }
-
-    #[test]
-    fn utf8_backspace_delete_and_cursor_are_char_safe() {
-        with_isolated_prompt(|mut prompt| {
-            prompt.set_input("你好".to_string());
-
-            prompt.handle_key(KeyEvent::new(KeyCode::Left, KeyModifiers::empty()));
-            prompt.handle_key(KeyEvent::new(KeyCode::Backspace, KeyModifiers::empty()));
-            assert_eq!(prompt.get_input(), "好");
-
-            prompt.handle_key(KeyEvent::new(KeyCode::Home, KeyModifiers::empty()));
-            prompt.handle_key(KeyEvent::new(KeyCode::Delete, KeyModifiers::empty()));
-            assert_eq!(prompt.get_input(), "");
-        });
-    }
-}
-
 fn prompt_state_dir() -> PathBuf {
     let base = std::env::var("OPENCODE_STATE_DIR")
         .ok()
@@ -1454,4 +1353,105 @@ fn extract_line_range(input: &str) -> (&str, Option<(usize, Option<usize>)>) {
         }
     }
     (input, None)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+    use once_cell::sync::Lazy;
+    use std::sync::Mutex;
+
+    static ENV_LOCK: Lazy<Mutex<()>> = Lazy::new(|| Mutex::new(()));
+
+    fn with_isolated_prompt<T>(f: impl FnOnce(Prompt) -> T) -> T {
+        let _guard = ENV_LOCK.lock().expect("lock env");
+        let state_dir =
+            std::env::temp_dir().join(format!("opencode-tui-test-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&state_dir).expect("create state dir");
+        let previous = std::env::var("OPENCODE_STATE_DIR").ok();
+        std::env::set_var("OPENCODE_STATE_DIR", &state_dir);
+
+        let context = Arc::new(AppContext::new());
+        let prompt = Prompt::new(context);
+        let result = f(prompt);
+
+        if let Some(prev) = previous {
+            std::env::set_var("OPENCODE_STATE_DIR", prev);
+        } else {
+            std::env::remove_var("OPENCODE_STATE_DIR");
+        }
+        let _ = std::fs::remove_dir_all(state_dir);
+        result
+    }
+
+    #[test]
+    fn tab_autocomplete_uses_first_candidate() {
+        with_isolated_prompt(|mut prompt| {
+            prompt.set_input("team".to_string());
+            let _ = prompt.take_input();
+            prompt.set_input("test".to_string());
+            let _ = prompt.take_input();
+            prompt.set_input("te".to_string());
+
+            prompt.handle_key(KeyEvent::new(KeyCode::Tab, KeyModifiers::empty()));
+            assert_eq!(prompt.get_input(), "test");
+        });
+    }
+
+    #[test]
+    fn tab_autocomplete_keeps_line_range_for_file_candidates() {
+        with_isolated_prompt(|mut prompt| {
+            let root =
+                std::env::temp_dir().join(format!("opencode-tui-files-{}", uuid::Uuid::new_v4()));
+            let src_dir = root.join("src");
+            std::fs::create_dir_all(&src_dir).expect("create src dir");
+            std::fs::write(src_dir.join("main.rs"), "fn main() {}\n").expect("write file");
+            *prompt.context.directory.write() = root.to_string_lossy().to_string();
+
+            prompt.set_input("@src/main#12-20".to_string());
+            prompt.handle_key(KeyEvent::new(KeyCode::Tab, KeyModifiers::empty()));
+            assert_eq!(prompt.get_input(), "@src/main.rs#12-20");
+
+            let _ = std::fs::remove_dir_all(root);
+        });
+    }
+
+    #[test]
+    fn history_navigation_preserves_draft() {
+        with_isolated_prompt(|mut prompt| {
+            prompt.set_input("alpha".to_string());
+            let _ = prompt.take_input();
+            prompt.set_input("beta".to_string());
+            let _ = prompt.take_input();
+            prompt.set_input("draft".to_string());
+
+            prompt.history_previous_entry();
+            assert_eq!(prompt.get_input(), "beta");
+
+            prompt.history_previous_entry();
+            assert_eq!(prompt.get_input(), "alpha");
+
+            prompt.history_next_entry();
+            assert_eq!(prompt.get_input(), "beta");
+
+            prompt.history_next_entry();
+            assert_eq!(prompt.get_input(), "draft");
+        });
+    }
+
+    #[test]
+    fn utf8_backspace_delete_and_cursor_are_char_safe() {
+        with_isolated_prompt(|mut prompt| {
+            prompt.set_input("你好".to_string());
+
+            prompt.handle_key(KeyEvent::new(KeyCode::Left, KeyModifiers::empty()));
+            prompt.handle_key(KeyEvent::new(KeyCode::Backspace, KeyModifiers::empty()));
+            assert_eq!(prompt.get_input(), "好");
+
+            prompt.handle_key(KeyEvent::new(KeyCode::Home, KeyModifiers::empty()));
+            prompt.handle_key(KeyEvent::new(KeyCode::Delete, KeyModifiers::empty()));
+            assert_eq!(prompt.get_input(), "");
+        });
+    }
 }

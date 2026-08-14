@@ -981,7 +981,7 @@ impl SessionPrompt {
                 continue;
             }
 
-            if let Some(ref assistant) = last_assistant {
+            if let Some(assistant) = last_assistant {
                 let has_finish = assistant.parts.iter().any(|p| match &p.part_type {
                     PartType::Text { text, .. } => !text.is_empty(),
                     _ => false,
@@ -1858,7 +1858,11 @@ impl SessionPrompt {
         let parts = match content {
             Content::Text(text) => vec![crate::MessagePart {
                 id: format!("prt_{}", uuid::Uuid::new_v4()),
-                part_type: PartType::Text { text, synthetic: None, ignored: None },
+                part_type: PartType::Text {
+                    text,
+                    synthetic: None,
+                    ignored: None,
+                },
                 created_at: now,
                 message_id: None,
             }],
@@ -1867,7 +1871,11 @@ impl SessionPrompt {
                 .filter_map(|p| match p.content_type.as_str() {
                     "text" => p.text.map(|text| crate::MessagePart {
                         id: format!("prt_{}", uuid::Uuid::new_v4()),
-                        part_type: PartType::Text { text, synthetic: None, ignored: None },
+                        part_type: PartType::Text {
+                            text,
+                            synthetic: None,
+                            ignored: None,
+                        },
                         created_at: now,
                         message_id: None,
                     }),
@@ -2883,9 +2891,9 @@ fn apply_chat_message_hook_outputs(
             }
         }
         if let Some(next_parts) = object.get("parts").and_then(|value| value.as_array()) {
-            let parsed = serde_json::from_value::<Vec<crate::MessagePart>>(serde_json::Value::Array(
-                next_parts.clone(),
-            ));
+            let parsed = serde_json::from_value::<Vec<crate::MessagePart>>(
+                serde_json::Value::Array(next_parts.clone()),
+            );
             if let Ok(parts) = parsed {
                 message.parts = parts;
             }
@@ -3211,7 +3219,7 @@ pub async fn generate_session_title_llm(
 
             // Clean up: remove thinking tags, take first non-empty line
             let cleaned = text
-                .replace(|c: char| c == '"' || c == '\'', "")
+                .replace(['"', '\''], "")
                 .lines()
                 .map(|l| l.trim())
                 .find(|l| !l.is_empty() && !l.starts_with("<think>"))
@@ -3322,7 +3330,7 @@ pub async fn shell_exec(input: &ShellInput, session: &mut Session) -> anyhow::Re
 
     let invocation =
         resolve_shell_invocation(std::env::var("SHELL").ok().as_deref(), &input.command_str);
-    let abort = input.abort.clone().unwrap_or_else(CancellationToken::new);
+    let abort = input.abort.clone().unwrap_or_default();
 
     let mut command = tokio::process::Command::new(&invocation.program);
     command

@@ -65,7 +65,7 @@ pub fn parse_markdown(text: &str) -> Vec<MarkdownBlock> {
             } else {
                 in_code_block = true;
                 code_block_lang = line.strip_prefix("```").map(|s| s.trim().to_string());
-                if code_block_lang.as_ref().map_or(false, |s| s.is_empty()) {
+                if code_block_lang.as_ref().is_some_and(|s| s.is_empty()) {
                     code_block_lang = None;
                 }
             }
@@ -153,7 +153,7 @@ fn parse_list(
     let mut items = Vec::new();
 
     let content = first_line
-        .trim_start_matches(|c| c == '-' || c == '*' || c == '+')
+        .trim_start_matches(['-', '*', '+'])
         .trim()
         .to_string();
     let inline = parse_inline(&content);
@@ -172,7 +172,7 @@ fn parse_list(
         if trimmed.starts_with("- ") || trimmed.starts_with("* ") || trimmed.starts_with("+ ") {
             lines.next();
             let content = trimmed
-                .trim_start_matches(|c| c == '-' || c == '*' || c == '+')
+                .trim_start_matches(['-', '*', '+'])
                 .trim()
                 .to_string();
             let inline = parse_inline(&content);

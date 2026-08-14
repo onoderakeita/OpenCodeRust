@@ -1,6 +1,6 @@
-use std::path::{Path, PathBuf};
-use tokio::process::Command;
 use serde::{Deserialize, Serialize};
+use std::path::PathBuf;
+use tokio::process::Command;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Repository {
@@ -20,7 +20,12 @@ impl GitClient {
 
     async fn run(&self, args: &[&str]) -> anyhow::Result<(i32, String, String)> {
         let output = Command::new("git")
-            .args(&["--git-dir", self.repository.git_directory.to_str().unwrap(), "--work-tree", self.repository.worktree.to_str().unwrap()])
+            .args([
+                "--git-dir",
+                self.repository.git_directory.to_str().unwrap(),
+                "--work-tree",
+                self.repository.worktree.to_str().unwrap(),
+            ])
             .args(args)
             .current_dir(&self.repository.worktree)
             .output()
@@ -43,7 +48,9 @@ impl GitClient {
     }
 
     pub async fn branch(&self) -> anyhow::Result<Option<String>> {
-        let (exit_code, stdout, _) = self.run(&["symbolic-ref", "--quiet", "--short", "HEAD"]).await?;
+        let (exit_code, stdout, _) = self
+            .run(&["symbolic-ref", "--quiet", "--short", "HEAD"])
+            .await?;
         if exit_code == 0 {
             Ok(Some(stdout.trim().to_string()))
         } else {
@@ -55,20 +62,43 @@ impl GitClient {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tempfile::tempdir;
     use std::process::Command as StdCommand;
+    use tempfile::tempdir;
 
     #[tokio::test]
     async fn test_git_operations() {
         let root = tempdir().unwrap();
         let worktree = root.path().to_path_buf();
         let git_dir = worktree.join(".git");
-        
+
         // Initialize git repo
-        StdCommand::new("git").arg("init").current_dir(&worktree).status().unwrap();
-        StdCommand::new("git").arg("config").arg("user.email").arg("test@example.com").current_dir(&worktree).status().unwrap();
-        StdCommand::new("git").arg("config").arg("user.name").arg("Test User").current_dir(&worktree).status().unwrap();
-        StdCommand::new("git").arg("commit").arg("--allow-empty").arg("-m").arg("initial").current_dir(&worktree).status().unwrap();
+        StdCommand::new("git")
+            .arg("init")
+            .current_dir(&worktree)
+            .status()
+            .unwrap();
+        StdCommand::new("git")
+            .arg("config")
+            .arg("user.email")
+            .arg("test@example.com")
+            .current_dir(&worktree)
+            .status()
+            .unwrap();
+        StdCommand::new("git")
+            .arg("config")
+            .arg("user.name")
+            .arg("Test User")
+            .current_dir(&worktree)
+            .status()
+            .unwrap();
+        StdCommand::new("git")
+            .arg("commit")
+            .arg("--allow-empty")
+            .arg("-m")
+            .arg("initial")
+            .current_dir(&worktree)
+            .status()
+            .unwrap();
 
         let repo = Repository {
             worktree: worktree.clone(),

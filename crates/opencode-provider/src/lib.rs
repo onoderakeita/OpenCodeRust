@@ -1,3 +1,11 @@
+#![allow(
+    clippy::field_reassign_with_default,
+    clippy::if_same_then_else,
+    clippy::unnecessary_sort_by,
+    clippy::too_many_arguments,
+    clippy::needless_range_loop
+)]
+
 pub mod anthropic;
 pub mod auth;
 pub mod azure;

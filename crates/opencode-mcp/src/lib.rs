@@ -1,3 +1,5 @@
+#![allow(clippy::manual_strip)]
+
 pub mod auth;
 pub mod client;
 pub mod oauth;

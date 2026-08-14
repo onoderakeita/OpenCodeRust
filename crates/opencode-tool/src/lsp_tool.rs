@@ -249,7 +249,7 @@ async fn execute_with_lsp(
                     LspOperation::Rename => {
                         let new_name = params.new_name.as_deref().unwrap_or("new_name");
                         match client.rename(path, line, character, new_name).await {
-                            Ok(Some(edit)) => format!(
+                            Ok(Some(_edit)) => format!(
                                 "Rename preview available. Workspace edit ready for: {}",
                                 new_name
                             ),

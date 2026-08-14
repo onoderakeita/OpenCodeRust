@@ -576,7 +576,7 @@ impl Replacer for MultiOccurrenceReplacer {
         find: &'a str,
     ) -> Box<dyn Iterator<Item = String> + 'a> {
         let count = content.matches(find).count();
-        Box::new(std::iter::repeat(find.to_string()).take(count))
+        Box::new(std::iter::repeat_n(find.to_string(), count))
     }
 }
 

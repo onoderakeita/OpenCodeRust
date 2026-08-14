@@ -333,8 +333,8 @@ impl PluginLoader {
 /// Parse "pkg@version" into (name, version). Handles scoped packages like "@scope/pkg@1.0".
 fn parse_npm_spec(spec: &str) -> (&str, &str) {
     // Handle scoped packages: @scope/pkg@version
-    if spec.starts_with('@') {
-        if let Some(idx) = spec[1..].find('@') {
+    if let Some(stripped) = spec.strip_prefix('@') {
+        if let Some(idx) = stripped.find('@') {
             let split = idx + 1;
             return (&spec[..split], &spec[split + 1..]);
         }
@@ -578,11 +578,7 @@ fn ensure_array(map: &mut Map<String, Value>, key: &str) {
 fn seed_hook_output(event: HookEvent, output: &mut Map<String, Value>) {
     match event {
         HookEvent::ToolDefinition => {
-            ensure_default(
-                output,
-                "description",
-                Value::String(String::new()),
-            );
+            ensure_default(output, "description", Value::String(String::new()));
             ensure_object(output, "parameters");
         }
         HookEvent::ToolExecuteBefore => {

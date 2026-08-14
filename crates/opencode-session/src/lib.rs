@@ -1,5 +1,11 @@
-#![allow(ambiguous_glob_reexports)]
-
+#![allow(
+    ambiguous_glob_reexports,
+    clippy::too_many_arguments,
+    clippy::filter_next,
+    clippy::manual_strip,
+    clippy::collapsible_match,
+    clippy::new_ret_no_self
+)]
 pub mod compaction;
 pub mod instruction;
 pub mod llm;
@@ -8,6 +14,7 @@ pub mod message_v2;
 pub mod prompt;
 pub mod retry;
 pub mod revert;
+pub mod runner;
 pub mod session;
 pub mod snapshot;
 pub mod status;

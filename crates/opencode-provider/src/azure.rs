@@ -87,7 +87,7 @@ impl AzureProvider {
         }
     }
 
-    fn build_url(&self, model: &str, stream: bool) -> String {
+    fn build_url(&self, model: &str, _stream: bool) -> String {
         let deployment = self.config.deployment_name.as_deref().unwrap_or(model);
         let api_version = self
             .config
@@ -97,17 +97,10 @@ impl AzureProvider {
 
         let endpoint = self.config.endpoint.trim_end_matches('/');
 
-        if stream {
-            format!(
-                "{}/openai/deployments/{}/chat/completions?api-version={}",
-                endpoint, deployment, api_version
-            )
-        } else {
-            format!(
-                "{}/openai/deployments/{}/chat/completions?api-version={}",
-                endpoint, deployment, api_version
-            )
-        }
+        format!(
+            "{}/openai/deployments/{}/chat/completions?api-version={}",
+            endpoint, deployment, api_version
+        )
     }
 
     fn build_request_body(request: &ChatRequest) -> Result<Value, ProviderError> {
@@ -200,8 +193,7 @@ impl Provider for AzureProvider {
                 Ok(bytes) => {
                     let text = String::from_utf8_lossy(&bytes);
                     for line in text.lines() {
-                        if line.starts_with("data: ") {
-                            let data = &line[6..];
+                        if let Some(data) = line.strip_prefix("data: ") {
                             if let Some(event) = crate::stream::parse_openai_sse(data) {
                                 return Ok(event);
                             }

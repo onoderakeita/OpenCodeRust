@@ -1,20 +1,15 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum PermissionAction {
     #[serde(rename = "allow")]
     Allow,
     #[serde(rename = "deny")]
     Deny,
     #[serde(rename = "ask")]
+    #[default]
     Ask,
-}
-
-impl Default for PermissionAction {
-    fn default() -> Self {
-        Self::Ask
-    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -135,13 +130,11 @@ fn wildcard_match(text: &str, pattern: &str) -> bool {
         return text.contains(middle);
     }
 
-    if pattern.starts_with('*') {
-        let suffix = &pattern[1..];
+    if let Some(suffix) = pattern.strip_prefix('*') {
         return text.ends_with(suffix);
     }
 
-    if pattern.ends_with('*') {
-        let prefix = &pattern[..pattern.len() - 1];
+    if let Some(prefix) = pattern.strip_suffix('*') {
         return text.starts_with(prefix);
     }
 
@@ -149,63 +142,53 @@ fn wildcard_match(text: &str, pattern: &str) -> bool {
 }
 
 pub fn default_ruleset() -> PermissionRuleset {
-    let mut rules = Vec::new();
-
-    rules.push(PermissionRule {
-        permission: "*".to_string(),
-        pattern: "*".to_string(),
-        action: PermissionAction::Allow,
-    });
-
-    rules.push(PermissionRule {
-        permission: "doom_loop".to_string(),
-        pattern: "*".to_string(),
-        action: PermissionAction::Ask,
-    });
-
-    rules.push(PermissionRule {
-        permission: "external_directory".to_string(),
-        pattern: "*".to_string(),
-        action: PermissionAction::Ask,
-    });
-
-    rules.push(PermissionRule {
-        permission: "question".to_string(),
-        pattern: "*".to_string(),
-        action: PermissionAction::Deny,
-    });
-
-    rules.push(PermissionRule {
-        permission: "plan_enter".to_string(),
-        pattern: "*".to_string(),
-        action: PermissionAction::Deny,
-    });
-
-    rules.push(PermissionRule {
-        permission: "plan_exit".to_string(),
-        pattern: "*".to_string(),
-        action: PermissionAction::Deny,
-    });
-
-    rules.push(PermissionRule {
-        permission: "read".to_string(),
-        pattern: "*.env".to_string(),
-        action: PermissionAction::Ask,
-    });
-
-    rules.push(PermissionRule {
-        permission: "read".to_string(),
-        pattern: "*.env.*".to_string(),
-        action: PermissionAction::Ask,
-    });
-
-    rules.push(PermissionRule {
-        permission: "read".to_string(),
-        pattern: "*.env.example".to_string(),
-        action: PermissionAction::Allow,
-    });
-
-    rules
+    vec![
+        PermissionRule {
+            permission: "*".to_string(),
+            pattern: "*".to_string(),
+            action: PermissionAction::Allow,
+        },
+        PermissionRule {
+            permission: "doom_loop".to_string(),
+            pattern: "*".to_string(),
+            action: PermissionAction::Ask,
+        },
+        PermissionRule {
+            permission: "external_directory".to_string(),
+            pattern: "*".to_string(),
+            action: PermissionAction::Ask,
+        },
+        PermissionRule {
+            permission: "question".to_string(),
+            pattern: "*".to_string(),
+            action: PermissionAction::Deny,
+        },
+        PermissionRule {
+            permission: "plan_enter".to_string(),
+            pattern: "*".to_string(),
+            action: PermissionAction::Deny,
+        },
+        PermissionRule {
+            permission: "plan_exit".to_string(),
+            pattern: "*".to_string(),
+            action: PermissionAction::Deny,
+        },
+        PermissionRule {
+            permission: "read".to_string(),
+            pattern: "*.env".to_string(),
+            action: PermissionAction::Ask,
+        },
+        PermissionRule {
+            permission: "read".to_string(),
+            pattern: "*.env.*".to_string(),
+            action: PermissionAction::Ask,
+        },
+        PermissionRule {
+            permission: "read".to_string(),
+            pattern: "*.env.example".to_string(),
+            action: PermissionAction::Allow,
+        },
+    ]
 }
 
 pub fn build_agent_ruleset(agent_name: &str, user_ruleset: &[PermissionRule]) -> PermissionRuleset {

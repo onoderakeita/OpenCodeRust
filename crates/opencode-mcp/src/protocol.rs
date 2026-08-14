@@ -61,7 +61,7 @@ pub enum JsonRpcMessage {
 impl JsonRpcMessage {
     /// Try to parse a raw JSON string as either a Response or a Notification.
     /// Responses have an `id` field; notifications have a `method` field but no `id`.
-    pub fn from_str(s: &str) -> Result<Self, serde_json::Error> {
+    pub fn parse_json_str(s: &str) -> Result<Self, serde_json::Error> {
         // Try response first (has `id`)
         if let Ok(resp) = serde_json::from_str::<JsonRpcResponse>(s) {
             return Ok(JsonRpcMessage::Response(resp));

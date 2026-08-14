@@ -1,17 +1,14 @@
 use serde::{Deserialize, Serialize};
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum Route {
+    #[default]
     Home,
-    Session { session_id: String },
+    Session {
+        session_id: String,
+    },
     Settings,
     Help,
-}
-
-impl Default for Route {
-    fn default() -> Self {
-        Self::Home
-    }
 }
 
 impl std::fmt::Display for Route {

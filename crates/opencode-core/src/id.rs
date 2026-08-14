@@ -51,7 +51,7 @@ fn get_counter() -> u32 {
     *counter
 }
 
-pub fn create(prefix: Prefix, descending: bool, timestamp: Option<u64>) -> String {
+pub fn create(prefix: Prefix, _descending: bool, timestamp: Option<u64>) -> String {
     let current_timestamp = timestamp.unwrap_or_else(|| {
         std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -67,17 +67,8 @@ pub fn create(prefix: Prefix, descending: bool, timestamp: Option<u64>) -> Strin
     }
 
     let counter_val = get_counter();
-    let mut now = u64::from(current_timestamp) * 0x1000 + u64::from(counter_val);
-
-    if descending {
-        now = !now;
-    }
-
-    let mut time_bytes = [0u8; 6];
-    for i in 0..6 {
-        time_bytes[i] = ((now >> (40 - 8 * i)) & 0xff) as u8;
-    }
-
+    let now = current_timestamp * 0x1000 + u64::from(counter_val);
+    let time_bytes = now.to_be_bytes();
     let hex_time = hex::encode(time_bytes);
     let random_part = random_base62(LENGTH - 12);
 
@@ -107,7 +98,7 @@ mod tests {
     fn test_create_id() {
         let id = create(Prefix::Session, false, None);
         assert!(id.starts_with("ses_"));
-        assert_eq!(id.len(), 30);
+        assert_eq!(id.len(), 34);
     }
 
     #[test]

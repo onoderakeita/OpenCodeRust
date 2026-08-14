@@ -4,8 +4,8 @@ use reqwest::Client;
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    ChatRequest, ChatResponse, Choice, Message, ModelInfo,
-    Provider, ProviderError, StreamEvent, StreamResult, Usage,
+    ChatRequest, ChatResponse, Choice, Message, ModelInfo, Provider, ProviderError, StreamEvent,
+    StreamResult, Usage,
 };
 
 const ANTHROPIC_API_URL: &str = "https://api.anthropic.com/v1/messages";
@@ -120,13 +120,7 @@ impl AnthropicProvider {
                             crate::Content::Text(text) => vec![AnthropicContent::Text { text }],
                             crate::Content::Parts(parts) => parts
                                 .into_iter()
-                                .filter_map(|p| {
-                                    if let Some(text) = p.text {
-                                        Some(AnthropicContent::Text { text })
-                                    } else {
-                                        None
-                                    }
-                                })
+                                .filter_map(|p| p.text.map(|text| AnthropicContent::Text { text }))
                                 .collect(),
                         },
                     });
@@ -225,8 +219,7 @@ impl Provider for AnthropicProvider {
                 Ok(bytes) => {
                     let text = String::from_utf8_lossy(&bytes);
                     for line in text.lines() {
-                        if line.starts_with("data: ") {
-                            let data = &line[6..];
+                        if let Some(data) = line.strip_prefix("data: ") {
                             if let Some(event) = crate::stream::parse_anthropic_sse(data) {
                                 return Ok(event);
                             }

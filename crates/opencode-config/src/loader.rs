@@ -139,7 +139,7 @@ impl ConfigLoader {
     /// 4. .opencode directories (agents, commands, plugins, modes, config)
     /// 5. Inline config (OPENCODE_CONFIG_CONTENT)
     /// 6. Managed config directory (enterprise, highest priority)
-    /// Then: legacy migrations, flag overrides, plugin dedup
+    ///    Then: legacy migrations, flag overrides, plugin dedup
     pub fn load_all<P: AsRef<Path>>(&mut self, project_dir: P) -> Result<Config> {
         let project_dir = project_dir.as_ref();
 
@@ -437,10 +437,10 @@ fn resolve_file_references(text: &str, base_dir: &Path) -> Result<String> {
         }
 
         // Resolve the file path
-        let resolved = if file_path_str.starts_with("~/") {
+        let resolved = if let Some(stripped) = file_path_str.strip_prefix("~/") {
             dirs::home_dir()
                 .unwrap_or_else(|| PathBuf::from("~"))
-                .join(&file_path_str[2..])
+                .join(stripped)
         } else if Path::new(&file_path_str).is_absolute() {
             PathBuf::from(&file_path_str)
         } else {
@@ -773,6 +773,7 @@ fn split_frontmatter(content: &str) -> (Option<String>, String) {
 /// block scalar so the value is preserved verbatim.
 fn fallback_sanitize_yaml(yaml: &str) -> String {
     let mut result: Vec<String> = Vec::new();
+    let kv_re = regex::Regex::new(r"^([a-zA-Z_][a-zA-Z0-9_]*)\s*:\s*(.*)$").unwrap();
     for line in yaml.lines() {
         let trimmed = line.trim();
         // Pass through comments and empty lines
@@ -786,7 +787,6 @@ fn fallback_sanitize_yaml(yaml: &str) -> String {
             continue;
         }
         // Match top-level key: value
-        let kv_re = regex::Regex::new(r"^([a-zA-Z_][a-zA-Z0-9_]*)\s*:\s*(.*)$").unwrap();
         let Some(caps) = kv_re.captures(line) else {
             result.push(line.to_string());
             continue;

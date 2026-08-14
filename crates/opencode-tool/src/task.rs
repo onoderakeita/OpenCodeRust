@@ -371,7 +371,7 @@ mod tests {
 
         let result = TaskTool::new().execute(args, ctx).await.unwrap();
 
-        assert_eq!(*created.lock().await, false);
+        assert!(!(*created.lock().await));
         let prompted = prompted.lock().await.clone();
         assert_eq!(prompted.len(), 1);
         assert_eq!(prompted[0].0, "task_existing_42");

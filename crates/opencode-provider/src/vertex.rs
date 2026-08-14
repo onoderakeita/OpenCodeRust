@@ -185,13 +185,10 @@ impl GoogleVertexProvider {
                 .filter_map(|p| {
                     if let Some(text) = &p.text {
                         Some(VertexPart::text(text))
-                    } else if let Some(tool_use) = &p.tool_use {
-                        Some(VertexPart::function_call(
-                            &tool_use.name,
-                            tool_use.input.clone(),
-                        ))
                     } else {
-                        None
+                        p.tool_use.as_ref().map(|tool_use| {
+                            VertexPart::function_call(&tool_use.name, tool_use.input.clone())
+                        })
                     }
                 })
                 .collect(),
@@ -283,8 +280,7 @@ impl Provider for GoogleVertexProvider {
                 Ok(bytes) => {
                     let text = String::from_utf8_lossy(&bytes);
                     for line in text.lines() {
-                        if line.starts_with("data: ") {
-                            let data = &line[6..];
+                        if let Some(data) = line.strip_prefix("data: ") {
                             if let Some(event) = parse_vertex_sse(data) {
                                 return Ok(event);
                             }

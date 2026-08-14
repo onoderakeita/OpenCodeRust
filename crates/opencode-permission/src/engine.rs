@@ -138,7 +138,7 @@ impl PermissionEngine {
 
         self.pending
             .entry(session_id.clone())
-            .or_insert_with(HashMap::new)
+            .or_default()
             .insert(permission_id, PendingPermission { info });
 
         Ok(())
@@ -167,10 +167,7 @@ impl PermissionEngine {
         }
 
         if response == Response::Always {
-            let approved_session = self
-                .approved
-                .entry(session_id.to_string())
-                .or_insert_with(HashMap::new);
+            let approved_session = self.approved.entry(session_id.to_string()).or_default();
             let approve_keys = Self::to_keys(
                 match_item.info.pattern.as_ref(),
                 &match_item.info.permission_type,
@@ -223,13 +220,11 @@ fn wildcard_match(text: &str, pattern: &str) -> bool {
         return text.contains(middle);
     }
 
-    if pattern.starts_with('*') {
-        let suffix = &pattern[1..];
+    if let Some(suffix) = pattern.strip_prefix('*') {
         return text.ends_with(suffix);
     }
 
-    if pattern.ends_with('*') {
-        let prefix = &pattern[..pattern.len() - 1];
+    if let Some(prefix) = pattern.strip_suffix('*') {
         return text.starts_with(prefix);
     }
 

@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 pub struct AgentMessage {
     pub role: MessageRole,
     pub content: String,
+    pub reasoning: Option<String>,
     pub tool_calls: Vec<ToolCall>,
 }
 
@@ -35,6 +36,7 @@ impl AgentMessage {
         Self {
             role: MessageRole::System,
             content: content.into(),
+            reasoning: None,
             tool_calls: Vec::new(),
         }
     }
@@ -43,25 +45,34 @@ impl AgentMessage {
         Self {
             role: MessageRole::User,
             content: content.into(),
+            reasoning: None,
             tool_calls: Vec::new(),
         }
     }
 
-    pub fn assistant(content: impl Into<String>) -> Self {
+    pub fn assistant(content: impl Into<String>, reasoning: Option<String>) -> Self {
         Self {
             role: MessageRole::Assistant,
             content: content.into(),
+            reasoning,
             tool_calls: Vec::new(),
         }
     }
 
-    pub fn assistant_with_tools(content: impl Into<String>, tool_calls: Vec<ToolCall>) -> Self {
+    pub fn assistant_with_tools(
+        content: impl Into<String>,
+        reasoning: Option<String>,
+        tool_calls: Vec<ToolCall>,
+    ) -> Self {
         Self {
             role: MessageRole::Assistant,
             content: content.into(),
+            reasoning,
             tool_calls,
         }
     }
+
+    // ... (rest of methods)
 
     pub fn tool_result(
         _tool_call_id: impl Into<String>,
@@ -72,6 +83,7 @@ impl AgentMessage {
         Self {
             role: MessageRole::Tool,
             content: content.into(),
+            reasoning: None,
             tool_calls: vec![],
         }
     }
@@ -99,8 +111,9 @@ impl Conversation {
         self.messages.push(AgentMessage::user(content));
     }
 
-    pub fn add_assistant_message(&mut self, content: impl Into<String>) {
-        self.messages.push(AgentMessage::assistant(content));
+    pub fn add_assistant_message(&mut self, content: impl Into<String>, reasoning: Option<String>) {
+        self.messages
+            .push(AgentMessage::assistant(content, reasoning));
     }
 
     pub fn add_tool_result(

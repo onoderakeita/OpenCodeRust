@@ -50,12 +50,9 @@ impl JsRuntime {
 
 /// Detect the best available JS runtime, preferring bun > deno > node.
 pub fn detect_runtime() -> Option<JsRuntime> {
-    for rt in [JsRuntime::Bun, JsRuntime::Deno, JsRuntime::Node] {
-        if which::which(rt.command()).is_ok() {
-            return Some(rt);
-        }
-    }
-    None
+    [JsRuntime::Bun, JsRuntime::Deno, JsRuntime::Node]
+        .into_iter()
+        .find(|&rt| which::which(rt.command()).is_ok())
 }
 
 /// Return the full path to the runtime binary, if found.

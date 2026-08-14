@@ -113,7 +113,11 @@ impl SessionMessage {
             role: MessageRole::User,
             parts: vec![MessagePart {
                 id: format!("prt_{}", uuid::Uuid::new_v4()),
-                part_type: PartType::Text { text: text.into(), synthetic: None, ignored: None },
+                part_type: PartType::Text {
+                    text: text.into(),
+                    synthetic: None,
+                    ignored: None,
+                },
                 created_at: Utc::now(),
                 message_id: None,
             }],
@@ -138,7 +142,11 @@ impl SessionMessage {
     pub fn add_text(&mut self, text: impl Into<String>) {
         self.parts.push(MessagePart {
             id: format!("prt_{}", uuid::Uuid::new_v4()),
-            part_type: PartType::Text { text: text.into(), synthetic: None, ignored: None },
+            part_type: PartType::Text {
+                text: text.into(),
+                synthetic: None,
+                ignored: None,
+            },
             created_at: Utc::now(),
             message_id: None,
         });

@@ -207,7 +207,7 @@ impl BashToolView {
     pub fn render(&self, frame: &mut Frame, area: Rect, theme: &Theme) {
         let status_color = if self.running {
             theme.warning
-        } else if self.exit_code.map_or(false, |c| c != 0) {
+        } else if self.exit_code.is_some_and(|c| c != 0) {
             theme.error
         } else {
             theme.success

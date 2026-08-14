@@ -124,8 +124,14 @@ impl ProviderDialog {
                 ]),
             ];
 
-            frame.render_widget(block.clone().style(Style::default().bg(theme.background_panel)), popup_area);
-            let paragraph = Paragraph::new(content).style(Style::default().bg(theme.background_panel));
+            frame.render_widget(
+                block
+                    .clone()
+                    .style(Style::default().bg(theme.background_panel)),
+                popup_area,
+            );
+            let paragraph =
+                Paragraph::new(content).style(Style::default().bg(theme.background_panel));
             frame.render_widget(paragraph, content_area);
         } else {
             let items: Vec<ListItem> = self
@@ -159,7 +165,10 @@ impl ProviderDialog {
                 })
                 .collect();
 
-            frame.render_widget(block.style(Style::default().bg(theme.background_panel)), popup_area);
+            frame.render_widget(
+                block.style(Style::default().bg(theme.background_panel)),
+                popup_area,
+            );
             let list = List::new(items).highlight_style(Style::default().fg(theme.primary));
 
             frame.render_widget(list, content_area);

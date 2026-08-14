@@ -1,33 +1,68 @@
+use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
-use crate::identifier::SessionID; // Assume exists
-use crate::project::ProjectID; // Assume exists
-use crate::agent::AgentID; // Assume exists
+use std::collections::HashMap;
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Session {
+    pub id: crate::identifier::SessionID,
+    pub slug: String,
+    pub project_id: crate::project::ProjectID,
+    pub directory: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub parent_id: Option<crate::identifier::SessionID>,
+    pub title: String,
+    pub version: String,
+    pub time: crate::session::TimeInfo,
+    #[serde(skip)]
+    pub messages: Vec<crate::message::SessionMessage>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub summary: Option<crate::session::SessionSummary>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub share: Option<crate::session::SessionShareInfo>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub revert: Option<crate::session::SessionRevert>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub permission: Option<crate::session::PermissionRuleset>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub usage: Option<crate::session::TokenUsage>,
+    #[serde(default)]
+    pub status: crate::session::SessionStatus,
+    #[serde(default)]
+    pub metadata: HashMap<String, serde_json::Value>,
+    #[serde(default, skip_serializing)]
+    pub created_at: DateTime<Utc>,
+    #[serde(default, skip_serializing)]
+    pub updated_at: DateTime<Utc>,
+}
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct SessionInfo {
-    pub id: SessionID,
-    pub parent_id: Option<SessionID>,
-    pub project_id: ProjectID,
-    pub agent: Option<AgentID>,
-    pub model: Option<String>,
-    pub cost: f64,
-    pub tokens: TokenUsage,
-    pub time: TimeInfo,
-    pub title: String,
-    pub location: String,
-    pub subpath: Option<String>,
-    pub revert: Option<String>,
-    // Added fields expected by storage
-    pub slug: String,
-    pub directory: String,
-    pub version: i32,
-    pub summary: Option<String>,
-    pub permission: Option<serde_json::Value>,
-    pub usage: Option<TokenUsage>,
-    pub status: String,
-    pub metadata: std::collections::HashMap<String, serde_json::Value>,
-    pub created_at: u64,
-    pub updated_at: u64,
+pub struct SessionSummary {
+    pub additions: u64,
+    pub deletions: u64,
+    pub files: u64,
+    pub diffs: Vec<FileDiff>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct FileDiff {
+    pub path: String,
+    pub additions: u64,
+    pub deletions: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, sqlx::Type, PartialEq, Default)]
+#[sqlx(rename_all = "lowercase")]
+pub enum SessionStatus {
+    #[default]
+    Active,
+    Completed,
+    Archived,
+    Compacting,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SessionShareInfo {
+    pub url: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -45,8 +80,34 @@ pub struct CacheUsage {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SessionRevert {
+    pub message_id: String,
+    pub part_id: Option<String>,
+    pub snapshot: Option<String>,
+    pub diff: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct PermissionRuleset {
+    pub allow: Vec<String>,
+    pub deny: Vec<String>,
+    pub mode: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct TimeInfo {
-    pub created: u64, // Millis
-    pub updated: u64, // Millis
+    pub created: u64,
+    pub updated: u64,
+    pub compacting: Option<u64>,
     pub archived: Option<u64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SessionInput {
+    pub id: String,
+    pub session_id: String,
+    pub prompt: String,
+    pub delivery: Option<String>,
+    pub status: String,
+    pub created_at: u64,
 }

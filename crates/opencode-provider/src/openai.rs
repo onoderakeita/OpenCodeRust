@@ -315,10 +315,7 @@ impl OpenAIProvider {
         self.legacy_only
     }
 
-    fn parse_legacy_sse_data(
-        data: &str,
-        state: &mut LegacySseParserState,
-    ) -> Vec<StreamEvent> {
+    fn parse_legacy_sse_data(data: &str, state: &mut LegacySseParserState) -> Vec<StreamEvent> {
         let mut events = Vec::new();
 
         if data == "[DONE]" {
@@ -396,8 +393,7 @@ impl OpenAIProvider {
                             });
                         }
                         for tc in tool_calls {
-                            let index =
-                                tc.get("index").and_then(Value::as_u64).unwrap_or(0) as u32;
+                            let index = tc.get("index").and_then(Value::as_u64).unwrap_or(0) as u32;
                             let id = if let Some(id) = tc.get("id").and_then(Value::as_str) {
                                 let id = id.to_string();
                                 state.tool_call_ids.insert(index, id.clone());
@@ -749,19 +745,16 @@ impl OpenAIProvider {
             return Err(ProviderError::ApiError(format!("{}: {}", status, body)));
         }
 
-        let body = response
-            .text()
-            .await
-            .map_err(|e| {
-                let mut msg = e.to_string();
-                let mut source = std::error::Error::source(&e);
-                while let Some(cause) = source {
-                    msg.push_str(": ");
-                    msg.push_str(&cause.to_string());
-                    source = cause.source();
-                }
-                ProviderError::ApiError(msg)
-            })?;
+        let body = response.text().await.map_err(|e| {
+            let mut msg = e.to_string();
+            let mut source = std::error::Error::source(&e);
+            while let Some(cause) = source {
+                msg.push_str(": ");
+                msg.push_str(&cause.to_string());
+                source = cause.source();
+            }
+            ProviderError::ApiError(msg)
+        })?;
 
         // Some OpenAI-compatible providers (e.g. ZhipuAI) return SSE-formatted
         // streaming data even for non-streaming requests. Detect and reassemble.
@@ -822,8 +815,10 @@ impl OpenAIProvider {
                         }
                         if let Some(tcs) = delta.get("tool_calls").and_then(|v| v.as_array()) {
                             for tc in tcs {
-                                let idx = tc.get("index").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
-                                let entry = tool_calls.entry(idx).or_insert((None, None, String::new()));
+                                let idx =
+                                    tc.get("index").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
+                                let entry =
+                                    tool_calls.entry(idx).or_insert((None, None, String::new()));
                                 if let Some(id) = tc.get("id").and_then(|v| v.as_str()) {
                                     entry.0 = Some(id.to_string());
                                 }
@@ -831,7 +826,9 @@ impl OpenAIProvider {
                                     if let Some(name) = func.get("name").and_then(|v| v.as_str()) {
                                         entry.1 = Some(name.to_string());
                                     }
-                                    if let Some(args) = func.get("arguments").and_then(|v| v.as_str()) {
+                                    if let Some(args) =
+                                        func.get("arguments").and_then(|v| v.as_str())
+                                    {
                                         entry.2.push_str(args);
                                     }
                                 }
@@ -874,9 +871,17 @@ impl OpenAIProvider {
                 index: Some(0),
                 message: Some(RawMessage {
                     role: Some("assistant".to_string()),
-                    content: if content.is_empty() { None } else { Some(content) },
+                    content: if content.is_empty() {
+                        None
+                    } else {
+                        Some(content)
+                    },
                     tool_calls: raw_tool_calls,
-                    _reasoning_text: if reasoning.is_empty() { None } else { Some(reasoning) },
+                    _reasoning_text: if reasoning.is_empty() {
+                        None
+                    } else {
+                        Some(reasoning)
+                    },
                 }),
                 finish_reason,
             }],

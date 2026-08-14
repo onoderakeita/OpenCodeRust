@@ -77,15 +77,13 @@ impl RevertManager {
                 continue;
             }
 
-            if msg.id == input.message_id {
-                if input.part_id.is_none() {
-                    revert = Some(RevertInfo {
-                        message_id: last_user_id.clone().unwrap_or_else(|| msg.id.clone()),
-                        part_id: None,
-                        snapshot: None,
-                        diff: None,
-                    });
-                }
+            if msg.id == input.message_id && input.part_id.is_none() {
+                revert = Some(RevertInfo {
+                    message_id: last_user_id.clone().unwrap_or_else(|| msg.id.clone()),
+                    part_id: None,
+                    snapshot: None,
+                    diff: None,
+                });
             }
 
             for part in &msg.parts {

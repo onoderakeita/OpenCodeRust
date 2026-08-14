@@ -21,8 +21,10 @@ pub static SESSION_IDLE_EVENT: BusEventDef = BusEventDef::new("session.idle");
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type")]
+#[derive(Default)]
 pub enum SessionStatusInfo {
     #[serde(rename = "idle")]
+    #[default]
     Idle,
     #[serde(rename = "retry")]
     Retry {
@@ -32,12 +34,6 @@ pub enum SessionStatusInfo {
     },
     #[serde(rename = "busy")]
     Busy,
-}
-
-impl Default for SessionStatusInfo {
-    fn default() -> Self {
-        Self::Idle
-    }
 }
 
 // ============================================================================

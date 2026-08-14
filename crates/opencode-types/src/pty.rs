@@ -1,5 +1,5 @@
-use serde::{Deserialize, Serialize};
-use crate::identifier::PtyID; // Need to make sure identifier exists
+use crate::identifier::PtyID;
+use serde::{Deserialize, Serialize}; // Need to make sure identifier exists
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct PtyInfo {

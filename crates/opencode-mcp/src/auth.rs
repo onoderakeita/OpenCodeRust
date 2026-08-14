@@ -71,8 +71,7 @@ async fn write_all(data: &HashMap<String, AuthEntry>) -> Result<(), std::io::Err
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent).await?;
     }
-    let json = serde_json::to_string_pretty(data)
-        .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
+    let json = serde_json::to_string_pretty(data).map_err(std::io::Error::other)?;
     fs::write(&path, json).await
 }
 

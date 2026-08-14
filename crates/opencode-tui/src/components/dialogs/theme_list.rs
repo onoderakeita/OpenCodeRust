@@ -38,7 +38,7 @@ impl ThemeListDialog {
     }
 
     pub fn set_options(&mut self, mut options: Vec<ThemeOption>) {
-        options.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+        options.sort_by_key(|a| a.name.to_lowercase());
         self.options = options;
         self.filter();
     }
@@ -208,7 +208,6 @@ impl Default for ThemeListDialog {
 fn centered_rect(width: u16, height: u16, area: Rect) -> Rect {
     super::centered_rect(width, height, area)
 }
-
 
 fn canonical_theme_id(name: &str) -> String {
     let trimmed = name.trim();

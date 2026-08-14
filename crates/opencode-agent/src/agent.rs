@@ -693,7 +693,7 @@ impl AgentRegistry {
 
         let provider = provider_registry
             .get(&model_ref.provider_id)
-            .ok_or_else(|| AgentError::NoDefaultModel)?;
+            .ok_or(AgentError::NoDefaultModel)?;
 
         let existing_names: Vec<&str> = self.agents.keys().map(|s| s.as_str()).collect();
         let existing_list = existing_names.join(", ");

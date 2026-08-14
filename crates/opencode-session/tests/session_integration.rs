@@ -84,6 +84,6 @@ fn test_session_message_id() {
     let mut session = Session::new("test-project", "/test/directory");
 
     session.add_user_message("Test message");
-    assert!(session.messages[0].id.len() > 0);
+    assert!(!session.messages[0].id.is_empty());
     assert_eq!(session.messages[0].role, MessageRole::User);
 }

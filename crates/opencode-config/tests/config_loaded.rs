@@ -1,7 +1,8 @@
+#![allow(clippy::ptr_arg)]
 //! Port of upstream packages/opencode/test/config/config.test.ts behaviour.
 //! Tests config loading: JSON/JSONC, merge precedence, env substitution.
 
-use opencode_config::{ConfigLoader, Config};
+use opencode_config::ConfigLoader;
 use std::fs;
 use std::path::PathBuf;
 use tempfile::TempDir;

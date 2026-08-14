@@ -7,7 +7,6 @@ use opencode_provider::{
     ToolResult as ProviderToolResult, ToolUse,
 };
 
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type")]
 pub enum FilePartSource {
@@ -850,27 +849,25 @@ pub fn to_model_messages(input: &[MessageWithParts], model: &ModelContext) -> Ve
 
                 for part in &msg.parts {
                     match part {
-                        Part::Text { text, ignored, .. } => {
-                            if ignored != &Some(true) {
-                                parts.push(ContentPart {
-                                    content_type: "text".to_string(),
-                                    text: Some(text.clone()),
-                                    ..Default::default()
-                                });
-                            }
+                        Part::Text { text, ignored, .. } if ignored != &Some(true) => {
+                            parts.push(ContentPart {
+                                content_type: "text".to_string(),
+                                text: Some(text.clone()),
+                                ..Default::default()
+                            });
                         }
-                        Part::File(fp) => {
-                            if fp.mime != "text/plain" && fp.mime != "application/x-directory" {
-                                parts.push(ContentPart {
-                                    content_type: "file".to_string(),
-                                    image_url: Some(ImageUrl {
-                                        url: fp.url.clone(),
-                                    }),
-                                    media_type: Some(fp.mime.clone()),
-                                    filename: fp.filename.clone(),
-                                    ..Default::default()
-                                });
-                            }
+                        Part::File(fp)
+                            if fp.mime != "text/plain" && fp.mime != "application/x-directory" =>
+                        {
+                            parts.push(ContentPart {
+                                content_type: "file".to_string(),
+                                image_url: Some(ImageUrl {
+                                    url: fp.url.clone(),
+                                }),
+                                media_type: Some(fp.mime.clone()),
+                                filename: fp.filename.clone(),
+                                ..Default::default()
+                            });
                         }
                         Part::Compaction(_) => {
                             parts.push(ContentPart {

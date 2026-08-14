@@ -176,6 +176,24 @@ CREATE INDEX IF NOT EXISTS idx_todos_session ON todos(session_id);
 CREATE INDEX IF NOT EXISTS idx_todos_status ON todos(status);
 "#;
 
+/// Session input table - stores durable admission inbox
+pub const CREATE_SESSION_INPUT_TABLE: &str = r#"
+CREATE TABLE IF NOT EXISTS session_input (
+    id TEXT PRIMARY KEY,
+    session_id TEXT NOT NULL,
+    prompt TEXT NOT NULL,
+    delivery TEXT,
+    status TEXT NOT NULL,
+    created_at INTEGER NOT NULL,
+    FOREIGN KEY (session_id) REFERENCES sessions(id) ON DELETE CASCADE
+);
+"#;
+
+pub const IDX_SESSION_INPUT: &str = r#"
+CREATE INDEX IF NOT EXISTS idx_session_input_session ON session_input(session_id);
+CREATE INDEX IF NOT EXISTS idx_session_input_status ON session_input(status);
+"#;
+
 /// All migration statements to run
 pub const ALL_MIGRATIONS: &[&str] = &[
     CREATE_SESSIONS_TABLE,
@@ -184,5 +202,7 @@ pub const ALL_MIGRATIONS: &[&str] = &[
     CREATE_TODOS_TABLE,
     CREATE_PERMISSIONS_TABLE,
     CREATE_SESSION_SHARES_TABLE,
+    CREATE_SESSION_INPUT_TABLE,
     CREATE_INDEXES,
+    IDX_SESSION_INPUT,
 ];

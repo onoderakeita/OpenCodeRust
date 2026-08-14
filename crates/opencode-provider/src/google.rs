@@ -235,8 +235,7 @@ impl Provider for GoogleProvider {
                 Ok(bytes) => {
                     let text = String::from_utf8_lossy(&bytes);
                     for line in text.lines() {
-                        if line.starts_with("data: ") {
-                            let data = &line[6..];
+                        if let Some(data) = line.strip_prefix("data: ") {
                             if let Some(event) = parse_google_sse(data) {
                                 return Ok(event);
                             }

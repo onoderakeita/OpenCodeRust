@@ -1304,19 +1304,16 @@ impl OpenAIResponsesLanguageModel {
                 .await
                 .map_err(|e| ProviderError::NetworkError(e.to_string()))?;
             let status = response.status().as_u16();
-            let body = response
-                .text()
-                .await
-                .map_err(|e| {
-                    let mut msg = e.to_string();
-                    let mut source = std::error::Error::source(&e);
-                    while let Some(cause) = source {
-                        msg.push_str(": ");
-                        msg.push_str(&cause.to_string());
-                        source = cause.source();
-                    }
-                    ProviderError::ApiError(msg)
-                })?;
+            let body = response.text().await.map_err(|e| {
+                let mut msg = e.to_string();
+                let mut source = std::error::Error::source(&e);
+                while let Some(cause) = source {
+                    msg.push_str(": ");
+                    msg.push_str(&cause.to_string());
+                    source = cause.source();
+                }
+                ProviderError::ApiError(msg)
+            })?;
             (status, body)
         };
         if status_code >= 400 {
@@ -1529,10 +1526,8 @@ impl OpenAIResponsesLanguageModel {
                 }
             }
 
-            if text_open {
-                if tx.send(Ok(StreamEvent::TextEnd)).await.is_err() {
-                    return;
-                }
+            if text_open && tx.send(Ok(StreamEvent::TextEnd)).await.is_err() {
+                return;
             }
             for ongoing in ongoing_tool_calls.into_values() {
                 if tx
@@ -1654,7 +1649,7 @@ fn process_stream_chunk(
                     },
                 );
                 events.push(StreamEvent::ToolInputStart {
-                    id: id,
+                    id,
                     tool_name: "web_search_call".to_string(),
                 });
             }
@@ -2351,7 +2346,7 @@ fn insert_opt_value(obj: &mut serde_json::Map<String, Value>, key: &str, value: 
 }
 
 fn parse_json_or_string(raw: String) -> Value {
-    serde_json::from_str::<Value>(&raw).unwrap_or_else(|_| Value::String(raw))
+    serde_json::from_str::<Value>(&raw).unwrap_or(Value::String(raw))
 }
 
 fn drain_next_sse_frame(buffer: &mut String) -> Option<String> {

@@ -3,11 +3,13 @@ pub mod repository;
 pub mod schema;
 
 pub use database::*;
-pub use repository::*;
+pub use repository::{
+    InputRepository, MessageRepository, SessionRepository, TodoItem, TodoRepository,
+};
 pub use schema::*;
 
-use sqlx::{sqlite::SqlitePool, Pool, Sqlite};
 use anyhow::Result;
+use sqlx::{sqlite::SqlitePool, Pool, Sqlite};
 
 pub struct Storage {
     pool: Pool<Sqlite>,
@@ -26,8 +28,10 @@ impl Storage {
                 title TEXT NOT NULL,
                 time_created INTEGER NOT NULL,
                 time_updated INTEGER NOT NULL
-            )"
-        ).execute(&self.pool).await?;
+            )",
+        )
+        .execute(&self.pool)
+        .await?;
         Ok(())
     }
 }

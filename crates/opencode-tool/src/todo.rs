@@ -164,9 +164,9 @@ impl Tool for TodoWriteTool {
                 _ => "pending".to_string(),
             };
 
-            let _id = item.id.unwrap_or_else(|| {
-                format!("todo_{}", uuid::Uuid::new_v4().to_string()[..8].to_string())
-            });
+            let _id = item
+                .id
+                .unwrap_or_else(|| format!("todo_{}", &uuid::Uuid::new_v4().to_string()[..8]));
 
             new_todos.push(TodoItemData {
                 content: item.content,

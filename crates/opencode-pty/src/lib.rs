@@ -32,10 +32,13 @@ impl PtyManager {
 
         let writer = pty_pair.master.take_writer()?;
 
-        Ok(PtySession {
-            pty_pair,
-            writer,
-        })
+        Ok(PtySession { pty_pair, writer })
+    }
+}
+
+impl Default for PtyManager {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -70,11 +73,10 @@ mod tests {
     async fn test_pty_streaming() {
         let manager = PtyManager::new();
         let session = manager.spawn("echo", vec!["hello".to_string()]).unwrap();
-        
+
         let mut rx = session.stream_output();
         let output = rx.recv().await.unwrap();
-        
+
         assert!(output.trim().contains("hello"));
     }
 }
-

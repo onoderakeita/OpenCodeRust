@@ -124,7 +124,7 @@ impl CommandRegistry {
 
         self.by_category
             .entry(cmd.category.clone())
-            .or_insert_with(Vec::new)
+            .or_default()
             .push(name);
 
         for alias in &cmd.aliases {

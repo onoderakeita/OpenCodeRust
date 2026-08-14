@@ -2402,6 +2402,7 @@ dependencies = [
  "dirs",
  "futures",
  "glob",
+ "opencode-agent",
  "opencode-core",
  "opencode-lsp",
  "opencode-mcp",
@@ -2527,6 +2528,7 @@ dependencies = [
  "chrono",
  "serde",
  "serde_json",
+ "sqlx",
  "thiserror 2.0.18",
  "uuid",
 ]

@@ -1,0 +1,9 @@
+# .rust-analyzer.toml
+# Rust Analyzer の設定
+
+[check]
+command = "clippy"
+extraArgs = ["--", "-D", "warnings"]
+
+[procMacro]
+enable = true

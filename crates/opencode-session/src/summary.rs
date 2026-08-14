@@ -82,7 +82,7 @@ pub fn unquote_git_path(input: &str) -> String {
         let next = chars[i];
 
         // Octal escape: \NNN where N is 0-7
-        if next >= '0' && next <= '7' {
+        if ('0'..='7').contains(&next) {
             let start = i;
             let mut end = i;
             while end < chars.len() && end < start + 3 && chars[end] >= '0' && chars[end] <= '7' {
@@ -144,12 +144,10 @@ pub fn compute_diff(
     for msg in messages {
         for part in &msg.parts {
             match part {
-                Part::StepStart(StepStartPart { snapshot, .. }) => {
-                    if from.is_none() {
-                        if let Some(ref s) = snapshot {
-                            if !s.is_empty() {
-                                from = Some(s.clone());
-                            }
+                Part::StepStart(StepStartPart { snapshot, .. }) if from.is_none() => {
+                    if let Some(ref s) = snapshot {
+                        if !s.is_empty() {
+                            from = Some(s.clone());
                         }
                     }
                 }
@@ -346,7 +344,7 @@ async fn generate_message_title_llm(
         })?;
 
     let cleaned = raw
-        .replace(|c: char| c == '"' || c == '\'', "")
+        .replace(['"', '\''], "")
         .lines()
         .map(str::trim)
         .find(|line| !line.is_empty() && !line.starts_with("<think>"))

@@ -18,11 +18,11 @@ use crate::command::CommandAction;
 use crate::components::{
     Agent, AgentSelectDialog, AlertDialog, CommandPalette, ForkDialog, ForkEntry, HelpDialog,
     HomeView, McpDialog, McpItem, Model, ModelSelectDialog, PermissionAction, PermissionPrompt,
-    Prompt, PromptStashDialog, ProviderDialog, QuestionPrompt,
-    SessionDeleteState, SessionExportDialog, SessionItem, SessionListDialog, SessionRenameDialog,
-    SessionView, SkillListDialog, SlashCommandPopup, StashItem, StatusDialog, StatusLine,
-    SubagentDialog, TagDialog, TaskKind, ThemeListDialog, ThemeOption, TimelineDialog,
-    TimelineEntry, Toast, ToastVariant,
+    Prompt, PromptStashDialog, ProviderDialog, QuestionPrompt, SessionDeleteState,
+    SessionExportDialog, SessionItem, SessionListDialog, SessionRenameDialog, SessionView,
+    SkillListDialog, SlashCommandPopup, StashItem, StatusDialog, StatusLine, SubagentDialog,
+    TagDialog, TaskKind, ThemeListDialog, ThemeOption, TimelineDialog, TimelineEntry, Toast,
+    ToastVariant,
 };
 use crate::context::keybind::LeaderKeyState;
 use crate::context::{
@@ -408,11 +408,9 @@ impl App {
                     return Ok(());
                 }
 
-                if key.code == KeyCode::Esc {
-                    if self.selection.is_active() {
-                        self.selection.clear();
-                        return Ok(());
-                    }
+                if key.code == KeyCode::Esc && self.selection.is_active() {
+                    self.selection.clear();
+                    return Ok(());
                 }
 
                 if key.code == KeyCode::Char('q') && key.modifiers.is_empty() {
@@ -666,10 +664,8 @@ impl App {
                     _ => {}
                 }
             }
-            Event::Paste(text) => {
-                if !text.is_empty() {
-                    self.prompt.insert_text(text);
-                }
+            Event::Paste(text) if !text.is_empty() => {
+                self.prompt.insert_text(text);
             }
             Event::Custom(event) => match event {
                 CustomEvent::StateChanged(StateChange::SessionUpdated(session_id)) => {
@@ -727,16 +723,15 @@ impl App {
                 if let Route::Session { session_id } = route {
                     if self.pending_session_sync.as_deref() == Some(session_id.as_str())
                         && self.last_session_sync.elapsed() >= Duration::from_millis(50)
+                        && self.sync_session_from_server(&session_id).is_ok()
                     {
-                        if self.sync_session_from_server(&session_id).is_ok() {
-                            tick_changed = true;
-                            self.pending_session_sync = None;
-                        }
+                        tick_changed = true;
+                        self.pending_session_sync = None;
                     }
-                    if self.last_session_sync.elapsed() >= Duration::from_secs(2) {
-                        if self.sync_session_from_server(&session_id).is_ok() {
-                            tick_changed = true;
-                        }
+                    if self.last_session_sync.elapsed() >= Duration::from_secs(2)
+                        && self.sync_session_from_server(&session_id).is_ok()
+                    {
+                        tick_changed = true;
                     }
                 }
                 if self.last_aux_sync.elapsed() >= Duration::from_secs(5) {
@@ -1210,10 +1205,8 @@ impl App {
                 KeyCode::Esc => self.slash_popup.close(),
                 KeyCode::Up => self.slash_popup.move_up(),
                 KeyCode::Down => self.slash_popup.move_down(),
-                KeyCode::Backspace => {
-                    if !self.slash_popup.handle_backspace() {
-                        self.slash_popup.close();
-                    }
+                KeyCode::Backspace if !self.slash_popup.handle_backspace() => {
+                    self.slash_popup.close();
                 }
                 KeyCode::Enter => {
                     self.slash_popup.select_current();

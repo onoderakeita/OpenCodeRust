@@ -150,12 +150,13 @@ pub struct LspClient {
     root: PathBuf,
     stdin: Arc<Mutex<ChildStdin>>,
     request_id: Arc<Mutex<u64>>,
-    pending_responses:
-        Arc<RwLock<HashMap<u64, tokio::sync::oneshot::Sender<Result<Value, LspError>>>>>,
+    pending_responses: Arc<RwLock<PendingResponses>>,
     diagnostics: Arc<RwLock<HashMap<PathBuf, Vec<Diagnostic>>>>,
     file_versions: Arc<RwLock<HashMap<PathBuf, u32>>>,
     event_tx: broadcast::Sender<LspEvent>,
 }
+
+type PendingResponses = HashMap<u64, tokio::sync::oneshot::Sender<Result<Value, LspError>>>;
 
 #[derive(Debug, Clone)]
 pub enum LspEvent {
@@ -857,7 +858,7 @@ impl LspClientRegistry {
         let language = detect_language(path);
         let content = tokio::fs::read_to_string(path)
             .await
-            .map_err(|e| LspError::IoError(e))?;
+            .map_err(LspError::IoError)?;
 
         let clients = self.clients.read().await;
         let matching: Vec<Arc<LspClient>> = clients

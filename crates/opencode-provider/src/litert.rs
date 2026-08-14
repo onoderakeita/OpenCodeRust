@@ -2,9 +2,7 @@ use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
-use crate::{
-    ChatRequest, ChatResponse, ModelInfo, Provider, ProviderError, StreamResult,
-};
+use crate::{ChatRequest, ChatResponse, ModelInfo, Provider, ProviderError, StreamResult};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LiteRTConfig {
@@ -67,10 +65,7 @@ impl Provider for LiteRTProvider {
         ))
     }
 
-    async fn chat_stream(
-        &self,
-        _request: ChatRequest,
-    ) -> Result<StreamResult, ProviderError> {
+    async fn chat_stream(&self, _request: ChatRequest) -> Result<StreamResult, ProviderError> {
         Err(ProviderError::ApiError(
             "LiteRT native stream is not yet implemented.".to_string(),
         ))

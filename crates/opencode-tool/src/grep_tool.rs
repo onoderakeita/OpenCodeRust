@@ -165,7 +165,7 @@ impl Tool for GrepTool {
             let mtime = path
                 .metadata()
                 .and_then(|m| m.modified())
-                .unwrap_or_else(|_| SystemTime::UNIX_EPOCH);
+                .unwrap_or(SystemTime::UNIX_EPOCH);
 
             if let Ok(file) = File::open(path) {
                 let reader = BufReader::new(file);

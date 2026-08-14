@@ -20,18 +20,18 @@ pub fn centered(area: Rect, width: u16, height: u16) -> Rect {
     let popup_layout = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Percentage((100 - height as u16) / 2),
+            Constraint::Percentage((100 - height) / 2),
             Constraint::Length(height),
-            Constraint::Percentage((100 - height as u16) / 2),
+            Constraint::Percentage((100 - height) / 2),
         ])
         .split(area);
 
     Layout::default()
         .direction(Direction::Horizontal)
         .constraints([
-            Constraint::Percentage((100 - width as u16) / 2),
+            Constraint::Percentage((100 - width) / 2),
             Constraint::Length(width),
-            Constraint::Percentage((100 - width as u16) / 2),
+            Constraint::Percentage((100 - width) / 2),
         ])
         .split(popup_layout[1])[1]
 }
