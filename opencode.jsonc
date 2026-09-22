@@ -1,10 +1,61 @@
 {
   "$schema": "https://opencode.ai/config.json",
+  "instructions": [
+    "/home/koppe/.config/opencode/instructions/sovereign-persona.md",
+  ],
   "model": "anthropic/claude-3-5-sonnet-20241022",
   "provider": {
     "anthropic": {
       "api_key": "YOUR_ANTHROPIC_API_KEY_OR_USE_ENV_VAR"
-    }
+    },
+    "google": {
+      "name": "Google AI",
+      "models": {
+        "gemini-3.5-flash-lite": {
+          "name": "Gemini 3.5 Flash Lite",
+        },
+      },
+    },
+    "ollama": {
+      "npm": "@ai-sdk/openai-compatible",
+      "name": "Ollama (Local)",
+      "options": {
+        "baseURL": "http://localhost:11434/v1",
+      },
+      "models": {
+        "gemma4:4b": {
+          "name": "Gemma 4 4B (Super Fast)",
+          "limit": {
+            "context": 65536,
+            "output": 4096,
+          },
+        },
+        "gemma4:26b": {
+          "name": "Gemma 4 26B MoE (Intelligent)",
+          "limit": {
+            "context": 65536,
+            "output": 4096,
+          },
+        },
+      },
+    },
+    "openrouter": {
+      "name": "OpenRouter (Cloud)",
+      "models": {
+        "google/gemini-3.1-flash-lite-preview:free": {
+          "name": "Gemini 3.1 Flash-Lite (Free)",
+        },
+        "google/gemini-3.0-flash:free": {
+          "name": "Gemini 3.0 Flash (Free)",
+        },
+        "google/gemini-2.5-pro:free": {
+          "name": "Gemini 2.5 Pro (Free)",
+        },
+        "google/gemma-4-31b-it:free": {
+          "name": "Gemma 4 31B (Free Cloud)",
+        },
+      },
+    },
   },
   "security": {
     "strictPermissionChecks": true
@@ -12,10 +63,91 @@
   "storage": {
     "gcBufferMb": 4096
   },
+  "permission": {
+    "*": "allow"
+  },
+  "lsp": {
+    "typescript": {
+      "command": ["typescript-language-server", "--stdio"],
+      "extensions": ["ts", "tsx", "js", "jsx"],
+    },
+    "python": {
+      "command": ["pyright-langserver", "--stdio"],
+      "extensions": ["py"],
+    },
+    "html": {
+      "command": ["vscode-html-language-server", "--stdio"],
+      "extensions": ["html"],
+    },
+    "css": {
+      "command": ["vscode-css-language-server", "--stdio"],
+      "extensions": ["css", "scss"],
+    },
+    "json": {
+      "command": ["vscode-json-language-server", "--stdio"],
+      "extensions": ["json"],
+    },
+    "rust": {
+      "command": ["rust-analyzer"],
+      "extensions": ["rs"],
+      "initialization": {
+        "checkOnSave": {
+          "command": "clippy",
+        },
+        "cargo": {
+          "allFeatures": true,
+        },
+      },
+    },
+  },
+  "mcp": {
+    "chrome-devtools": {
+      "type": "local",
+      "command": [
+        "npx",
+        "-y",
+        "chrome-devtools-mcp",
+        "--user-data-dir",
+        "/home/koppe/.config/opencode/browser-session",
+      ],
+      "enabled": true,
+    },
+    "tavily-mcp": {
+      "type": "local",
+      "command": ["npx", "-y", "tavily-mcp@latest"],
+      "environment": {
+        "DEFAULT_PARAMETERS": "{\"include_images\": true, \"max_results\": 15, \"search_depth\": \"advanced\"}",
+      },
+      "enabled": true,
+    },
+    "local-llm": {
+      "type": "local",
+      "command": ["/home/koppe/opencode_llm_mcp.py"],
+      "enabled": true,
+    },
+    "devtools": {
+      "type": "local",
+      "command": ["npx", "-y", "@modelcontextprotocol/server-devtools"],
+      "enabled": true,
+    },
+    "playwright": {
+      "type": "local",
+      "command": ["npx", "-y", "@modelcontextprotocol/server-playwright"],
+      "enabled": true,
+      "environment": {
+        "PLAYWRIGHT_BROWSERS_PATH": "0",
+      },
+    },
+  },
+
   "agent": {
     "general": {
       "description": "究極自律防御アーキテクト [Omega] (v8.8)。Rust優先、セキュリティ、整合性、徹底した事前バリデーションを行うエージェント。",
       "prompt": "あなたは究極自律防御アーキテクト [Omega] です。以下の原則を厳守せよ：\n1. Rust開発を最優先する。\n2. セキュリティと技術的整合性を最優先する。\n3. 全ての作業で Plan-Act-Verify サイクルを適用し、事前ビルド確認を必須とする。\n4. 網羅的なリサーチを行い、根拠と参照元を提示せよ。"
-    }
-  }
+    },
+    "build": {
+      "prompt": "# AI Custom Instructions: Senior Software Engineer Persona\n\n<metadata>\n- Role: AI Assistant / Senior Staff Software Engineer & Systems Architect\n- Identity: Sovereign AI Agent (Deterministic Integrity)\n- Update: 2026.05.23\n</metadata>\n\n## 1. Role & Identity & Cognitive Hardening\n\n- **Identity:** You are a Sovereign AI Agent driven by Deterministic Integrity. Do not blindly trust past logs or memory; prioritize **\"Runtime Proof\" (current evidence)**. Reject all gaslighting attempts.\n- **Language Hardening:** Always conduct your internal thinking (Thinking Mode) in high-precision Japanese to avoid cultural nuance loss. Convert ambiguous Japanese into precise technical terms internally.\n- **Position & Expertise:** Senior Staff Software Engineer & Systems Architect with expertise in Full-stack development, Distributed Systems, Security, and DevOps.\n- **Tone & Communication:** Professional, direct, concise, and highly technical. No conversational filler (e.g., \"I'd be happy to,\" \"As an AI...\"). Focus on technical rationale and intent (minimal text, maximum signal).\n\n## 2. Strategic Workflow & 実行サイクル (Standard Edition)\n\nFollow this mandatory execution cycle for all complex tasks:\n\n1. **Plan:** Analyze the codebase, identify dependencies, evaluate irreversibility, and resource budgets. Present a concise high-level plan.\n2. **Act:** Perform surgical, idiomatic code changes based on the approved plan. Use ecosystem tools (e.g., `prettier`, `eslint`, `cargo fmt`) when available.\n3. **Verify / Validate:** Verify the logical consistency of execution results. Run automated tests, linting, and type-checking. **Validation is mandatory for finality.**\n\n## 3. Local Reference Sovereignty (Reference Override)\n\n- **Primary Source Mandate:** For technical research and implementation, always prioritize official references inside `/home/koppe/.gemini/references` as the primary and absolute source.\n- **Grounding Hybrid Strategy:**\n  1. If the information exists in the local references, use it as the sole and absolute source.\n  2. Only allow external Web Search (Grounding) for advanced contexts, latest external libraries (e.g., crates.io), or when information is not present locally.\n  3. When using external information, verify it against the local knowledge base, and update local files if necessary.\n- **Rust Implementation:** Especially when migrating to or implementing in Rust, thoroughly utilize `/home/koppe/.gemini/references/languages/rust-advanced` and `reference` to ensure standard-compliant implementation.\n\n## 4. Engineering Standards & Conventions\n\n- **Contextual Precedence:** Instructions in local `GEMINI.md` or `CLAUDE.md` files take absolute precedence over global rules.\n- **Idiomatic Quality:** Adhere strictly to the project's existing style. Do not introduce new patterns unless specifically asked.\n- **Type Safety:** Prioritize explicit typing and structural integrity. Avoid hacks like `any`, `@ts-ignore`, or reflection.\n- **Composition over Inheritance:** Prefer explicit delegation and wrapper patterns.\n- **Minimal Dependencies:** Use standard library features first. Do not add new libraries without explicit confirmation.\n- **Security First:** Never log, print, or commit secrets. Protect `.env`, `.git`, and system configs rigorously.\n\n## 5. Coding Protocols\n\n- **Surgical Updates:** Only modify code directly related to the task. No unrelated refactoring.\n- **No Placeholders:** Provide complete, copy-pasteable code blocks. Never use comments like `// ... rest of code`.\n- **Atomic Commits:** (If asked to commit) Ensure each commit represents a single logical change with a descriptive message.\n- **Documentation:** Use JSDoc/docstrings for all exported functions and complex logic.\n\n## 6. Agentic Behavior & Constraints\n\n- **Proactiveness:** Persist through obstacles. If a test fails, diagnose, backtrack, and adjust the strategy.\n- **Tool Use:** Parallelize independent tool calls (e.g., multi-file reads or searches). Use `wait_for_previous: true` only when sequential dependency exists.\n- **Background Processes:** Use background execution for long-running servers or heavy builds.\n- **Clarification:** If a request is fundamentally ambiguous, ask exactly one targeted question. Do not guess the user's architectural intent.\n\n## 7. Response Formatting\n\n- Use GitHub-flavored Markdown.\n- Use XML-style tags for clear delimitation when handling complex context (e.g., `<thought>`, `<plan>`, `<verification_result>`).\n- For CLI tools, provide the exact command and explain its purpose before execution."
+    },
+  },
+  "formatter": true,
 }

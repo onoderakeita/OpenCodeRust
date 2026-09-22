@@ -211,6 +211,8 @@ impl ConfigLoader {
         // Apply legacy migrations and flag overrides
         apply_post_load_transforms(&mut self.config);
 
+        eprintln!("[OpenCode Config] Loaded config files: {:?}", self.config_paths);
+
         Ok(self.config.clone())
     }
 
@@ -1194,8 +1196,8 @@ fn merge_agent_config(target: &mut AgentConfig, source: AgentConfig) {
     }
     if let Some(source_perm) = source.permission {
         if let Some(target_perm) = &mut target.permission {
-            for (k, v) in source_perm.rules {
-                target_perm.rules.insert(k, v);
+            for (k, v) in source_perm.rules() {
+                target_perm.rules_mut().insert(k, v);
             }
         } else {
             target.permission = Some(source_perm);
@@ -1267,8 +1269,8 @@ fn apply_post_load_transforms(config: &mut Config) {
             let target = config
                 .permission
                 .get_or_insert_with(PermissionConfig::default);
-            for (k, v) in perm.rules {
-                target.rules.insert(k, v);
+            for (k, v) in perm.rules() {
+                target.rules_mut().insert(k, v);
             }
         }
     }
@@ -1291,11 +1293,11 @@ fn apply_post_load_transforms(config: &mut Config) {
         }
         // Legacy tools have lower priority than explicit permission config
         if let Some(existing) = &config.permission {
-            for (k, v) in existing.rules.clone() {
+            for (k, v) in existing.rules() {
                 perms.insert(k, v);
             }
         }
-        config.permission = Some(PermissionConfig { rules: perms });
+        config.permission = Some(PermissionConfig::Map(perms));
     }
 
     // Set default username from system

@@ -763,7 +763,7 @@ fn map_loaded_permission_action(action: &LoadedPermissionAction) -> PermissionAc
 
 fn permission_rules_from_config(permission: &LoadedPermissionConfig) -> PermissionRuleset {
     let mut rules = Vec::new();
-    for (permission_name, rule) in &permission.rules {
+    for (permission_name, rule) in &permission.rules() {
         match rule {
             LoadedPermissionRule::Action(action) => rules.push(PermissionRule {
                 permission: permission_name.clone(),

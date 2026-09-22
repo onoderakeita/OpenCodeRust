@@ -616,13 +616,47 @@ pub enum LayoutMode {
     Stretch,
 }
 
-/// Permission config: a record of tool name -> permission rule.
-/// Each rule can be a simple action string ("ask"/"allow"/"deny") or
-/// a record of sub-keys to actions.
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-pub struct PermissionConfig {
-    #[serde(flatten)]
-    pub rules: HashMap<String, PermissionRule>,
+/// Permission config: either a global action string ("allow"/"deny"/"ask") or
+/// a record of tool name -> permission rule.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum PermissionConfig {
+    Action(PermissionAction),
+    Map(HashMap<String, PermissionRule>),
+}
+
+impl Default for PermissionConfig {
+    fn default() -> Self {
+        PermissionConfig::Map(HashMap::new())
+    }
+}
+
+impl PermissionConfig {
+    pub fn rules(&self) -> HashMap<String, PermissionRule> {
+        match self {
+            PermissionConfig::Action(action) => {
+                let mut map = HashMap::new();
+                map.insert("*".to_string(), PermissionRule::Action(action.clone()));
+                map
+            }
+            PermissionConfig::Map(map) => map.clone(),
+        }
+    }
+
+    pub fn rules_mut(&mut self) -> &mut HashMap<String, PermissionRule> {
+        match self {
+            PermissionConfig::Action(action) => {
+                let mut map = HashMap::new();
+                map.insert("*".to_string(), PermissionRule::Action(action.clone()));
+                *self = PermissionConfig::Map(map);
+                match self {
+                    PermissionConfig::Map(map) => map,
+                    _ => unreachable!(),
+                }
+            }
+            PermissionConfig::Map(map) => map,
+        }
+    }
 }
 
 /// A permission rule: either a simple action or a map of sub-keys to actions.
@@ -1148,8 +1182,8 @@ impl DeepMerge for LspConfig {
 
 impl DeepMerge for PermissionConfig {
     fn deep_merge(&mut self, other: Self) {
-        for (key, value) in other.rules {
-            self.rules.insert(key, value);
+        for (key, value) in other.rules() {
+            self.rules_mut().insert(key, value);
         }
     }
 }

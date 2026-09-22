@@ -36,7 +36,7 @@ use opencode_tool::{registry::create_default_registry, ToolContext};
 use opencode_types::{MessagePart, Session, SessionMessage};
 
 #[derive(Parser)]
-#[command(name = "opencode")]
+#[command(name = "opencoderust")]
 #[command(about = "OpenCode - Open source AI coding agent", long_about = None)]
 struct Cli {
     #[command(subcommand)]
