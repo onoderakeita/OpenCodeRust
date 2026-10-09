@@ -1,16 +1,24 @@
 use async_trait::async_trait;
-use axum::http::{header::HeaderValue, request::Parts};
+use axum::{
+    extract::State,
+    http::{header::HeaderValue, request::Parts, HeaderName, StatusCode, Request, Method, header},
+    middleware::{self, Next},
+    response::{IntoResponse, Response},
+    Json,
+};
 use futures::StreamExt;
 use once_cell::sync::Lazy;
+use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::RwLock;
-use tokio::sync::{broadcast, Mutex};
+use tokio::sync::{broadcast, Mutex, oneshot};
 use tokio_stream::wrappers::ReceiverStream;
-use tower_http::cors::{AllowOrigin, Any, CorsLayer};
+use tower_http::cors::{AllowOrigin, CorsLayer};
 use tower_http::trace::TraceLayer;
+use url::Url;
 
 use opencode_config::load_config;
 use opencode_plugin::init_global;
@@ -29,6 +37,124 @@ use opencode_storage::{Database, MessageRepository, SessionRepository};
 use crate::routes;
 
 const DEFAULT_SERVER_URL: &str = "http://127.0.0.1:4096";
+
+fn generate_auth_token() -> String {
+    use base64::Engine;
+    use rand::RngCore;
+    let mut bytes = [0u8; 32];
+    rand::thread_rng().fill_bytes(&mut bytes);
+    base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(bytes)
+}
+
+fn is_auth_enabled() -> bool {
+    std::env::var("OPENCODE_NO_AUTH").is_err()
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct PermissionRequestInfo {
+    pub id: String,
+    pub session_id: String,
+    pub tool: String,
+    pub input: serde_json::Value,
+    pub message: String,
+    pub permission_type: String,
+    pub patterns: Vec<String>,
+    pub metadata: HashMap<String, serde_json::Value>,
+    pub always: Vec<String>,
+}
+
+#[derive(Debug)]
+struct PendingPermission {
+    info: PermissionRequestInfo,
+    responder: oneshot::Sender<PermissionResponse>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum PermissionResponse {
+    Once,
+    Always,
+    Reject { message: Option<String> },
+}
+
+pub struct PermissionBroker {
+    pending: Mutex<HashMap<String, PendingPermission>>,
+    event_bus: broadcast::Sender<String>,
+}
+
+impl PermissionBroker {
+    pub fn new(event_bus: broadcast::Sender<String>) -> Self {
+        Self {
+            pending: Mutex::new(HashMap::new()),
+            event_bus,
+        }
+    }
+
+    pub async fn ask(&self, info: PermissionRequestInfo) -> PermissionResponse {
+        let (tx, rx) = oneshot::channel();
+        let pending = PendingPermission {
+            info: info.clone(),
+            responder: tx,
+        };
+
+        {
+            let mut pending_map = self.pending.lock().await;
+            pending_map.insert(info.id.clone(), pending);
+        }
+
+        // Broadcast permission request event
+        let _ = self.event_bus.send(
+            serde_json::json!({
+                "type": "permission.requested",
+                "request": info
+            })
+            .to_string(),
+        );
+
+        // Wait for response
+        match rx.await {
+            Ok(response) => response,
+            Err(_) => PermissionResponse::Reject { message: Some("Permission request cancelled".to_string()) },
+        }
+    }
+
+    pub async fn reply(&self, id: &str, response: PermissionResponse) -> bool {
+        let pending = {
+            let mut pending_map = self.pending.lock().await;
+            pending_map.remove(id)
+        };
+
+        if let Some(pending) = pending {
+            let _ = pending.responder.send(response.clone());
+
+            // Broadcast permission reply event
+            let _ = self.event_bus.send(
+                serde_json::json!({
+                    "type": "permission.replied",
+                    "requestID": id,
+                    "sessionID": pending.info.session_id,
+                    "reply": match response {
+                        PermissionResponse::Once => "once",
+                        PermissionResponse::Always => "always",
+                        PermissionResponse::Reject { .. } => "reject",
+                    },
+                    "message": match response {
+                        PermissionResponse::Reject { message } => message,
+                        _ => None,
+                    },
+                })
+                .to_string(),
+            );
+            true
+        } else {
+            false
+        }
+    }
+
+    pub async fn list(&self) -> Vec<PermissionRequestInfo> {
+        let pending_map = self.pending.lock().await;
+        pending_map.values().map(|p| p.info.clone()).collect()
+    }
+}
 
 struct PluginBridgeFetchProxy {
     bridge: Arc<PluginAuthBridge>,
@@ -114,6 +240,8 @@ pub struct ServerState {
     pub providers: ProviderRegistry,
     pub auth_manager: Arc<AuthManager>,
     pub event_bus: broadcast::Sender<String>,
+    pub auth_token: Option<String>,
+    pub permission_broker: Arc<PermissionBroker>,
     session_repo: Option<SessionRepository>,
     message_repo: Option<MessageRepository>,
 }
@@ -121,11 +249,15 @@ pub struct ServerState {
 impl ServerState {
     pub fn new() -> Self {
         let (tx, _) = broadcast::channel(1024);
+        let auth_token = generate_auth_token();
+        let permission_broker = Arc::new(PermissionBroker::new(tx.clone()));
         Self {
             sessions: Mutex::new(SessionManager::new()),
             providers: ProviderRegistry::new(),
             auth_manager: Arc::new(AuthManager::new()),
             event_bus: tx,
+            auth_token: Some(auth_token),
+            permission_broker,
             session_repo: None,
             message_repo: None,
         }
@@ -509,22 +641,39 @@ pub fn set_cors_whitelist(origins: Vec<String>) {
     }
 }
 
-fn is_extra_allowed_origin(origin: &str) -> bool {
+fn is_allowed_origin(origin: &str) -> bool {
+    let parsed = Url::parse(origin);
+    let Ok(parsed) = parsed else {
+        return false;
+    };
+
+    let scheme = parsed.scheme();
+    let host = parsed.host_str().unwrap_or("");
+    let port = parsed.port();
+
+    // Allow localhost with any port
+    let is_localhost = matches!(host, "localhost" | "127.0.0.1" | "[::1]")
+        && matches!(scheme, "http" | "https")
+        && port.is_some();
+
+    // Allow tauri
+    let is_tauri = matches!(origin, "tauri://localhost" | "http://tauri.localhost" | "https://tauri.localhost");
+
+    // Allow exact opencode.ai subdomains (no wildcard suffix)
+    let is_opencode_ai = scheme == "https" && matches!(host, "opencode.ai" | "www.opencode.ai");
+
+    // Check extra whitelist with exact match
+    let is_extra = is_extra_allowed_origin_exact(origin);
+
+    is_localhost || is_tauri || is_opencode_ai || is_extra
+}
+
+fn is_extra_allowed_origin_exact(origin: &str) -> bool {
     let normalized = normalize_origin(origin).unwrap_or_else(|| origin.to_string());
     match EXTRA_CORS_WHITELIST.read() {
         Ok(guard) => guard.contains(&normalized),
         Err(poisoned) => poisoned.into_inner().contains(&normalized),
     }
-}
-
-fn is_allowed_origin(origin: &str) -> bool {
-    origin.starts_with("http://localhost:")
-        || origin.starts_with("http://127.0.0.1:")
-        || origin == "tauri://localhost"
-        || origin == "http://tauri.localhost"
-        || origin == "https://tauri.localhost"
-        || (origin.starts_with("https://") && origin.ends_with(".opencode.ai"))
-        || is_extra_allowed_origin(origin)
 }
 
 fn cors_layer() -> CorsLayer {
@@ -534,14 +683,62 @@ fn cors_layer() -> CorsLayer {
                 origin.to_str().map(is_allowed_origin).unwrap_or(false)
             },
         ))
-        .allow_methods(Any)
-        .allow_headers(Any)
+        .allow_methods([Method::GET, Method::POST, Method::PUT, Method::PATCH, Method::DELETE])
+        .allow_headers([header::AUTHORIZATION, header::CONTENT_TYPE, header::ACCEPT])
+}
+
+async fn auth_middleware(
+    state: Arc<ServerState>,
+    request: Request<axum::body::Body>,
+    next: Next,
+) -> Response {
+    if !is_auth_enabled() {
+        return next.run(request).await;
+    }
+
+    let expected_token = state.auth_token.as_deref();
+    let Some(expected) = expected_token else {
+        return next.run(request).await;
+    };
+
+    let headers = request.headers();
+    let auth_header = headers
+        .get(HeaderName::from_static("authorization"))
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.strip_prefix("Bearer "));
+
+    match auth_header {
+        Some(token) if token == expected => next.run(request).await,
+        _ => {
+            tracing::warn!("Authentication failed: invalid or missing token");
+            (
+                StatusCode::UNAUTHORIZED,
+                Json(serde_json::json!({
+                    "error": "unauthorized",
+                    "message": "Invalid or missing authentication token"
+                })),
+            )
+                .into_response()
+        }
+    }
 }
 
 pub async fn run_server(addr: SocketAddr) -> anyhow::Result<()> {
     let state = Arc::new(ServerState::new_with_storage_for_url(format!("http://{}", addr)).await?);
 
+    if is_auth_enabled() {
+        if let Some(token) = &state.auth_token {
+            tracing::info!("Authentication enabled. Token: {}", token);
+            tracing::info!("Set Authorization: Bearer <token> header for all requests");
+        }
+    } else {
+        tracing::warn!("Authentication DISABLED (OPENCODE_NO_AUTH=1). Not safe for production.");
+    }
+
     let app = routes::router()
+        .layer(middleware::from_fn_with_state(state.clone(), |State(state): State<Arc<ServerState>>, request: Request<axum::body::Body>, next: Next| async move {
+            auth_middleware(state, request, next).await
+        }))
         .layer(cors_layer())
         .layer(TraceLayer::new_for_http())
         .with_state(state);
@@ -559,7 +756,18 @@ pub async fn run_server_with_state(
     addr: SocketAddr,
     state: Arc<ServerState>,
 ) -> anyhow::Result<()> {
+    if is_auth_enabled() {
+        if let Some(token) = &state.auth_token {
+            tracing::info!("Authentication enabled. Token: {}", token);
+        }
+    } else {
+        tracing::warn!("Authentication DISABLED (OPENCODE_NO_AUTH=1). Not safe for production.");
+    }
+
     let app = routes::router()
+        .layer(middleware::from_fn_with_state(state.clone(), |State(state): State<Arc<ServerState>>, request: Request<axum::body::Body>, next: Next| async move {
+            auth_middleware(state, request, next).await
+        }))
         .layer(cors_layer())
         .layer(TraceLayer::new_for_http())
         .with_state(state);

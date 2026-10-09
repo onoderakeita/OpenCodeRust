@@ -1,6 +1,6 @@
-# RustingOpenCode documentation index
+# OpenCodeRust documentation index
 
-This documentation set corresponds to the current code state of **RustingOpenCode (ROCode)** (version: `2026.02.23`).
+This documentation set corresponds to the current code state of **OpenCodeRust** (version: `0.1.0`).
 
 ## Quick links
 
@@ -9,6 +9,13 @@ This documentation set corresponds to the current code state of **RustingOpenCod
 - CLI: `docs/opencode-cli.md`
 - TUI: `docs/opencode-tui.md`
 - Server: `docs/opencode-server.md`
+
+## Architecture Decision Records (ADR)
+
+- [ADR-0000: Rust再実装プロジェクト憲章](adr/20260115-rust-reimplementation-charter.md)
+- [ADR-0001: HTTP認証必須化とCORS強化](adr/adr-0001-auth-cors.md)
+- [ADR-0002: ツール実行権限フロー](adr/adr-0002-permission-flow.md)
+- [ADR-0003: プロンプト経路へのツール・システムプロンプト注入](adr/adr-0003-prompt-injection.md)
 
 ## Module documentation
 

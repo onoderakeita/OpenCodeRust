@@ -28,6 +28,89 @@ use crate::summary::{summarize_into_session, SummarizeInput};
 use crate::system::SystemPrompt;
 use crate::{MessageRole, PartType, Session, SessionMessage, SessionStateManager};
 
+// Permission callback type for tool execution
+pub type PermissionCallback = Option<
+    Arc<
+        dyn Fn(
+                opencode_tool::PermissionRequest,
+            ) -> std::pin::Pin<
+                Box<
+                    dyn std::future::Future<Output = Result<(), opencode_tool::ToolError>> + Send,
+                >,
+            > + Send
+            + Sync,
+    >,
+>;
+
+// Helper trait to convert Arc<dyn Fn> into a proper Fn callback
+trait IntoCallback {
+    type Output;
+    fn into_callback(self) -> Self::Output;
+}
+
+impl IntoCallback for Arc<
+    dyn Fn(
+            opencode_tool::PermissionRequest,
+        ) -> std::pin::Pin<
+            Box<
+                dyn std::future::Future<Output = Result<(), opencode_tool::ToolError>> + Send,
+            >,
+        > + Send
+        + Sync,
+> {
+    type Output = Box<
+        dyn Fn(
+                opencode_tool::PermissionRequest,
+            ) -> std::pin::Pin<
+                Box<
+                    dyn std::future::Future<Output = Result<(), opencode_tool::ToolError>> + Send,
+                >,
+            > + Send
+            + Sync
+            + 'static,
+    >;
+
+    fn into_callback(self) -> Self::Output {
+        let arc = self;
+        Box::new(move |req| {
+            let arc = arc.clone();
+            arc(req)
+        })
+    }
+}
+
+impl IntoCallback for Option<
+    Arc<
+        dyn Fn(
+                opencode_tool::PermissionRequest,
+            ) -> std::pin::Pin<
+                Box<
+                    dyn std::future::Future<Output = Result<(), opencode_tool::ToolError>> + Send,
+                >,
+            > + Send
+            + Sync,
+    >,
+> {
+    type Output = Box<
+        dyn Fn(
+                opencode_tool::PermissionRequest,
+            ) -> std::pin::Pin<
+                Box<
+                    dyn std::future::Future<Output = Result<(), opencode_tool::ToolError>> + Send,
+                >,
+            > + Send
+            + Sync
+            + 'static,
+    >;
+
+    fn into_callback(self) -> Self::Output {
+        match self {
+            Some(arc) => arc.into_callback(),
+            None => Box::new(|_req| Box::pin(async { Ok(()) })),
+        }
+    }
+}
+
 const MAX_STEPS: u32 = 100;
 
 #[derive(Debug, Clone)]
@@ -781,6 +864,7 @@ impl SessionPrompt {
             tools,
             agent_params,
             None,
+            None,
         )
         .await
     }
@@ -794,6 +878,7 @@ impl SessionPrompt {
         tools: Vec<ToolDefinition>,
         agent_params: AgentParams,
         update_hook: Option<SessionUpdateHook>,
+        permission_callback: PermissionCallback,
     ) -> anyhow::Result<()> {
         self.assert_not_busy(&input.session_id).await?;
 
@@ -841,6 +926,7 @@ impl SessionPrompt {
             tools,
             &agent_params,
             update_hook,
+            permission_callback,
         )
         .await;
 
@@ -921,6 +1007,7 @@ impl SessionPrompt {
             tools,
             &agent_params,
             None,
+            None,
         )
         .await;
 
@@ -946,6 +1033,7 @@ impl SessionPrompt {
         tools: Vec<ToolDefinition>,
         agent_params: &AgentParams,
         update_hook: Option<SessionUpdateHook>,
+        permission_callback: PermissionCallback,
     ) -> anyhow::Result<()> {
         let mut step = 0u32;
         let provider_type = ProviderType::from_provider_id(&provider_id);
@@ -1321,7 +1409,13 @@ impl SessionPrompt {
                     session.directory.clone(),
                 )
                 .with_agent(String::new())
-                .with_abort(token.clone());
+                .with_abort(token.clone())
+                .with_ask(
+                    permission_callback
+                        .clone()
+                        .unwrap_or_else(|| Arc::new(|_req| Box::pin(async { Ok(()) })))
+                        .into_callback(),
+                );
 
                 let registry = Arc::new(opencode_tool::create_default_registry().await);
                 if let Err(e) = Self::execute_tool_calls(
@@ -3686,6 +3780,7 @@ mod tests {
                 Vec::new(),
                 AgentParams::default(),
                 Some(hook),
+                None,
             )
             .await
             .expect("prompt_with_update_hook should succeed");

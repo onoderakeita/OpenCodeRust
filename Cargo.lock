@@ -2365,6 +2365,7 @@ dependencies = [
  "async-trait",
  "axum",
  "axum-extra",
+ "base64",
  "chrono",
  "dirs",
  "futures",
@@ -2377,8 +2378,10 @@ dependencies = [
  "opencode-provider",
  "opencode-session",
  "opencode-storage",
+ "opencode-tool",
  "opencode-types",
  "portable-pty",
+ "rand 0.8.5",
  "serde",
  "serde_json",
  "thiserror 2.0.18",
@@ -2388,6 +2391,7 @@ dependencies = [
  "tower",
  "tower-http",
  "tracing",
+ "url",
  "uuid",
 ]
 

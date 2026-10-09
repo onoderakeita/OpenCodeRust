@@ -32,13 +32,15 @@ use crate::oauth::ProviderAuth;
 use crate::pty::{PtyManager, PtySession as PtySessionStruct, PtySubscription};
 use crate::worktree::{self, WorktreeInfo as WorktreeInfoStruct};
 use crate::{ApiError, Result, ServerState};
-use opencode_agent::{AgentMode, AgentRegistry};
+use opencode_agent::{AgentInfo as AgentConfigInfo, AgentMode, AgentRegistry, BuiltinAgent};
 use opencode_config::{load_config, Config as AppConfig, McpServerConfig as LoadedMcpServerConfig};
 use opencode_plugin::subprocess::{PluginAuthBridge, PluginLoader, PluginSubprocessError};
 use opencode_provider::{
     temperature_for_model, top_p_for_model, AuthInfo, AuthMethodType, ModelsData, ModelsDevInfo,
     ModelsRegistry,
 };
+use opencode_session::system::{EnvironmentContext, SystemPrompt};
+use opencode_tool::create_default_registry;
 
 pub fn router() -> Router<Arc<ServerState>> {
     Router::new()
@@ -1716,6 +1718,90 @@ async fn session_prompt(
             let _ = update_tx.send(snapshot.clone());
         });
 
+        // Create permission callback that uses the server's PermissionBroker
+        let permission_broker = state.permission_broker.clone();
+        let session_id_for_cb = session_id.clone();
+        let permission_callback: opencode_session::prompt::PermissionCallback = Some(Arc::new(move |req: opencode_tool::PermissionRequest| {
+            let broker = permission_broker.clone();
+            let session_id = session_id_for_cb.clone();
+            let tool_name = req.permission.clone();
+            let patterns = req.patterns.clone();
+            let metadata = req.metadata.clone();
+            let always = req.always.clone();
+            
+            Box::pin(async move {
+                let info = crate::server::PermissionRequestInfo {
+                    id: uuid::Uuid::new_v4().to_string(),
+                    session_id,
+                    tool: tool_name,
+                    input: serde_json::json!({
+                        "patterns": patterns,
+                        "metadata": metadata,
+                        "always": always,
+                    }),
+                    message: format!("Tool '{}' is requesting permission", req.permission),
+                    permission_type: req.permission.clone(),
+                    patterns,
+                    metadata,
+                    always,
+                };
+                let response = broker.ask(info).await;
+                match response {
+                    crate::server::PermissionResponse::Once => Ok(()),
+                    crate::server::PermissionResponse::Always => Ok(()),
+                    crate::server::PermissionResponse::Reject { message } => {
+                        Err(opencode_tool::ToolError::PermissionDenied(message.unwrap_or_else(|| "Permission denied".to_string())))
+                    }
+                }
+            })
+        }));
+
+        // Build AgentRegistry from config
+        let cwd = std::env::current_dir().unwrap_or_default();
+        let config = load_config(&cwd).unwrap_or_default();
+        let agent_registry = AgentRegistry::from_config(&config);
+
+        // Determine agent name (default to "build")
+        let agent_name = task_agent
+            .as_deref()
+            .unwrap_or(BuiltinAgent::Build.as_str());
+
+        let agent_info = agent_registry
+            .get(agent_name)
+            .cloned()
+            .unwrap_or_else(|| AgentConfigInfo::from_builtin(BuiltinAgent::Build));
+
+        // Build system prompt: provider-specific + agent system prompt + environment
+        let provider_specific_prompt = SystemPrompt::for_model(&task_model);
+        let agent_system_prompt = agent_info.system_prompt.unwrap_or_default();
+        let env_ctx = EnvironmentContext::from_current(&task_model, &task_provider, &session.directory);
+        let environment_prompt = SystemPrompt::environment(&env_ctx);
+
+        let system_prompt = if agent_system_prompt.is_empty() {
+            format!("{}\n\n{}", provider_specific_prompt, environment_prompt)
+        } else {
+            format!("{}\n\n{}\n\n{}", provider_specific_prompt, agent_system_prompt, environment_prompt)
+        };
+
+        // Get tool definitions from default registry
+        let tool_registry = create_default_registry().await;
+        let tool_definitions = tool_registry.list_schemas().await;
+        let tools: Vec<opencode_provider::ToolDefinition> = tool_definitions
+            .into_iter()
+            .map(|t| opencode_provider::ToolDefinition {
+                name: t.name,
+                description: Some(t.description),
+                parameters: t.parameters,
+            })
+            .collect();
+
+        // Build AgentParams from agent config
+        let agent_params = opencode_session::AgentParams {
+            max_tokens: agent_info.max_tokens,
+            temperature: agent_info.temperature,
+            top_p: agent_info.top_p,
+        };
+
         let prompt_runner = opencode_session::SessionPrompt::new(Arc::new(RwLock::new(
             opencode_session::SessionStateManager::new(),
         )));
@@ -1728,10 +1814,10 @@ async fn session_prompt(
             }),
             agent: task_agent.clone(),
             no_reply: false,
-            system: None,
+            system: Some(system_prompt.clone()),
             variant: task_variant.clone(),
             parts: vec![opencode_session::PartInput::Text { text: prompt_text }],
-            tools: None,
+            tools: Some(tools.iter().map(|t| (t.name.clone(), true)).collect()),
         };
 
         if let Err(error) = prompt_runner
@@ -1739,10 +1825,11 @@ async fn session_prompt(
                 input,
                 &mut session,
                 provider,
-                None,
-                Vec::new(),
-                opencode_session::AgentParams::default(),
+                Some(system_prompt),
+                tools,
+                agent_params,
                 Some(update_hook),
+                permission_callback,
             )
             .await
         {
@@ -3190,23 +3277,11 @@ fn permission_routes() -> Router<Arc<ServerState>> {
         .route("/{id}/reply", post(reply_permission))
 }
 
-#[derive(Debug, Clone, Serialize)]
-pub struct PermissionRequestInfo {
-    pub id: String,
-    pub session_id: String,
-    pub tool: String,
-    pub input: serde_json::Value,
-    pub message: String,
-}
-
-static PERMISSION_REQUESTS: Lazy<RwLock<HashMap<String, PermissionRequestInfo>>> =
-    Lazy::new(|| RwLock::new(HashMap::new()));
-
-async fn list_permissions() -> Json<Vec<PermissionRequestInfo>> {
-    let pending = PERMISSION_REQUESTS.read().await;
-    let mut result: Vec<_> = pending.values().cloned().collect();
-    result.sort_by(|a, b| a.id.cmp(&b.id));
-    Json(result)
+async fn list_permissions(
+    State(state): State<Arc<ServerState>>,
+) -> Result<Json<Vec<crate::server::PermissionRequestInfo>>> {
+    let permissions = state.permission_broker.list().await;
+    Ok(Json(permissions))
 }
 
 #[derive(Debug, Deserialize)]
@@ -3220,34 +3295,21 @@ async fn reply_permission(
     Path(id): Path<String>,
     Json(req): Json<ReplyPermissionRequest>,
 ) -> Result<Json<bool>> {
-    match req.reply.as_str() {
-        "once" | "always" | "reject" => {}
+    let response = match req.reply.as_str() {
+        "once" => crate::server::PermissionResponse::Once,
+        "always" => crate::server::PermissionResponse::Always,
+        "reject" => crate::server::PermissionResponse::Reject { message: req.message },
         _ => {
             return Err(ApiError::BadRequest(
                 "Invalid reply; expected `once`, `always`, or `reject`".to_string(),
             ));
         }
+    };
+
+    let ok = state.permission_broker.reply(&id, response).await;
+    if !ok {
+        return Err(ApiError::NotFound(format!("Permission request not found: {}", id)));
     }
-
-    let mut pending = PERMISSION_REQUESTS.write().await;
-    let permission = pending
-        .remove(&id)
-        .ok_or_else(|| ApiError::NotFound(format!("Permission request not found: {}", id)))?;
-
-    if req.reply == "reject" {
-        pending.retain(|_, item| item.session_id != permission.session_id);
-    }
-
-    state.broadcast(
-        &serde_json::json!({
-            "type": "permission.replied",
-            "requestID": id,
-            "sessionID": permission.session_id,
-            "reply": req.reply,
-            "message": req.message,
-        })
-        .to_string(),
-    );
     Ok(Json(true))
 }
 

@@ -727,4 +727,22 @@ impl ApiClient {
         let current = futures::executor::block_on(self.current_session.read());
         current.clone()
     }
+
+    pub fn reply_permission(&self, request_id: &str, reply: &str) -> anyhow::Result<()> {
+        let url = format!("{}/permission/{}/reply", self.base_url, request_id);
+        let body = serde_json::json!({
+            "reply": reply,
+        });
+        let response = self
+            .client
+            .post(&url)
+            .json(&body)
+            .send()?;
+        if !response.status().is_success() {
+            let status = response.status();
+            let text = response.text().unwrap_or_default();
+            anyhow::bail!("Failed to reply to permission request: {} - {}", status, text);
+        }
+        Ok(())
+    }
 }

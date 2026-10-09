@@ -313,19 +313,32 @@ impl App {
                 if self.permission_prompt.is_open {
                     match key.code {
                         KeyCode::Char('y') | KeyCode::Enter => {
-                            if let Some(_request) = self.permission_prompt.approve() {
-                                // TODO: Call API when available
-                                // self.api_client.reply_permission(&request.id, "once");
+                            if let Some(request) = self.permission_prompt.approve() {
+                                if let Some(client) = self.context.get_api_client() {
+                                    let _ = client.reply_permission(&request.id, "once");
+                                }
                             }
                         }
                         KeyCode::Char('n') => {
-                            let _ = self.permission_prompt.deny();
+                            if let Some(request) = self.permission_prompt.deny() {
+                                if let Some(client) = self.context.get_api_client() {
+                                    let _ = client.reply_permission(&request.id, "reject");
+                                }
+                            }
                         }
                         KeyCode::Char('a') => {
-                            let _ = self.permission_prompt.approve_always();
+                            if let Some(request) = self.permission_prompt.approve_always() {
+                                if let Some(client) = self.context.get_api_client() {
+                                    let _ = client.reply_permission(&request.id, "always");
+                                }
+                            }
                         }
                         KeyCode::Esc => {
-                            self.permission_prompt.deny();
+                            if let Some(request) = self.permission_prompt.deny() {
+                                if let Some(client) = self.context.get_api_client() {
+                                    let _ = client.reply_permission(&request.id, "reject");
+                                }
+                            }
                         }
                         _ => {}
                     }
