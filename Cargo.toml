@@ -21,13 +21,16 @@ members = [
     "crates/opencode-plugin",
     "crates/opencode-tui",
     "crates/opencode-pty",
+    "crates/opencode-local-llm",
 ]
 
 [workspace.lints.rust]
 warnings = "deny"
 
 [workspace.lints.clippy]
-all = "deny"
+all = { level = "deny", priority = -1 }
+double_must_use = "allow"
+for_kv_map = "allow"
 
 [workspace.package]
 version = "0.1.0"

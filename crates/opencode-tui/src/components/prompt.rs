@@ -859,14 +859,14 @@ impl Prompt {
                 );
             }
         } else {
-            for item in self.history.iter().rev().cloned() {
+            for item in self.history.iter().rev() {
                 let history_score = legacy_subsequence_score(token.as_str(), item.as_str());
                 Self::push_candidate(
                     &mut scored,
                     &mut dedup,
                     token.as_str(),
                     token_lower.as_str(),
-                    item,
+                    item.clone(),
                     history_score,
                 );
             }
@@ -880,6 +880,26 @@ impl Prompt {
             b.1.cmp(&a.1)
                 .then(frecency_cmp)
                 .then_with(|| a.0.len().cmp(&b.0.len()))
+                .then_with(|| {
+                    let a_last = self.frecency.get(&a.0).map(|e| e.last_used).unwrap_or(0);
+                    let b_last = self.frecency.get(&b.0).map(|e| e.last_used).unwrap_or(0);
+                    b_last.cmp(&a_last)
+                })
+                .then_with(|| {
+                    let a_history_pos = self
+                        .history
+                        .iter()
+                        .rev()
+                        .position(|h| h == &a.0)
+                        .unwrap_or(usize::MAX);
+                    let b_history_pos = self
+                        .history
+                        .iter()
+                        .rev()
+                        .position(|h| h == &b.0)
+                        .unwrap_or(usize::MAX);
+                    a_history_pos.cmp(&b_history_pos)
+                })
                 .then_with(|| a.0.to_lowercase().cmp(&b.0.to_lowercase()))
         });
 
@@ -947,7 +967,6 @@ impl Prompt {
             self.input.insert(self.cursor_position, ' ');
             self.cursor_position += 1;
         }
-        self.recompute_suggestions();
     }
 
     fn current_token(&self) -> Option<(usize, usize, String)> {
@@ -1392,6 +1411,7 @@ mod tests {
             let _ = prompt.take_input();
             prompt.set_input("test".to_string());
             let _ = prompt.take_input();
+
             prompt.set_input("te".to_string());
 
             prompt.handle_key(KeyEvent::new(KeyCode::Tab, KeyModifiers::empty()));

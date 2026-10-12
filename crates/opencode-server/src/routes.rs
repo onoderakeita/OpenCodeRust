@@ -1721,40 +1721,43 @@ async fn session_prompt(
         // Create permission callback that uses the server's PermissionBroker
         let permission_broker = state.permission_broker.clone();
         let session_id_for_cb = session_id.clone();
-        let permission_callback: opencode_session::prompt::PermissionCallback = Some(Arc::new(move |req: opencode_tool::PermissionRequest| {
-            let broker = permission_broker.clone();
-            let session_id = session_id_for_cb.clone();
-            let tool_name = req.permission.clone();
-            let patterns = req.patterns.clone();
-            let metadata = req.metadata.clone();
-            let always = req.always.clone();
-            
-            Box::pin(async move {
-                let info = crate::server::PermissionRequestInfo {
-                    id: uuid::Uuid::new_v4().to_string(),
-                    session_id,
-                    tool: tool_name,
-                    input: serde_json::json!({
-                        "patterns": patterns,
-                        "metadata": metadata,
-                        "always": always,
-                    }),
-                    message: format!("Tool '{}' is requesting permission", req.permission),
-                    permission_type: req.permission.clone(),
-                    patterns,
-                    metadata,
-                    always,
-                };
-                let response = broker.ask(info).await;
-                match response {
-                    crate::server::PermissionResponse::Once => Ok(()),
-                    crate::server::PermissionResponse::Always => Ok(()),
-                    crate::server::PermissionResponse::Reject { message } => {
-                        Err(opencode_tool::ToolError::PermissionDenied(message.unwrap_or_else(|| "Permission denied".to_string())))
+        let permission_callback: opencode_session::prompt::PermissionCallback =
+            Some(Arc::new(move |req: opencode_tool::PermissionRequest| {
+                let broker = permission_broker.clone();
+                let session_id = session_id_for_cb.clone();
+                let tool_name = req.permission.clone();
+                let patterns = req.patterns.clone();
+                let metadata = req.metadata.clone();
+                let always = req.always.clone();
+
+                Box::pin(async move {
+                    let info = crate::server::PermissionRequestInfo {
+                        id: uuid::Uuid::new_v4().to_string(),
+                        session_id,
+                        tool: tool_name,
+                        input: serde_json::json!({
+                            "patterns": patterns,
+                            "metadata": metadata,
+                            "always": always,
+                        }),
+                        message: format!("Tool '{}' is requesting permission", req.permission),
+                        permission_type: req.permission.clone(),
+                        patterns,
+                        metadata,
+                        always,
+                    };
+                    let response = broker.ask(info).await;
+                    match response {
+                        crate::server::PermissionResponse::Once => Ok(()),
+                        crate::server::PermissionResponse::Always => Ok(()),
+                        crate::server::PermissionResponse::Reject { message } => {
+                            Err(opencode_tool::ToolError::PermissionDenied(
+                                message.unwrap_or_else(|| "Permission denied".to_string()),
+                            ))
+                        }
                     }
-                }
-            })
-        }));
+                })
+            }));
 
         // Build AgentRegistry from config
         let cwd = std::env::current_dir().unwrap_or_default();
@@ -1774,13 +1777,17 @@ async fn session_prompt(
         // Build system prompt: provider-specific + agent system prompt + environment
         let provider_specific_prompt = SystemPrompt::for_model(&task_model);
         let agent_system_prompt = agent_info.system_prompt.unwrap_or_default();
-        let env_ctx = EnvironmentContext::from_current(&task_model, &task_provider, &session.directory);
+        let env_ctx =
+            EnvironmentContext::from_current(&task_model, &task_provider, &session.directory);
         let environment_prompt = SystemPrompt::environment(&env_ctx);
 
         let system_prompt = if agent_system_prompt.is_empty() {
             format!("{}\n\n{}", provider_specific_prompt, environment_prompt)
         } else {
-            format!("{}\n\n{}\n\n{}", provider_specific_prompt, agent_system_prompt, environment_prompt)
+            format!(
+                "{}\n\n{}\n\n{}",
+                provider_specific_prompt, agent_system_prompt, environment_prompt
+            )
         };
 
         // Get tool definitions from default registry
@@ -3298,7 +3305,9 @@ async fn reply_permission(
     let response = match req.reply.as_str() {
         "once" => crate::server::PermissionResponse::Once,
         "always" => crate::server::PermissionResponse::Always,
-        "reject" => crate::server::PermissionResponse::Reject { message: req.message },
+        "reject" => crate::server::PermissionResponse::Reject {
+            message: req.message,
+        },
         _ => {
             return Err(ApiError::BadRequest(
                 "Invalid reply; expected `once`, `always`, or `reject`".to_string(),
@@ -3308,7 +3317,10 @@ async fn reply_permission(
 
     let ok = state.permission_broker.reply(&id, response).await;
     if !ok {
-        return Err(ApiError::NotFound(format!("Permission request not found: {}", id)));
+        return Err(ApiError::NotFound(format!(
+            "Permission request not found: {}",
+            id
+        )));
     }
     Ok(Json(true))
 }

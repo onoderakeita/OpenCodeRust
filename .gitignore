@@ -17,3 +17,4 @@ Thumbs.db
 # Misc
 *.patch
 .cache/
+.env

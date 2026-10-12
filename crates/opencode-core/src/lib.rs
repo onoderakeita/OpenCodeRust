@@ -1,3 +1,5 @@
+#![allow(clippy::double_must_use)]
+
 pub mod bus;
 pub mod filesystem;
 pub mod git;

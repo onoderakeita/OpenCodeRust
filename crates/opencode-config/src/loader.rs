@@ -211,7 +211,10 @@ impl ConfigLoader {
         // Apply legacy migrations and flag overrides
         apply_post_load_transforms(&mut self.config);
 
-        eprintln!("[OpenCode Config] Loaded config files: {:?}", self.config_paths);
+        eprintln!(
+            "[OpenCode Config] Loaded config files: {:?}",
+            self.config_paths
+        );
 
         Ok(self.config.clone())
     }
@@ -547,18 +550,10 @@ fn get_managed_config_dir() -> PathBuf {
     }
 }
 
-/// Collect .opencode directories from project hierarchy and global config.
+/// Collect .opencode directories from project hierarchy.
+/// Global config (~/.config/opencode) is loaded separately via load_global() and should not be included here.
 fn collect_opencode_directories(project_dir: &Path) -> Vec<PathBuf> {
     let mut directories = Vec::new();
-
-    // Global config directory
-    let global_config = get_global_config_path()
-        .parent()
-        .map(|p| p.to_path_buf())
-        .unwrap_or_default();
-    if global_config.exists() {
-        directories.push(global_config);
-    }
 
     // Project .opencode directories (walk up from project_dir to worktree root)
     let start_dir = normalize_existing_path(project_dir);

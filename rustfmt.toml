@@ -4,11 +4,3 @@
 max_width = 100
 tab_spaces = 4
 edition = "2021"
-
-# 可能な限り型定義を整理する
-format_code_in_doc_comments = true
-format_strings = true
-# 複雑な式を整理する
-format_macro_bodies = true
-# 属性のフォーマット
-format_attributes = true

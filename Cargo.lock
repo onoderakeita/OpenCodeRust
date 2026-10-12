@@ -2243,6 +2243,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "opencode-local-llm"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "opencode-lsp"
 version = "0.1.0"
 dependencies = [

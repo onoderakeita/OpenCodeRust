@@ -733,15 +733,15 @@ impl ApiClient {
         let body = serde_json::json!({
             "reply": reply,
         });
-        let response = self
-            .client
-            .post(&url)
-            .json(&body)
-            .send()?;
+        let response = self.client.post(&url).json(&body).send()?;
         if !response.status().is_success() {
             let status = response.status();
             let text = response.text().unwrap_or_default();
-            anyhow::bail!("Failed to reply to permission request: {} - {}", status, text);
+            anyhow::bail!(
+                "Failed to reply to permission request: {} - {}",
+                status,
+                text
+            );
         }
         Ok(())
     }

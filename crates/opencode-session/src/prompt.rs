@@ -34,9 +34,7 @@ pub type PermissionCallback = Option<
         dyn Fn(
                 opencode_tool::PermissionRequest,
             ) -> std::pin::Pin<
-                Box<
-                    dyn std::future::Future<Output = Result<(), opencode_tool::ToolError>> + Send,
-                >,
+                Box<dyn std::future::Future<Output = Result<(), opencode_tool::ToolError>> + Send>,
             > + Send
             + Sync,
     >,
@@ -48,23 +46,21 @@ trait IntoCallback {
     fn into_callback(self) -> Self::Output;
 }
 
-impl IntoCallback for Arc<
-    dyn Fn(
-            opencode_tool::PermissionRequest,
-        ) -> std::pin::Pin<
-            Box<
-                dyn std::future::Future<Output = Result<(), opencode_tool::ToolError>> + Send,
-            >,
-        > + Send
-        + Sync,
-> {
+impl IntoCallback
+    for Arc<
+        dyn Fn(
+                opencode_tool::PermissionRequest,
+            ) -> std::pin::Pin<
+                Box<dyn std::future::Future<Output = Result<(), opencode_tool::ToolError>> + Send>,
+            > + Send
+            + Sync,
+    >
+{
     type Output = Box<
         dyn Fn(
                 opencode_tool::PermissionRequest,
             ) -> std::pin::Pin<
-                Box<
-                    dyn std::future::Future<Output = Result<(), opencode_tool::ToolError>> + Send,
-                >,
+                Box<dyn std::future::Future<Output = Result<(), opencode_tool::ToolError>> + Send>,
             > + Send
             + Sync
             + 'static,
@@ -79,25 +75,26 @@ impl IntoCallback for Arc<
     }
 }
 
-impl IntoCallback for Option<
-    Arc<
-        dyn Fn(
-                opencode_tool::PermissionRequest,
-            ) -> std::pin::Pin<
-                Box<
-                    dyn std::future::Future<Output = Result<(), opencode_tool::ToolError>> + Send,
-                >,
-            > + Send
-            + Sync,
-    >,
-> {
+impl IntoCallback
+    for Option<
+        Arc<
+            dyn Fn(
+                    opencode_tool::PermissionRequest,
+                ) -> std::pin::Pin<
+                    Box<
+                        dyn std::future::Future<Output = Result<(), opencode_tool::ToolError>>
+                            + Send,
+                    >,
+                > + Send
+                + Sync,
+        >,
+    >
+{
     type Output = Box<
         dyn Fn(
                 opencode_tool::PermissionRequest,
             ) -> std::pin::Pin<
-                Box<
-                    dyn std::future::Future<Output = Result<(), opencode_tool::ToolError>> + Send,
-                >,
+                Box<dyn std::future::Future<Output = Result<(), opencode_tool::ToolError>> + Send>,
             > + Send
             + Sync
             + 'static,

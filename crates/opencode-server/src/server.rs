@@ -1,7 +1,7 @@
 use async_trait::async_trait;
 use axum::{
     extract::State,
-    http::{header::HeaderValue, request::Parts, HeaderName, StatusCode, Request, Method, header},
+    http::{header, header::HeaderValue, request::Parts, HeaderName, Method, Request, StatusCode},
     middleware::{self, Next},
     response::{IntoResponse, Response},
     Json,
@@ -14,7 +14,7 @@ use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::RwLock;
-use tokio::sync::{broadcast, Mutex, oneshot};
+use tokio::sync::{broadcast, oneshot, Mutex};
 use tokio_stream::wrappers::ReceiverStream;
 use tower_http::cors::{AllowOrigin, CorsLayer};
 use tower_http::trace::TraceLayer;
@@ -113,7 +113,9 @@ impl PermissionBroker {
         // Wait for response
         match rx.await {
             Ok(response) => response,
-            Err(_) => PermissionResponse::Reject { message: Some("Permission request cancelled".to_string()) },
+            Err(_) => PermissionResponse::Reject {
+                message: Some("Permission request cancelled".to_string()),
+            },
         }
     }
 
@@ -657,7 +659,10 @@ fn is_allowed_origin(origin: &str) -> bool {
         && port.is_some();
 
     // Allow tauri
-    let is_tauri = matches!(origin, "tauri://localhost" | "http://tauri.localhost" | "https://tauri.localhost");
+    let is_tauri = matches!(
+        origin,
+        "tauri://localhost" | "http://tauri.localhost" | "https://tauri.localhost"
+    );
 
     // Allow exact opencode.ai subdomains (no wildcard suffix)
     let is_opencode_ai = scheme == "https" && matches!(host, "opencode.ai" | "www.opencode.ai");
@@ -683,7 +688,13 @@ fn cors_layer() -> CorsLayer {
                 origin.to_str().map(is_allowed_origin).unwrap_or(false)
             },
         ))
-        .allow_methods([Method::GET, Method::POST, Method::PUT, Method::PATCH, Method::DELETE])
+        .allow_methods([
+            Method::GET,
+            Method::POST,
+            Method::PUT,
+            Method::PATCH,
+            Method::DELETE,
+        ])
         .allow_headers([header::AUTHORIZATION, header::CONTENT_TYPE, header::ACCEPT])
 }
 
@@ -736,9 +747,12 @@ pub async fn run_server(addr: SocketAddr) -> anyhow::Result<()> {
     }
 
     let app = routes::router()
-        .layer(middleware::from_fn_with_state(state.clone(), |State(state): State<Arc<ServerState>>, request: Request<axum::body::Body>, next: Next| async move {
-            auth_middleware(state, request, next).await
-        }))
+        .layer(middleware::from_fn_with_state(
+            state.clone(),
+            |State(state): State<Arc<ServerState>>,
+             request: Request<axum::body::Body>,
+             next: Next| async move { auth_middleware(state, request, next).await },
+        ))
         .layer(cors_layer())
         .layer(TraceLayer::new_for_http())
         .with_state(state);
@@ -765,9 +779,12 @@ pub async fn run_server_with_state(
     }
 
     let app = routes::router()
-        .layer(middleware::from_fn_with_state(state.clone(), |State(state): State<Arc<ServerState>>, request: Request<axum::body::Body>, next: Next| async move {
-            auth_middleware(state, request, next).await
-        }))
+        .layer(middleware::from_fn_with_state(
+            state.clone(),
+            |State(state): State<Arc<ServerState>>,
+             request: Request<axum::body::Body>,
+             next: Next| async move { auth_middleware(state, request, next).await },
+        ))
         .layer(cors_layer())
         .layer(TraceLayer::new_for_http())
         .with_state(state);
