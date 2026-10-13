@@ -36,10 +36,10 @@ static LAST_TIMESTAMP: AtomicU64 = AtomicU64::new(0);
 static COUNTER: Mutex<u32> = Mutex::new(0);
 
 fn random_base62(length: usize) -> String {
-    let mut rng = rand::thread_rng();
+    let mut rng = rand::rng();
     let mut result = String::with_capacity(length);
     for _ in 0..length {
-        let idx = rng.gen_range(0..62);
+        let idx = rng.random_range(0..62);
         result.push(BASE62_CHARS[idx] as char);
     }
     result
