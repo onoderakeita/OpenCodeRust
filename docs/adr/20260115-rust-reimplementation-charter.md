@@ -101,11 +101,12 @@ Rustは以下の強みでこれらを解決可能：
 ## Links
 
 - [OpenCode 原リポジトリ](https://github.com/anomalyco/opencode)
-- [OpenCodeRust ワークスペース構成](../README.md#repository-structure)
-- [実装進捗サマリ](../../IMPLEMENTATION_SUMMARY.md)
-- [ADR-0001: HTTP認証必須化とCORS強化](./adr-0001-auth-cors.md)
-- [ADR-0002: ツール実行権限フロー](./adr-0002-permission-flow.md)
-- [ADR-0003: プロンプト経路へのツール・システムプロンプト注入](./adr-0003-prompt-injection.md)
+- [Project architecture](../architecture.md)
+- [Documentation index](../README.md)
+- [ADR-0001: HTTP認証必須化とCORS強化](adr-0001-auth-cors.md)
+- [ADR-0002: ツール実行権限フロー](adr-0002-permission-flow.md)
+- [ADR-0003: プロンプト経路へのツール・システムプロンプト注入](adr-0003-prompt-injection.md)
+- [ADR-0004: Durable session input queue](adr-0004-durable-session-input-queue.md)
 
 ---
 

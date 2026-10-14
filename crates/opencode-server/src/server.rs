@@ -32,6 +32,7 @@ use opencode_provider::{
     CustomFetchResponse, CustomFetchStreamResponse, ProviderError, ProviderRegistry,
 };
 use opencode_session::SessionManager;
+use opencode_storage::InputRepository;
 use opencode_storage::{Database, MessageRepository, SessionRepository};
 
 use crate::routes;
@@ -246,6 +247,7 @@ pub struct ServerState {
     pub permission_broker: Arc<PermissionBroker>,
     session_repo: Option<SessionRepository>,
     message_repo: Option<MessageRepository>,
+    pub(crate) input_repo: Option<InputRepository>,
 }
 
 impl ServerState {
@@ -262,6 +264,7 @@ impl ServerState {
             permission_broker,
             session_repo: None,
             message_repo: None,
+            input_repo: None,
         }
     }
 
@@ -299,8 +302,12 @@ impl ServerState {
         let db = Database::new().await?;
         let pool = db.pool().clone();
         state.session_repo = Some(SessionRepository::new(pool.clone()));
-        state.message_repo = Some(MessageRepository::new(pool));
+        state.message_repo = Some(MessageRepository::new(pool.clone()));
+        state.input_repo = Some(InputRepository::new(pool));
         state.load_sessions_from_storage().await?;
+        if let Some(input_repo) = &state.input_repo {
+            input_repo.reset_processing().await?;
+        }
         Ok(state)
     }
 
@@ -736,6 +743,7 @@ async fn auth_middleware(
 
 pub async fn run_server(addr: SocketAddr) -> anyhow::Result<()> {
     let state = Arc::new(ServerState::new_with_storage_for_url(format!("http://{}", addr)).await?);
+    routes::resume_queued_prompts(state.clone()).await?;
 
     if is_auth_enabled() {
         if let Some(token) = &state.auth_token {
@@ -770,6 +778,7 @@ pub async fn run_server_with_state(
     addr: SocketAddr,
     state: Arc<ServerState>,
 ) -> anyhow::Result<()> {
+    routes::resume_queued_prompts(state.clone()).await?;
     if is_auth_enabled() {
         if let Some(token) = &state.auth_token {
             tracing::info!("Authentication enabled. Token: {}", token);

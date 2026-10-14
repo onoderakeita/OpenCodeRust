@@ -1,3 +1,9 @@
+---
+type: Reference
+description: session lifecycle、message model、prompt 実行を説明する。
+tags: [session, prompt, crate]
+---
+
 # opencode-session
 
 `opencode-session` is the session engine core: message flow, state machine, retries, compaction, summarization, and rollback, plus system prompt construction.

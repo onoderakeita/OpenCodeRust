@@ -595,6 +595,7 @@ impl TodoRepository {
     }
 }
 
+#[derive(Clone)]
 pub struct InputRepository {
     pool: SqlitePool,
 }
@@ -602,6 +603,112 @@ pub struct InputRepository {
 impl InputRepository {
     pub fn new(pool: SqlitePool) -> Self {
         Self { pool }
+    }
+
+    pub async fn enqueue(
+        &self,
+        session_id: &str,
+        prompt: &str,
+        delivery: Option<&str>,
+        metadata: Option<&serde_json::Value>,
+    ) -> Result<opencode_types::SessionInput, DatabaseError> {
+        let created_at = chrono::Utc::now().timestamp_millis();
+        let id = format!("in_{}_{}", created_at, uuid::Uuid::new_v4());
+        let metadata_json = metadata
+            .map(serde_json::to_string)
+            .transpose()
+            .map_err(|e| DatabaseError::QueryError(e.to_string()))?;
+        let returned_metadata = metadata.cloned();
+        sqlx::query(
+            "INSERT INTO session_input (id, session_id, prompt, delivery, metadata, status, created_at) VALUES (?, ?, ?, ?, ?, 'pending', ?)",
+        )
+        .bind(&id)
+        .bind(session_id)
+        .bind(prompt)
+        .bind(delivery)
+        .bind(metadata_json)
+        .bind(created_at)
+        .execute(&self.pool)
+        .await
+        .map_err(|e| DatabaseError::QueryError(e.to_string()))?;
+
+        Ok(opencode_types::SessionInput {
+            id,
+            session_id: session_id.to_owned(),
+            prompt: prompt.to_owned(),
+            delivery: delivery.map(str::to_owned),
+            metadata: returned_metadata,
+            status: "pending".to_owned(),
+            created_at: created_at as u64,
+        })
+    }
+
+    pub async fn list_pending_all(
+        &self,
+    ) -> Result<Vec<opencode_types::SessionInput>, DatabaseError> {
+        #[derive(FromRow)]
+        struct InputRow {
+            id: String,
+            session_id: String,
+            prompt: String,
+            delivery: Option<String>,
+            metadata: Option<String>,
+            status: String,
+            created_at: i64,
+        }
+
+        let rows = sqlx::query_as::<_, InputRow>(
+            "SELECT id, session_id, prompt, delivery, metadata, status, created_at FROM session_input WHERE status = 'pending' ORDER BY created_at ASC, rowid ASC",
+        )
+        .fetch_all(&self.pool)
+        .await
+        .map_err(|e| DatabaseError::QueryError(e.to_string()))?;
+        Ok(rows
+            .into_iter()
+            .map(|row| opencode_types::SessionInput {
+                id: row.id,
+                session_id: row.session_id,
+                prompt: row.prompt,
+                delivery: row.delivery,
+                metadata: row
+                    .metadata
+                    .and_then(|value| serde_json::from_str(&value).ok()),
+                status: row.status,
+                created_at: row.created_at as u64,
+            })
+            .collect())
+    }
+
+    pub async fn claim_pending(&self, id: &str) -> Result<bool, DatabaseError> {
+        let result = sqlx::query(
+            r#"UPDATE session_input SET status = 'processing'
+               WHERE id = ? AND status = 'pending'
+                 AND NOT EXISTS (
+                     SELECT 1 FROM session_input earlier
+                     WHERE earlier.session_id = session_input.session_id
+                       AND earlier.status IN ('pending', 'processing')
+                       AND (
+                           earlier.created_at < session_input.created_at
+                           OR (earlier.created_at = session_input.created_at AND earlier.rowid < session_input.rowid)
+                       )
+                 )"#,
+        )
+        .bind(id)
+        .execute(&self.pool)
+        .await
+        .map_err(|e| DatabaseError::QueryError(e.to_string()))?;
+        Ok(result.rows_affected() == 1)
+    }
+
+    pub async fn release_for_retry(&self, id: &str) -> Result<(), DatabaseError> {
+        sqlx::query(
+            "UPDATE session_input SET status = 'pending' WHERE id = ? AND status = 'processing'",
+        )
+        .bind(id)
+        .execute(&self.pool)
+        .await
+        .map_err(|e| DatabaseError::QueryError(e.to_string()))?;
+        Ok(())
     }
 
     pub async fn list_pending(
@@ -614,13 +721,14 @@ impl InputRepository {
             session_id: String,
             prompt: String,
             delivery: Option<String>,
+            metadata: Option<String>,
             status: String,
             created_at: i64,
         }
 
         let rows = sqlx::query_as::<_, InputRow>(
-            r#"SELECT id, session_id, prompt, delivery, status, created_at 
-               FROM session_input WHERE session_id = ? AND status = 'pending' ORDER BY created_at ASC"#,
+            r#"SELECT id, session_id, prompt, delivery, metadata, status, created_at
+               FROM session_input WHERE session_id = ? AND status = 'pending' ORDER BY created_at ASC, rowid ASC"#,
         )
         .bind(session_id)
         .fetch_all(&self.pool)
@@ -634,6 +742,9 @@ impl InputRepository {
                 session_id: row.session_id,
                 prompt: row.prompt,
                 delivery: row.delivery,
+                metadata: row
+                    .metadata
+                    .and_then(|value| serde_json::from_str(&value).ok()),
                 status: row.status,
                 created_at: row.created_at as u64,
             })
@@ -641,12 +752,117 @@ impl InputRepository {
     }
 
     pub async fn mark_as_promoted(&self, id: &str) -> Result<(), DatabaseError> {
-        sqlx::query("UPDATE session_input SET status = 'promoted' WHERE id = ?")
-            .bind(id)
+        sqlx::query(
+            "UPDATE session_input SET status = 'promoted' WHERE id = ? AND status IN ('pending', 'processing')",
+        )
+        .bind(id)
+        .execute(&self.pool)
+        .await
+        .map_err(|e| DatabaseError::QueryError(e.to_string()))?;
+
+        Ok(())
+    }
+
+    pub async fn mark_as_failed(&self, id: &str) -> Result<(), DatabaseError> {
+        sqlx::query(
+            "UPDATE session_input SET status = 'failed' WHERE id = ? AND status IN ('pending', 'processing')",
+        )
+        .bind(id)
+        .execute(&self.pool)
+        .await
+        .map_err(|e| DatabaseError::QueryError(e.to_string()))?;
+        Ok(())
+    }
+
+    pub async fn reset_processing(&self) -> Result<(), DatabaseError> {
+        sqlx::query("UPDATE session_input SET status = 'pending' WHERE status = 'processing'")
             .execute(&self.pool)
             .await
             .map_err(|e| DatabaseError::QueryError(e.to_string()))?;
-
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod input_repository_tests {
+    use super::InputRepository;
+    use crate::Database;
+
+    #[tokio::test]
+    async fn queue_claim_and_restart_recovery_preserve_fifo() {
+        let database = Database::in_memory().await.expect("database initializes");
+        sqlx::query(
+            "INSERT INTO sessions (id, project_id, slug, directory, title, created_at, updated_at) VALUES ('session-1', 'project-1', 'test', '.', 'Test', 1, 1)",
+        )
+        .execute(database.pool())
+        .await
+        .expect("session row exists");
+
+        let repository = InputRepository::new(database.pool().clone());
+        let first = repository
+            .enqueue("session-1", "first", Some("queue"), None)
+            .await
+            .expect("first input enqueued");
+        let second = repository
+            .enqueue("session-1", "second", Some("queue"), None)
+            .await
+            .expect("second input enqueued");
+
+        assert!(repository.claim_pending(&first.id).await.unwrap());
+        assert!(!repository.claim_pending(&first.id).await.unwrap());
+        assert!(!repository.claim_pending(&second.id).await.unwrap());
+        repository.reset_processing().await.unwrap();
+
+        let pending = repository.list_pending("session-1").await.unwrap();
+        assert_eq!(
+            pending
+                .iter()
+                .map(|item| item.id.as_str())
+                .collect::<Vec<_>>(),
+            [first.id.as_str(), second.id.as_str()]
+        );
+        assert!(repository.claim_pending(&first.id).await.unwrap());
+        repository.mark_as_promoted(&first.id).await.unwrap();
+        assert!(repository.claim_pending(&second.id).await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn failed_queue_head_allows_next_item_with_tied_timestamps() {
+        let database = Database::in_memory().await.expect("database initializes");
+        sqlx::query(
+            "INSERT INTO sessions (id, project_id, slug, directory, title, created_at, updated_at) VALUES ('session-1', 'project-1', 'test', '.', 'Test', 1, 1)",
+        )
+        .execute(database.pool())
+        .await
+        .expect("session row exists");
+
+        let repository = InputRepository::new(database.pool().clone());
+        let first = repository
+            .enqueue("session-1", "first", Some("queue"), None)
+            .await
+            .expect("first input enqueued");
+        let second = repository
+            .enqueue("session-1", "second", Some("queue"), None)
+            .await
+            .expect("second input enqueued");
+
+        sqlx::query("UPDATE session_input SET created_at = 42 WHERE id IN (?, ?)")
+            .bind(&first.id)
+            .bind(&second.id)
+            .execute(database.pool())
+            .await
+            .expect("timestamps are tied");
+
+        let pending = repository.list_pending("session-1").await.unwrap();
+        assert_eq!(
+            pending
+                .iter()
+                .map(|item| item.id.as_str())
+                .collect::<Vec<_>>(),
+            [first.id.as_str(), second.id.as_str()]
+        );
+        assert!(repository.claim_pending(&first.id).await.unwrap());
+        repository.mark_as_failed(&first.id).await.unwrap();
+        assert!(repository.claim_pending(&second.id).await.unwrap());
     }
 }

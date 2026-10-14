@@ -1,3 +1,9 @@
+---
+type: Playbook
+description: OpenCodeRust の利用者向けセットアップと操作ガイド。
+tags: [user-guide, setup, usage]
+---
+
 # USER GUIDE - RustingOpenCode (ROCode)
 
 This guide is for day-to-day users. It covers startup, common commands, configuration, and troubleshooting.  

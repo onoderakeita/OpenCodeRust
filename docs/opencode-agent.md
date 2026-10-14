@@ -1,3 +1,9 @@
+---
+type: Reference
+description: Agent の定義、登録、実行制御、メッセージ処理を説明する。
+tags: [agent, execution, crate]
+---
+
 # opencode-agent
 
 `opencode-agent` handles agent definition, registration, execution orchestration, and message handling.

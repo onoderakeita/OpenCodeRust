@@ -108,6 +108,8 @@ pub struct SessionInput {
     pub session_id: String,
     pub prompt: String,
     pub delivery: Option<String>,
+    #[serde(default)]
+    pub metadata: Option<serde_json::Value>,
     pub status: String,
     pub created_at: u64,
 }

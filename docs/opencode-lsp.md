@@ -1,3 +1,9 @@
+---
+type: Reference
+description: Language Server Protocol client と server registry を説明する。
+tags: [lsp, code-intelligence, crate]
+---
+
 # opencode-lsp
 
 `opencode-lsp` provides Language Server Protocol client support for code intelligence and editing assistance.

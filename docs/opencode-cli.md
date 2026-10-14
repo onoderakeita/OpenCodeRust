@@ -1,3 +1,9 @@
+---
+type: Reference
+description: `opencode` CLI の入口、コマンド、実行モードを説明する。
+tags: [cli, commands, crate]
+---
+
 # opencode-cli
 
 `opencode-cli` provides the workspace’s unified executable entrypoint (binary name: `opencode`).

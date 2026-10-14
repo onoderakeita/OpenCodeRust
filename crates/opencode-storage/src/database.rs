@@ -107,6 +107,15 @@ impl Database {
                 .map_err(|e| DatabaseError::MigrationError(e.to_string()))?;
         }
 
+        match sqlx::query(crate::schema::MIGRATE_SESSION_INPUT_METADATA)
+            .execute(&self.pool)
+            .await
+        {
+            Ok(_) => {}
+            Err(error) if error.to_string().contains("duplicate column name") => {}
+            Err(error) => return Err(DatabaseError::MigrationError(error.to_string())),
+        }
+
         Ok(())
     }
 

@@ -1,20 +1,34 @@
-# 公式仕様と Rust 実装のマッピング (Phase 1)
+---
+type: Plan
+description: 公式 OpenCode と OpenCodeRust の機能整合に関する初期計画。
+status: Planning
+tags:
+  - mapping
+  - compatibility
+  - roadmap
+---
 
-公式の `specs/v2/session.md` に基づき、Rust 実装へのマッピング計画を定義する。
+# 公式仕様と Rust 実装のマッピング
 
-## Session Core
-- `sessions.create` / `sessions.prompt` / `sessions.interrupt`: `opencode-session` (Rust) の `Session` 型および `Service` インターフェースへマッピング。
-- `SessionExecution.resume`: `opencode-agent` (Rust) の `executor.rs` へロジックを移行。
-- `SessionStore`: `opencode-storage` (Rust) へマッピング。
+## 文書の位置付け
 
-## Context Management
-- `Context Epoch`: `opencode-session/src/prompt.rs` または `instruction.rs` に「エポック」の概念を Rust の構造体として定義。
-- `System Context Registry`: `opencode-config` または `opencode-core` の機能として統合を検討。
+この文書は初期の移行計画であり、現行実装との対応表ではない。
+記載された配置案や未完了項目を、現在の実装状態として扱わないこと。
+現行 workspace の責務は [Project architecture](docs/architecture.md)、
+crate 別の記述は [docs index](docs/README.md) を参照する。
 
-## Data & Event Persistence
-- `session_input` (durable admission inbox): `opencode-storage` の SQL スキーマとして定義。
-- `Session History` / `Events`: `opencode-core` の `bus.rs` または専用のイベントストアとして Rust で実装。
+## 初期計画の対象
 
-## 課題
-- TypeScript/Effect ベースのリアクティブな設計を、Rust の `async/await` および `tokio` (または適切な非同期ランタイム) で同等の堅牢性を持って再構築する必要がある。
-- `sst.config.ts` に依存するインフラ部分を、Rust 側の環境設定とどう整合させるか。
+- Session create/prompt/interrupt と storage の責務整理。
+- Context、system prompt、session event の構造化。
+- Durable session input inbox の追加。
+- TypeScript/Effect の非同期設計を Rust/Tokio に適合させること。
+
+Durable input queue の現行決定は
+[ADR-0004](docs/adr/adr-0004-durable-session-input-queue.md) に分離している。
+
+## 参照の制約
+
+この repository には、旧版で参照していた `specs/v2/session.md` は存在
+しない。公式との機能差を更新するときは、比較対象の公式 checkout と
+version/commit を別途記録し、実装・テストで確認した事実と提案を分ける。

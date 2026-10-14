@@ -1,3 +1,9 @@
+---
+type: Reference
+description: filesystem、logging、共通 utility を説明する。
+tags: [utilities, logging, crate]
+---
+
 # opencode-util
 
 `opencode-util` provides shared utilities and basic capabilities used across modules.

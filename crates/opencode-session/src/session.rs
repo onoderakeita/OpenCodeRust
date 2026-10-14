@@ -1101,7 +1101,7 @@ impl SessionManager {
 
     /// Get events (and clear them)
     pub fn drain_events(&mut self) -> Vec<SessionEvent> {
-        self.events.drain(..).collect()
+        std::mem::take(&mut self.events)
     }
 
     /// Get session count

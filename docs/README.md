@@ -1,14 +1,24 @@
+---
+type: Index
+description: Architecture、crate reference、ADR をまとめる文書索引。
+tags: [documentation, index, adr]
+---
+
 # OpenCodeRust documentation index
 
-This documentation set corresponds to the current code state of **OpenCodeRust** (version: `0.1.0`).
+This documentation set describes the current **OpenCodeRust** codebase
+(version `0.1.0`).
 
 ## Quick links
 
-- Project overview: `README.md`
-- User guide: `USER_GUIDE.md`
-- CLI: `docs/opencode-cli.md`
-- TUI: `docs/opencode-tui.md`
-- Server: `docs/opencode-server.md`
+- Project overview: [README](../README.md)
+- Project architecture: [Architecture](architecture.md)
+- Initial compatibility plan: [MAPPING](../MAPPING.md)
+- Runner proposal: [DESIGN_RUNNER](../DESIGN_RUNNER.md)
+- User guide: [User guide](../USER_GUIDE.md)
+- CLI: [CLI](opencode-cli.md)
+- TUI: [TUI](opencode-tui.md)
+- Server: [Server](opencode-server.md)
 
 ## Architecture Decision Records (ADR)
 
@@ -16,31 +26,36 @@ This documentation set corresponds to the current code state of **OpenCodeRust**
 - [ADR-0001: HTTP認証必須化とCORS強化](adr/adr-0001-auth-cors.md)
 - [ADR-0002: ツール実行権限フロー](adr/adr-0002-permission-flow.md)
 - [ADR-0003: プロンプト経路へのツール・システムプロンプト注入](adr/adr-0003-prompt-injection.md)
+- [ADR-0004: Durable session input queue](adr/adr-0004-durable-session-input-queue.md)
 
 ## Module documentation
 
-- `docs/opencode-agent.md` – Agent registration, execution, and message handling
-- `docs/opencode-cli.md` – `opencode` command and subcommands
-- `docs/opencode-command.md` – Slash command registration and rendering
-- `docs/opencode-config.md` – Configuration loading and merging
-- `docs/opencode-core.md` – Event bus and ID infrastructure
-- `docs/opencode-grep.md` – Code and text search abstraction
-- `docs/opencode-lsp.md` – LSP client and registry
-- `docs/opencode-mcp.md` – MCP client, OAuth, transport layer
-- `docs/opencode-permission.md` – Permission rules and decision engine
-- `docs/opencode-plugin.md` – Hook system and TS subprocess bridge
-- `docs/opencode-provider.md` – Multi-provider model adapter layer
-- `docs/opencode-server.md` – HTTP routes, event stream, control endpoints
-- `docs/opencode-session.md` – Session lifecycle and message flow
-- `docs/opencode-storage.md` – SQLite storage and repository layer
-- `docs/opencode-tool.md` – Built-in tools and tool registry
-- `docs/opencode-tui.md` – Terminal UI architecture and interaction
-- `docs/opencode-types.md` – Shared data types across modules
-- `docs/opencode-util.md` – Filesystem, logging, and common utilities
-- `docs/opencode-watcher.md` – Filesystem watcher
+- [Agent](opencode-agent.md) – Registration, execution, and messages
+- [CLI](opencode-cli.md) – `opencode` command and subcommands
+- [Command](opencode-command.md) – Slash commands and rendering
+- [Config](opencode-config.md) – Configuration loading and merging
+- [Core](opencode-core.md) – Event bus and ID infrastructure
+- [Grep](opencode-grep.md) – Code and text search
+- [LSP](opencode-lsp.md) – LSP client and registry
+- [Local LLM](opencode-local-llm.md) – Ollama-backed stdio MCP server
+- [MCP](opencode-mcp.md) – Client, OAuth, and transport layer
+- [Permission](opencode-permission.md) – Rules and decision engine
+- [PTY](opencode-pty.md) – Pseudo-terminal process sessions
+- [Plugin](opencode-plugin.md) – Hooks and TypeScript subprocess bridge
+- [Provider](opencode-provider.md) – Multi-provider model adapters
+- [Server](opencode-server.md) – HTTP routes and event stream
+- [Session](opencode-session.md) – Lifecycle and message flow
+- [Storage](opencode-storage.md) – SQLite storage and repositories
+- [Tool](opencode-tool.md) – Built-in tools and registry
+- [TUI](opencode-tui.md) – Terminal UI architecture and interaction
+- [Types](opencode-types.md) – Shared data types
+- [Util](opencode-util.md) – Filesystem, logging, and utilities
+- [Watcher](opencode-watcher.md) – Filesystem watcher
+- [Termux build](TERMUX_BUILD.md) – Android build notes
 
 ## Code and documentation conventions
 
-- The command name is still `opencode` (for compatibility with existing scripts).
-- Documentation should follow the source code and `--help` output as the source of truth.
-- Behaviour differences or refactoring plans are documented in `docs/overview/` (if that directory exists).
+- The executable remains `opencode` for script compatibility.
+- Source code and `--help` output are the behaviour sources of truth.
+- Project structure is documented in [Architecture](architecture.md).
+- Compatibility plans are in [ALIGNMENT](../ALIGNMENT.md) and [MAPPING](../MAPPING.md).

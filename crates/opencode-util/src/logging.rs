@@ -347,7 +347,7 @@ impl Log {
         if let Some(file) = file {
             let writer: Arc<Mutex<Box<dyn Write + Send>>> = Arc::new(Mutex::new(Box::new(file)));
             if let Ok(mut loggers) = LOGGERS.lock() {
-                for (_, cached) in loggers.iter_mut() {
+                for cached in loggers.values_mut() {
                     cached.writer = Arc::clone(&writer);
                 }
             }

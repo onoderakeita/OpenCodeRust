@@ -1,3 +1,9 @@
+---
+type: Reference
+description: crate 間で共有される session、message 等の型を説明する。
+tags: [types, serialization, crate]
+---
+
 # opencode-types
 
 `opencode-types` defines shared data structures across crates to reduce duplication and serialization drift.

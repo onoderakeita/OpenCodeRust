@@ -1,3 +1,9 @@
+---
+type: Reference
+description: provider adapter、model 解決、streaming、retry を説明する。
+tags: [provider, models, crate]
+---
+
 # opencode-provider
 
 `opencode-provider` is the multi-provider model adapter layer: request building, streaming response parsing, retries, and model capability queries.

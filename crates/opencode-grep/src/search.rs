@@ -170,7 +170,7 @@ impl Ripgrep {
         let mut lines: Vec<String> = Vec::new();
         let mut queue: Vec<(String, String)> = Vec::new();
 
-        for (_, node) in root.iter() {
+        for node in root.values() {
             let node_json = serde_json::to_string(node).unwrap_or_default();
             queue.push((node.name.clone(), node_json));
         }

@@ -276,6 +276,8 @@ enum SessionRunStatus {
 
 static SESSION_RUN_STATUS: Lazy<RwLock<HashMap<String, SessionRunStatus>>> =
     Lazy::new(|| RwLock::new(HashMap::new()));
+static PROMPT_LOCKS: Lazy<RwLock<HashMap<String, Arc<Mutex<()>>>>> =
+    Lazy::new(|| RwLock::new(HashMap::new()));
 
 async fn set_session_run_status(
     state: &Arc<ServerState>,
@@ -435,6 +437,7 @@ async fn delete_session(
         .delete(&id)
         .ok_or_else(|| ApiError::SessionNotFound(id.clone()))?;
     SESSION_RUN_STATUS.write().await.remove(&id);
+    PROMPT_LOCKS.write().await.remove(&id);
     persist_sessions_if_enabled(&state).await;
     Ok(Json(serde_json::json!({ "deleted": true })))
 }
@@ -1654,24 +1657,148 @@ async fn session_prompt(
     }
 
     let config = CONFIG_STATE.read().await;
-    let (provider, provider_id, model_id) =
+    let (_provider, provider_id, model_id) =
         resolve_provider_and_model(&state, req.model.as_deref(), config.model.as_deref(), None)?;
     drop(config);
 
-    let task_state = state.clone();
-    let session_id = id.clone();
-    let task_variant = req.variant.clone();
-    let task_agent = req.agent.clone();
-    let task_model = model_id.clone();
-    let task_provider = provider_id.clone();
+    let queue_request = QueuedPromptRequest {
+        model: ProviderModel {
+            provider_id: provider_id.clone(),
+            model_id: model_id.clone(),
+        },
+        agent: req.agent.clone(),
+        variant: req.variant.clone(),
+    };
+    spawn_prompt_execution(
+        state.clone(),
+        id.clone(),
+        prompt_text,
+        queue_request,
+        None,
+        None,
+    );
+
+    Ok(Json(serde_json::json!({
+        "status": "started",
+        "model": format!("{}/{}", provider_id, model_id),
+        "variant": req.variant,
+    })))
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+struct ProviderModel {
+    provider_id: String,
+    model_id: String,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+struct QueuedPromptRequest {
+    model: ProviderModel,
+    agent: Option<String>,
+    variant: Option<String>,
+}
+
+fn spawn_prompt_execution(
+    task_state: Arc<ServerState>,
+    session_id: String,
+    prompt_text: String,
+    request: QueuedPromptRequest,
+    queue_id: Option<String>,
+    message_id: Option<String>,
+) {
+    let task_variant = request.variant.clone();
+    let task_agent = request.agent.clone();
+    let task_model = request.model.model_id.clone();
+    let task_provider = request.model.provider_id.clone();
+    let provider = match task_state.providers.get_provider(&task_provider) {
+        Ok(provider) => provider,
+        Err(error) => {
+            tracing::error!(session_id = %session_id, %error, "prompt provider unavailable");
+            if let (Some(queue_id), Some(repo)) =
+                (queue_id.as_deref(), task_state.input_repo.as_ref())
+            {
+                let repo = repo.clone();
+                let id = queue_id.to_owned();
+                let next_state = task_state.clone();
+                let next_session = session_id.clone();
+                tokio::spawn(async move {
+                    if let Err(mark_error) = repo.mark_as_failed(&id).await {
+                        tracing::error!(%id, %mark_error, "failed marking queued prompt failed");
+                    }
+                    spawn_next_queued_prompt(next_state, next_session);
+                });
+            }
+            return;
+        }
+    };
     tokio::spawn(async move {
-        let mut session = {
-            let sessions = task_state.sessions.lock().await;
-            let Some(session) = sessions.get(&session_id).cloned() else {
+        let run_lock = {
+            let mut locks = PROMPT_LOCKS.write().await;
+            locks
+                .entry(session_id.clone())
+                .or_insert_with(|| Arc::new(Mutex::new(())))
+                .clone()
+        };
+        let _run_guard = run_lock.lock().await;
+        if let Some(queue_id) = queue_id.as_deref() {
+            let Some(input_repo) = task_state.input_repo.as_ref() else {
+                tracing::error!(%queue_id, "queued prompt storage unavailable");
                 return;
             };
-            session
+            let pending = match input_repo.list_pending(&session_id).await {
+                Ok(pending) => pending,
+                Err(error) => {
+                    tracing::error!(%session_id, %error, "failed reading queued prompts");
+                    retry_queued_prompts(task_state.clone(), session_id.clone());
+                    return;
+                }
+            };
+            if pending.first().is_none_or(|input| input.id != queue_id) {
+                return;
+            }
+            match input_repo.claim_pending(queue_id).await {
+                Ok(true) => {}
+                Ok(false) => return,
+                Err(error) => {
+                    tracing::error!(%queue_id, %error, "failed claiming queued prompt");
+                    retry_queued_prompts(task_state.clone(), session_id.clone());
+                    return;
+                }
+            }
+        }
+        let session = {
+            let sessions = task_state.sessions.lock().await;
+            sessions.get(&session_id).cloned()
         };
+        let Some(mut session) = session else {
+            if let (Some(queue_id), Some(repo)) =
+                (queue_id.as_deref(), task_state.input_repo.as_ref())
+            {
+                if let Err(error) = repo.mark_as_failed(queue_id).await {
+                    tracing::error!(%queue_id, %error, "failed marking orphaned queued prompt");
+                }
+            }
+            if queue_id.is_some() {
+                spawn_next_queued_prompt(task_state.clone(), session_id.clone());
+            }
+            return;
+        };
+        let message_id = if let Some(queue_id) = queue_id.as_deref() {
+            if let Some(existing) = session
+                .messages
+                .iter()
+                .find(|message| message.id == queue_id)
+            {
+                Some(existing.id.clone())
+            } else {
+                let message = session.add_user_message(&prompt_text);
+                message.id = queue_id.to_owned();
+                Some(queue_id.to_owned())
+            }
+        } else {
+            message_id
+        };
+        persist_sessions_if_enabled(&task_state).await;
         set_session_run_status(&task_state, &session_id, SessionRunStatus::Busy).await;
 
         if let Some(variant) = task_variant.as_deref() {
@@ -1719,7 +1846,7 @@ async fn session_prompt(
         });
 
         // Create permission callback that uses the server's PermissionBroker
-        let permission_broker = state.permission_broker.clone();
+        let permission_broker = task_state.permission_broker.clone();
         let session_id_for_cb = session_id.clone();
         let permission_callback: opencode_session::prompt::PermissionCallback =
             Some(Arc::new(move |req: opencode_tool::PermissionRequest| {
@@ -1814,7 +1941,7 @@ async fn session_prompt(
         )));
         let input = opencode_session::PromptInput {
             session_id: session_id.clone(),
-            message_id: None,
+            message_id,
             model: Some(opencode_session::prompt::ModelRef {
                 provider_id: task_provider.clone(),
                 model_id: task_model.clone(),
@@ -1827,7 +1954,7 @@ async fn session_prompt(
             tools: Some(tools.iter().map(|t| (t.name.clone(), true)).collect()),
         };
 
-        if let Err(error) = prompt_runner
+        let result = prompt_runner
             .prompt_with_update_hook(
                 input,
                 &mut session,
@@ -1838,8 +1965,8 @@ async fn session_prompt(
                 Some(update_hook),
                 permission_callback,
             )
-            .await
-        {
+            .await;
+        if let Err(error) = &result {
             tracing::error!(
                 session_id = %session_id,
                 provider_id = %task_provider,
@@ -1867,6 +1994,13 @@ async fn session_prompt(
                     .insert("agent".to_string(), serde_json::json!(agent));
             }
             assistant.add_text(format!("Provider error: {}", error));
+            if let (Some(queue_id), Some(input_repo)) =
+                (queue_id.as_deref(), task_state.input_repo.as_ref())
+            {
+                if let Err(queue_error) = input_repo.mark_as_failed(queue_id).await {
+                    tracing::error!(%queue_id, %queue_error, "failed marking queued prompt failed");
+                }
+            }
         }
         let _ = update_task.await;
 
@@ -1884,13 +2018,74 @@ async fn session_prompt(
         );
         set_session_run_status(&task_state, &session_id, SessionRunStatus::Idle).await;
         persist_sessions_if_enabled(&task_state).await;
+        if let Some(queue_id) = queue_id.as_deref() {
+            if let Some(input_repo) = task_state.input_repo.as_ref() {
+                if result.is_ok() {
+                    if let Err(error) = input_repo.mark_as_promoted(queue_id).await {
+                        tracing::error!(%queue_id, %error, "failed marking queued prompt complete");
+                    }
+                } else if let Err(error) = input_repo.mark_as_failed(queue_id).await {
+                    tracing::error!(%queue_id, %error, "failed marking queued prompt failed");
+                }
+            }
+            spawn_next_queued_prompt(task_state.clone(), session_id.clone());
+        }
     });
+}
 
-    Ok(Json(serde_json::json!({
-        "status": "started",
-        "model": format!("{}/{}", provider_id, model_id),
-        "variant": req.variant,
-    })))
+fn spawn_next_queued_prompt(state: Arc<ServerState>, session_id: String) {
+    tokio::spawn(async move {
+        let Some(input_repo) = state.input_repo.as_ref() else {
+            return;
+        };
+        let pending = match input_repo.list_pending(&session_id).await {
+            Ok(pending) => pending,
+            Err(error) => {
+                tracing::error!(%session_id, %error, "failed reading queued prompts");
+                retry_queued_prompts(state.clone(), session_id.clone());
+                return;
+            }
+        };
+        let Some(input) = pending.into_iter().next() else {
+            return;
+        };
+        let Some(metadata) = input.metadata else {
+            tracing::error!(input_id = %input.id, "queued prompt has no request metadata");
+            if let Err(error) = input_repo.mark_as_failed(&input.id).await {
+                tracing::error!(input_id = %input.id, %error, "failed marking malformed prompt");
+                return;
+            }
+            spawn_next_queued_prompt(state.clone(), session_id.clone());
+            return;
+        };
+        let request: QueuedPromptRequest = match serde_json::from_value(metadata) {
+            Ok(request) => request,
+            Err(error) => {
+                tracing::error!(input_id = %input.id, %error, "invalid queued prompt metadata");
+                if let Err(mark_error) = input_repo.mark_as_failed(&input.id).await {
+                    tracing::error!(input_id = %input.id, %mark_error, "failed marking malformed prompt");
+                    return;
+                }
+                spawn_next_queued_prompt(state.clone(), session_id.clone());
+                return;
+            }
+        };
+        spawn_prompt_execution(
+            state,
+            session_id,
+            input.prompt,
+            request,
+            Some(input.id),
+            None,
+        );
+    });
+}
+
+fn retry_queued_prompts(state: Arc<ServerState>, session_id: String) {
+    tokio::spawn(async move {
+        tokio::time::sleep(Duration::from_secs(1)).await;
+        spawn_next_queued_prompt(state, session_id);
+    });
 }
 
 async fn abort_prompt(
@@ -2084,10 +2279,6 @@ async fn prompt_async(
     Path(id): Path<String>,
     Json(req): Json<PromptAsyncRequest>,
 ) -> Result<Json<serde_json::Value>> {
-    let mut sessions = state.sessions.lock().await;
-    let session = sessions
-        .get_mut(&id)
-        .ok_or_else(|| ApiError::SessionNotFound(id.clone()))?;
     let message_text: String = req
         .message
         .clone()
@@ -2102,17 +2293,67 @@ async fn prompt_async(
             })
         })
         .unwrap_or_default();
-    session.add_user_message(&message_text);
-    let assistant = session.add_assistant_message();
-    let assistant_id = assistant.id.clone();
-    drop(sessions);
-    persist_sessions_if_enabled(&state).await;
+
+    {
+        let sessions = state.sessions.lock().await;
+        if sessions.get(&id).is_none() {
+            return Err(ApiError::SessionNotFound(id));
+        }
+    }
+
+    let input_repo = state
+        .input_repo
+        .as_ref()
+        .ok_or_else(|| ApiError::InternalError("durable queue storage unavailable".into()))?;
+    let (provider_id, model_id) = {
+        let request_model = req.model.as_ref().and_then(serde_json::Value::as_str);
+        let config = CONFIG_STATE.read().await;
+        let (_, provider_id, model_id) =
+            resolve_provider_and_model(&state, request_model, config.model.as_deref(), None)?;
+        (provider_id, model_id)
+    };
+    let request = QueuedPromptRequest {
+        model: ProviderModel {
+            provider_id: provider_id.clone(),
+            model_id: model_id.clone(),
+        },
+        agent: None,
+        variant: None,
+    };
+    let metadata = serde_json::to_value(&request)
+        .map_err(|error| ApiError::InternalError(error.to_string()))?;
+    let input = input_repo
+        .enqueue(&id, &message_text, Some("queue"), Some(&metadata))
+        .await
+        .map_err(|error| ApiError::InternalError(error.to_string()))?;
+    spawn_prompt_execution(
+        state.clone(),
+        id,
+        message_text,
+        request,
+        Some(input.id.clone()),
+        None,
+    );
 
     Ok(Json(serde_json::json!({
         "status": "queued",
-        "message_id": assistant_id,
+        "message_id": input.id,
         "model": req.model,
     })))
+}
+
+pub(crate) async fn resume_queued_prompts(state: Arc<ServerState>) -> anyhow::Result<()> {
+    let Some(input_repo) = &state.input_repo else {
+        return Ok(());
+    };
+    let mut session_ids = std::collections::HashSet::new();
+    for input in input_repo.list_pending_all().await? {
+        session_ids.insert(input.session_id);
+    }
+    for session_id in session_ids {
+        spawn_next_queued_prompt(state.clone(), session_id);
+    }
+    Ok(())
 }
 
 #[derive(Debug, Deserialize)]

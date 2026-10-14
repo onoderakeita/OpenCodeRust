@@ -1,3 +1,9 @@
+---
+type: Reference
+description: tool interface、registry、built-in tool 実行を説明する。
+tags: [tool, execution, crate]
+---
+
 # opencode-tool
 
 `opencode-tool` provides the tool invocation system: tool definition, registry, execution context, and built-in tool implementations.

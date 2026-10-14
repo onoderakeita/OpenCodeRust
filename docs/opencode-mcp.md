@@ -1,3 +1,9 @@
+---
+type: Reference
+description: MCP client、transport、tool sync、OAuth 管理を説明する。
+tags: [mcp, oauth, integration, crate]
+---
+
 # opencode-mcp
 
 `opencode-mcp` implements the MCP (Model Context Protocol) client stack, with support for multiple transports and OAuth.

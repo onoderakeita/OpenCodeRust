@@ -1,3 +1,9 @@
+---
+type: Reference
+description: plugin hook と TypeScript subprocess bridge を説明する。
+tags: [plugin, hooks, crate]
+---
+
 # opencode-plugin
 
 `opencode-plugin` provides a global hook system and TS plugin subprocess bridge.

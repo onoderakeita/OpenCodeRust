@@ -1,3 +1,9 @@
+---
+type: Reference
+description: tool operation に対する permission rule と判定を説明する。
+tags: [permission, security, crate]
+---
+
 # opencode-permission
 
 `opencode-permission` provides a unified permission decision layer for constraining high-risk tool operations.

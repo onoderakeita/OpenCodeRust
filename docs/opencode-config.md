@@ -1,3 +1,9 @@
+---
+type: Reference
+description: 設定ファイルの発見、解析、型付け、merge を説明する。
+tags: [configuration, jsonc, crate]
+---
+
 # opencode-config
 
 `opencode-config` handles config file discovery, loading, parsing, and merging. It is the configuration entrypoint for runtime behaviour.

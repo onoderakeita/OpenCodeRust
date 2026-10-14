@@ -1,3 +1,9 @@
+---
+type: Reference
+description: file traversal と text search の共通 abstraction を説明する。
+tags: [search, grep, crate]
+---
+
 # opencode-grep
 
 `opencode-grep` wraps text/file search for reuse by the tool and server layers.

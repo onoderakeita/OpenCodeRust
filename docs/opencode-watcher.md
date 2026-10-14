@@ -1,3 +1,9 @@
+---
+type: Reference
+description: filesystem change watcher、ignore、event 通知を説明する。
+tags: [watcher, filesystem, crate]
+---
+
 # opencode-watcher
 
 `opencode-watcher` provides filesystem watching and event broadcasting.

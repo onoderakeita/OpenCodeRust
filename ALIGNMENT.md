@@ -1,3 +1,9 @@
+---
+type: Plan
+description: 公式 OpenCode と OpenCodeRust の機能整合計画。
+tags: [alignment, roadmap, compatibility]
+---
+
 # OpenCodeRust への official 移植・整合計画
 
 ## 目標

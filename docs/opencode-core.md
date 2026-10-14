@@ -1,3 +1,9 @@
+---
+type: Reference
+description: workspace 共通の event bus と ID 基盤を説明する。
+tags: [core, event-bus, id, crate]
+---
+
 # opencode-core
 
 `opencode-core` is the workspace’s lowest-level shared library, providing a global event bus and ID generation.

@@ -1,3 +1,9 @@
+---
+type: Project
+description: OpenCodeRust の概要、使い方、workspace 構成への入口。
+tags: [project, rust, opencode]
+---
+
 # OpenCodeRust
 
 **A Rust implementation of OpenCode**
@@ -128,6 +134,9 @@ See: `docs/opencode-config.md`
 
 ## Repository structure
 
+The complete 21-crate map and major execution paths are documented in
+[`docs/architecture.md`](docs/architecture.md).
+
 - `crates/opencode-cli` – CLI entrypoint (binary: `opencode`)
 - `crates/opencode-server` – HTTP/SSE/WebSocket server
 - `crates/opencode-tui` – Terminal UI
@@ -156,6 +165,7 @@ cargo check -p opencode-tui
 
 ## Documentation
 
+- Project architecture: `docs/architecture.md`
 - User guide: `USER_GUIDE.md`
 - Docs index: `docs/README.md`
 - CLI: `docs/opencode-cli.md`

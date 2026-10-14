@@ -189,6 +189,23 @@ CREATE TABLE IF NOT EXISTS session_input (
 );
 "#;
 
+pub const CREATE_SESSION_INPUT_TABLE_WITH_METADATA: &str = r#"
+CREATE TABLE IF NOT EXISTS session_input (
+    id TEXT PRIMARY KEY,
+    session_id TEXT NOT NULL,
+    prompt TEXT NOT NULL,
+    delivery TEXT,
+    metadata TEXT,
+    status TEXT NOT NULL,
+    created_at INTEGER NOT NULL,
+    FOREIGN KEY (session_id) REFERENCES sessions(id) ON DELETE CASCADE
+);
+"#;
+
+/// Adds execution metadata to existing inboxes without relying on table recreation.
+pub const MIGRATE_SESSION_INPUT_METADATA: &str =
+    "ALTER TABLE session_input ADD COLUMN metadata TEXT;";
+
 pub const IDX_SESSION_INPUT: &str = r#"
 CREATE INDEX IF NOT EXISTS idx_session_input_session ON session_input(session_id);
 CREATE INDEX IF NOT EXISTS idx_session_input_status ON session_input(status);
@@ -202,7 +219,7 @@ pub const ALL_MIGRATIONS: &[&str] = &[
     CREATE_TODOS_TABLE,
     CREATE_PERMISSIONS_TABLE,
     CREATE_SESSION_SHARES_TABLE,
-    CREATE_SESSION_INPUT_TABLE,
+    CREATE_SESSION_INPUT_TABLE_WITH_METADATA,
     CREATE_INDEXES,
     IDX_SESSION_INPUT,
 ];
