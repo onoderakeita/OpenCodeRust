@@ -33,6 +33,9 @@ tags: [tool, execution, crate]
 - New tools should be idempotent where possible and log for observability
 - All side-effectful tools should go through the permission system
 - Tool output should account for TUI truncation
+- `question` answers through the wired `QuestionCallback` when the server
+  provides one (TUI / HTTP clients); otherwise it falls back to stdin for
+  direct CLI execution. Output is `answers: string[][]` per question.
 
 ## Validation
 

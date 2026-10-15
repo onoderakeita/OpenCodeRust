@@ -39,6 +39,8 @@ Defined in: `crates/opencode-tui/src/branding.rs`
 - Braille/KnightRider switchable spinner
 - Refined message block layout and status line
 - Syntect code highlighting and path-aware completion
+- Permission and question prompts fed from `/event` SSE
+  (`permission.requested` / `question.asked`)
 
 ## Development notes
 

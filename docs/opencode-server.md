@@ -28,6 +28,7 @@ As in `crates/opencode-server/src/routes.rs`:
 - File: `/file/*`
 - Search: `/find/*`
 - Permission: `/permission/*`
+- Question: `/question/*`（保留中の質問一覧、回答、拒否）
 - Project: `/project/*`
 - PTY: `/pty/*`
 - TUI control: `/tui/*`

@@ -27,6 +27,7 @@ This documentation set describes the current **OpenCodeRust** codebase
 - [ADR-0002: ツール実行権限フロー](adr/adr-0002-permission-flow.md)
 - [ADR-0003: プロンプト経路へのツール・システムプロンプト注入](adr/adr-0003-prompt-injection.md)
 - [ADR-0004: Durable session input queue](adr/adr-0004-durable-session-input-queue.md)
+- [ADR-0005: 質問フロー（question tool / question.prompt）の配線](adr/adr-0005-question-flow.md)
 
 ## Module documentation
 
