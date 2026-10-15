@@ -273,7 +273,7 @@ impl WebFetchTool {
 }
 
 fn convert_html_to_markdown(html: &str) -> String {
-    html2md::parse_html(html)
+    strip_html(html)
 }
 
 fn strip_html(html: &str) -> String {

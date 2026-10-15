@@ -94,3 +94,13 @@ time = "0.3"
 rustls = { version = "0.23", features = ["std"] }
 rustls-webpki = "0.103"
 h2 = "0.4"
+
+# Termux/Android workarounds.
+# termios 0.2.2 does not ship an Android target module; on Android (target_os
+# = "android") the crate fails to compile because `os::target` is unresolved
+# for serial's transitive dependency chain (portable-pty -> serial ->
+# serial-unix -> termios). The vendored copy adds `os/android.rs` mirroring
+# the Linux definitions, which matches the bionic libc termios ABI.
+# See docs/TERMUX_BUILD.md.
+[patch.crates-io]
+termios = { path = "vendor/termios-0.2.2" }
