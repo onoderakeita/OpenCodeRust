@@ -15,7 +15,7 @@ tags:
 
 ## Context
 
-OpenCodeRust サーバモード（`opencode serve`）はローカル開発用だが、以下のリスクがあった：
+OpenCodeRust サーバモード（`opencoderust serve`）はローカル開発用だが、以下のリスクがあった：
 
 - 認証なしで任意のコード実行・ファイル読取り可能
 - CORS 設定が緩く、`http://localhost.attacker.com` 等からのアクセス許容

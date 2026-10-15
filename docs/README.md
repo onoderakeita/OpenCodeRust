@@ -31,7 +31,7 @@ This documentation set describes the current **OpenCodeRust** codebase
 ## Module documentation
 
 - [Agent](opencode-agent.md) – Registration, execution, and messages
-- [CLI](opencode-cli.md) – `opencode` command and subcommands
+- [CLI](opencode-cli.md) – `opencoderust` command and subcommands
 - [Command](opencode-command.md) – Slash commands and rendering
 - [Config](opencode-config.md) – Configuration loading and merging
 - [Core](opencode-core.md) – Event bus and ID infrastructure
@@ -55,7 +55,7 @@ This documentation set describes the current **OpenCodeRust** codebase
 
 ## Code and documentation conventions
 
-- The executable remains `opencode` for script compatibility.
+- The executable name is `opencoderust`.
 - Source code and `--help` output are the behaviour sources of truth.
 - Project structure is documented in [Architecture](architecture.md).
 - Compatibility plans are in [ALIGNMENT](../ALIGNMENT.md) and [MAPPING](../MAPPING.md).

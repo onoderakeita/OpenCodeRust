@@ -32,7 +32,7 @@ tags: [mcp, oauth, integration, crate]
 
 ## Use cases
 
-- CLI `opencode mcp ...`
+- CLI `opencoderust mcp ...`
 - Server `/mcp/*` routes
 - Tool/session dynamic tool extension
 

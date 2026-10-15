@@ -13,7 +13,7 @@ OpenCodeRust is the Rust implementation and evolution of OpenCode. It provides a
 ## Current status
 
 - Project name: `OpenCodeRust`
-- Executable: `opencode` (kept for backward compatibility)
+- Executable: `opencoderust`
 
 ## Feature overview
 
@@ -40,15 +40,15 @@ cargo build -p opencode-cli
 
 ### 3. Use this project's binary
 
-To avoid running another OpenCode (e.g. npm/global) on your PATH when using OpenCodeRust, run from the **repo root**:
+To ensure you are running this project's binary, run from the **repo root**:
 
-- **`./target/debug/opencode`** after `cargo build -p opencode-cli`
+- **`./target/debug/opencoderust`** after `cargo build -p opencode-cli`
 - **`cargo run -p opencode-cli --`** to always use this repo's version
 
 ### 4. Show help
 
 ```bash
-./target/debug/opencode --help
+./target/debug/opencoderust --help
 ```
 
 or
@@ -85,7 +85,9 @@ cargo run -p opencode-cli -- serve --port 3000 --hostname 127.0.0.1
 
 ## CLI commands overview
 
-From the repo root use `./target/debug/opencode` or `cargo run -p opencode-cli --`. These commands match the current `./target/debug/opencode --help`:
+From the repo root use `./target/debug/opencoderust` or
+`cargo run -p opencode-cli --`. These commands match the current
+`./target/debug/opencoderust --help`:
 
 - `tui` – Start interactive terminal UI
 - `attach` – Attach to a running server
@@ -111,10 +113,10 @@ From the repo root use `./target/debug/opencode` or `cargo run -p opencode-cli -
 Subcommand help:
 
 ```bash
-./target/debug/opencode tui --help
-./target/debug/opencode run --help
-./target/debug/opencode serve --help
-./target/debug/opencode session --help
+./target/debug/opencoderust tui --help
+./target/debug/opencoderust run --help
+./target/debug/opencoderust serve --help
+./target/debug/opencoderust session --help
 ```
 
 ## Configuration
@@ -177,4 +179,4 @@ cargo check -p opencode-tui
 
 ## Notes
 
-- The executable name remains `opencode` for backward compatibility. OpenCodeRust is the project name.
+- The executable name is `opencoderust`. OpenCodeRust is the project name.

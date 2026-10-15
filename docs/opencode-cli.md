@@ -1,12 +1,13 @@
 ---
 type: Reference
-description: `opencode` CLI の入口、コマンド、実行モードを説明する。
+description: `opencoderust` CLI の入口、コマンド、実行モードを説明する。
 tags: [cli, commands, crate]
 ---
 
 # opencode-cli
 
-`opencode-cli` provides the workspace’s unified executable entrypoint (binary name: `opencode`).
+`opencode-cli` provides the workspace’s unified executable entrypoint
+(binary name: `opencoderust`).
 
 ## Command scope
 
@@ -17,7 +18,7 @@ tags: [cli, commands, crate]
 
 ## Top-level subcommands
 
-As of `opencode --help` (2026-02-23):
+As of `opencoderust --help` (2026-10-16):
 
 - `tui`
 - `attach`
@@ -45,7 +46,7 @@ As of `opencode --help` (2026-02-23):
 
 ## Common options
 
-### `opencode tui`
+### `opencoderust tui`
 
 - `-m, --model <MODEL>`
 - `-c, --continue`
@@ -54,7 +55,7 @@ As of `opencode --help` (2026-02-23):
 - `--agent <AGENT>` (default: `build`)
 - `--port <PORT>`, `--hostname <HOSTNAME>`
 
-### `opencode run`
+### `opencoderust run`
 
 - `MESSAGE...`
 - `--command <COMMAND>`
@@ -76,5 +77,5 @@ As of `opencode --help` (2026-02-23):
 
 ```bash
 cargo check -p opencode-cli
-./target/debug/opencode --help
+./target/debug/opencoderust --help
 ```

@@ -29,7 +29,7 @@ Workspace は `Cargo.toml` の `members` に列挙された21 crate から成る
 
 ### 起動・ユーザーインターフェース
 
-- `opencode-cli`: `opencode` バイナリ、コマンド解析、実行モード選択。
+- `opencode-cli`: `opencoderust` バイナリ、コマンド解析、実行モード選択。
 - `opencode-tui`: 対話型 terminal user interface。
 - `opencode-server`: HTTP、SSE、WebSocket API とサーバー状態管理。
 - `opencode-pty`: pseudo-terminal の生成と入出力中継。

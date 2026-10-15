@@ -13,4 +13,4 @@ cargo build -p opencode-cli
 echo "Starting Rust API server on http://127.0.0.1:${RUST_PORT}"
 echo "Logs below. Use Ctrl+C to stop."
 echo "---"
-./target/debug/opencode serve --port "$RUST_PORT" --hostname 127.0.0.1
+./target/debug/opencoderust serve --port "$RUST_PORT" --hostname 127.0.0.1
