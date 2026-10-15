@@ -40,6 +40,22 @@ pub type PermissionCallback = Option<
     >,
 >;
 
+// Question callback type for tool execution
+pub type QuestionCallback = Option<
+    Arc<
+        dyn Fn(
+                Vec<opencode_tool::QuestionDef>,
+            ) -> std::pin::Pin<
+                Box<
+                    dyn std::future::Future<
+                            Output = Result<Vec<Vec<String>>, opencode_tool::ToolError>,
+                        > + Send,
+                >,
+            > + Send
+            + Sync,
+    >,
+>;
+
 // Helper trait to convert Arc<dyn Fn> into a proper Fn callback
 trait IntoCallback {
     type Output;
@@ -862,6 +878,7 @@ impl SessionPrompt {
             agent_params,
             None,
             None,
+            None,
         )
         .await
     }
@@ -876,6 +893,7 @@ impl SessionPrompt {
         agent_params: AgentParams,
         update_hook: Option<SessionUpdateHook>,
         permission_callback: PermissionCallback,
+        question_callback: QuestionCallback,
     ) -> anyhow::Result<()> {
         self.assert_not_busy(&input.session_id).await?;
 
@@ -924,6 +942,7 @@ impl SessionPrompt {
             &agent_params,
             update_hook,
             permission_callback,
+            question_callback,
         )
         .await;
 
@@ -1005,6 +1024,7 @@ impl SessionPrompt {
             &agent_params,
             None,
             None,
+            None,
         )
         .await;
 
@@ -1031,6 +1051,7 @@ impl SessionPrompt {
         agent_params: &AgentParams,
         update_hook: Option<SessionUpdateHook>,
         permission_callback: PermissionCallback,
+        question_callback: QuestionCallback,
     ) -> anyhow::Result<()> {
         let mut step = 0u32;
         let provider_type = ProviderType::from_provider_id(&provider_id);
@@ -1396,7 +1417,7 @@ impl SessionPrompt {
             if has_tool_calls {
                 tracing::info!("Processing tool calls for session {}", session_id);
 
-                let tool_context = opencode_tool::ToolContext::new(
+                let mut tool_context = opencode_tool::ToolContext::new(
                     session_id.clone(),
                     session
                         .messages
@@ -1413,6 +1434,12 @@ impl SessionPrompt {
                         .unwrap_or_else(|| Arc::new(|_req| Box::pin(async { Ok(()) })))
                         .into_callback(),
                 );
+
+                if let Some(callback) = question_callback.clone() {
+                    tool_context = tool_context.with_ask_question(
+                        move |questions: Vec<opencode_tool::QuestionDef>| callback(questions),
+                    );
+                }
 
                 let registry = Arc::new(opencode_tool::create_default_registry().await);
                 if let Err(e) = Self::execute_tool_calls(
@@ -3650,6 +3677,187 @@ mod tests {
         }
     }
 
+    struct SequencedStreamProvider {
+        model: ModelInfo,
+        scripts: StdMutex<std::collections::VecDeque<Vec<StreamEvent>>>,
+    }
+
+    #[async_trait]
+    impl Provider for SequencedStreamProvider {
+        fn id(&self) -> &str {
+            "mock"
+        }
+
+        fn name(&self) -> &str {
+            "Mock"
+        }
+
+        fn models(&self) -> Vec<ModelInfo> {
+            vec![self.model.clone()]
+        }
+
+        fn get_model(&self, id: &str) -> Option<&ModelInfo> {
+            if self.model.id == id {
+                Some(&self.model)
+            } else {
+                None
+            }
+        }
+
+        async fn chat(&self, _request: ChatRequest) -> Result<ChatResponse, ProviderError> {
+            Err(ProviderError::InvalidRequest(
+                "chat() not used in this test".to_string(),
+            ))
+        }
+
+        async fn chat_stream(&self, _request: ChatRequest) -> Result<StreamResult, ProviderError> {
+            let events = self
+                .scripts
+                .lock()
+                .expect("script lock should not poison")
+                .pop_front()
+                .unwrap_or_default();
+            Ok(Box::pin(stream::iter(
+                events
+                    .into_iter()
+                    .map(Result::<StreamEvent, ProviderError>::Ok),
+            )))
+        }
+    }
+
+    #[tokio::test]
+    async fn question_callback_is_used_by_question_tool_calls() {
+        let prompt = SessionPrompt::default();
+        let mut session = Session::new("proj", ".");
+        session.add_user_message("Ask me a question");
+
+        let model = ModelInfo {
+            id: "test-model".to_string(),
+            name: "Test Model".to_string(),
+            provider: "mock".to_string(),
+            context_window: 8192,
+            max_output_tokens: 1024,
+            supports_vision: false,
+            supports_tools: true,
+            cost_per_million_input: 0.0,
+            cost_per_million_output: 0.0,
+        };
+
+        let question_input = serde_json::json!({
+            "questions": [{
+                "question": "Continue?",
+                "header": "Confirm",
+                "options": [{"label": "Yes"}, {"label": "No"}],
+                "multiple": false
+            }]
+        });
+
+        let tool_call_script = vec![
+            StreamEvent::Start,
+            StreamEvent::ToolCallStart {
+                id: "call_question".to_string(),
+                name: "question".to_string(),
+            },
+            StreamEvent::ToolCallEnd {
+                id: "call_question".to_string(),
+                name: "question".to_string(),
+                input: question_input,
+            },
+            StreamEvent::FinishStep {
+                finish_reason: Some("tool-calls".to_string()),
+                usage: StreamUsage::default(),
+                provider_metadata: None,
+            },
+            StreamEvent::Done,
+        ];
+
+        let finish_script = vec![
+            StreamEvent::Start,
+            StreamEvent::TextDelta("done".to_string()),
+            StreamEvent::FinishStep {
+                finish_reason: Some("stop".to_string()),
+                usage: StreamUsage::default(),
+                provider_metadata: None,
+            },
+            StreamEvent::Done,
+        ];
+
+        let provider = Arc::new(SequencedStreamProvider {
+            model,
+            scripts: StdMutex::new(vec![tool_call_script, finish_script].into()),
+        });
+
+        let seen: Arc<StdMutex<Vec<Vec<String>>>> = Arc::new(StdMutex::new(Vec::new()));
+        let seen_sink = seen.clone();
+        let question_callback: QuestionCallback = Some(Arc::new(move |questions| {
+            let seen = seen_sink.clone();
+            Box::pin(async move {
+                seen.lock()
+                    .expect("question lock should not poison")
+                    .push(questions.iter().map(|q| q.question.clone()).collect());
+                Ok(vec![vec!["Yes".to_string()]])
+            })
+        }));
+
+        prompt
+            .prompt_with_update_hook(
+                PromptInput {
+                    session_id: session.id.clone(),
+                    message_id: None,
+                    model: Some(ModelRef {
+                        provider_id: "mock".to_string(),
+                        model_id: "test-model".to_string(),
+                    }),
+                    agent: None,
+                    no_reply: false,
+                    system: None,
+                    variant: None,
+                    parts: vec![PartInput::Text {
+                        text: "Ask me a question".to_string(),
+                    }],
+                    tools: Some([("question".to_string(), true)].into_iter().collect()),
+                },
+                &mut session,
+                provider,
+                None,
+                vec![ToolDefinition {
+                    name: "question".to_string(),
+                    description: Some("Ask the user a question".to_string()),
+                    parameters: serde_json::json!({"type": "object"}),
+                }],
+                AgentParams::default(),
+                None,
+                None,
+                question_callback,
+            )
+            .await
+            .expect("prompt_with_update_hook should succeed");
+
+        let asked = seen
+            .lock()
+            .expect("question lock should not poison")
+            .clone();
+        assert_eq!(asked, vec![vec!["Continue?".to_string()]]);
+
+        let tool_result = session
+            .messages
+            .iter()
+            .flat_map(|message| message.parts.iter())
+            .find_map(|part| match &part.part_type {
+                PartType::ToolResult {
+                    content, is_error, ..
+                } => Some((content.clone(), *is_error)),
+                _ => None,
+            })
+            .expect("question tool result should be recorded");
+        assert!(
+            !tool_result.1,
+            "question tool should not fail: {}",
+            tool_result.0
+        );
+        assert!(tool_result.0.contains("Yes"));
+    }
+
     #[test]
     fn filter_compacted_messages_keeps_tail_after_last_compaction() {
         let session_id = "ses_test".to_string();
@@ -3777,6 +3985,7 @@ mod tests {
                 Vec::new(),
                 AgentParams::default(),
                 Some(hook),
+                None,
                 None,
             )
             .await

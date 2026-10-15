@@ -2,7 +2,7 @@ use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use std::io::{self, BufRead, Write};
 
-use crate::{Tool, ToolContext, ToolError, ToolResult};
+use crate::{QuestionDef, Tool, ToolContext, ToolError, ToolResult};
 
 pub struct QuestionTool;
 
@@ -19,28 +19,8 @@ struct QuestionInput {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
-struct QuestionDef {
-    #[serde(rename = "question")]
-    question: String,
-    #[serde(rename = "header")]
-    header: Option<String>,
-    #[serde(rename = "options", default)]
-    options: Vec<QuestionOption>,
-    #[serde(rename = "multiple", default)]
-    multiple: bool,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-struct QuestionOption {
-    #[serde(rename = "label")]
-    label: String,
-    #[serde(rename = "description", default)]
-    description: Option<String>,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
 struct QuestionResponse {
-    answers: Vec<String>,
+    answers: Vec<Vec<String>>,
 }
 
 #[async_trait]
@@ -99,21 +79,30 @@ impl Tool for QuestionTool {
     async fn execute(
         &self,
         args: serde_json::Value,
-        _ctx: ToolContext,
+        ctx: ToolContext,
     ) -> Result<ToolResult, ToolError> {
         let input: QuestionInput =
             serde_json::from_value(args).map_err(|e| ToolError::InvalidArguments(e.to_string()))?;
 
-        let mut all_answers: Vec<String> = Vec::new();
-
-        for q in input.questions.iter() {
-            let answer = ask_question(q)?;
-            all_answers.extend(answer);
+        if input.questions.is_empty() {
+            return Err(ToolError::InvalidArguments(
+                "At least one question is required".to_string(),
+            ));
         }
 
-        let response = QuestionResponse {
-            answers: all_answers,
+        // Server/TUI executions inject a question callback so the request can be
+        // answered through the HTTP API. Direct CLI executions fall back to stdin.
+        let answers = if ctx.ask_question.is_some() {
+            ctx.question(input.questions.clone()).await?
+        } else {
+            let mut collected = Vec::with_capacity(input.questions.len());
+            for question in &input.questions {
+                collected.push(ask_question_via_stdin(question)?);
+            }
+            collected
         };
+
+        let response = QuestionResponse { answers };
 
         let output = serde_json::to_string_pretty(&response)
             .unwrap_or_else(|_| format!("{:?}", response.answers));
@@ -127,7 +116,7 @@ impl Tool for QuestionTool {
     }
 }
 
-fn ask_question(q: &QuestionDef) -> Result<Vec<String>, ToolError> {
+fn ask_question_via_stdin(q: &QuestionDef) -> Result<Vec<String>, ToolError> {
     println!();
 
     if let Some(ref header) = q.header {
@@ -214,5 +203,103 @@ fn ask_question(q: &QuestionDef) -> Result<Vec<String>, ToolError> {
 impl Default for QuestionTool {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn question_args() -> serde_json::Value {
+        serde_json::json!({
+            "questions": [
+                {
+                    "question": "Switch to the plan agent?",
+                    "header": "Plan Mode",
+                    "options": [
+                        {"label": "Yes", "description": "Switch to plan agent"},
+                        {"label": "No", "description": "Stay with build agent"}
+                    ],
+                    "multiple": false
+                }
+            ]
+        })
+    }
+
+    fn context_with_callback<F, Fut>(callback: F) -> ToolContext
+    where
+        F: Fn(Vec<QuestionDef>) -> Fut + Send + Sync + 'static,
+        Fut: std::future::Future<Output = Result<Vec<Vec<String>>, ToolError>> + Send + 'static,
+    {
+        ToolContext::new(
+            "ses_test".to_string(),
+            "msg_test".to_string(),
+            ".".to_string(),
+        )
+        .with_ask_question(callback)
+    }
+
+    #[tokio::test]
+    async fn execute_uses_configured_question_callback() {
+        let ctx = context_with_callback(|questions: Vec<QuestionDef>| async move {
+            assert_eq!(questions.len(), 1);
+            assert_eq!(questions[0].question, "Switch to the plan agent?");
+            assert_eq!(questions[0].options[1].label, "No");
+            Ok(vec![vec!["Yes".to_string()]])
+        });
+
+        let result = QuestionTool::new()
+            .execute(question_args(), ctx)
+            .await
+            .expect("question tool should succeed");
+
+        let parsed: QuestionResponse =
+            serde_json::from_str(&result.output).expect("output should be valid JSON");
+        assert_eq!(parsed.answers, vec![vec!["Yes".to_string()]]);
+        assert_eq!(result.title, "User response received");
+    }
+
+    #[tokio::test]
+    async fn execute_propagates_question_rejection() {
+        let ctx = context_with_callback(|_questions: Vec<QuestionDef>| async move {
+            Err(ToolError::QuestionRejected(
+                "User rejected the question".to_string(),
+            ))
+        });
+
+        let error = QuestionTool::new()
+            .execute(question_args(), ctx)
+            .await
+            .expect_err("rejection should surface as an error");
+
+        assert!(matches!(error, ToolError::QuestionRejected(_)));
+    }
+
+    #[tokio::test]
+    async fn execute_rejects_empty_question_list() {
+        let ctx = context_with_callback(|_questions: Vec<QuestionDef>| async move {
+            Ok(vec![vec!["unexpected".to_string()]])
+        });
+
+        let error = QuestionTool::new()
+            .execute(serde_json::json!({ "questions": [] }), ctx)
+            .await
+            .expect_err("empty question list should be rejected");
+
+        assert!(matches!(error, ToolError::InvalidArguments(_)));
+    }
+
+    #[tokio::test]
+    async fn execute_rejects_malformed_arguments() {
+        let ctx = context_with_callback(|_questions: Vec<QuestionDef>| async move {
+            Ok(vec![vec!["unexpected".to_string()]])
+        });
+
+        let error = QuestionTool::new()
+            .execute(serde_json::json!({ "questions": "not-an-array" }), ctx)
+            .await
+            .expect_err("malformed arguments should be rejected");
+
+        assert!(matches!(error, ToolError::InvalidArguments(_)));
     }
 }

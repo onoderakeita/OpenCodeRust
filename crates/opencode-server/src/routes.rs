@@ -1886,6 +1886,32 @@ fn spawn_prompt_execution(
                 })
             }));
 
+        // Create question callback that uses the server's QuestionBroker
+        let question_broker = task_state.question_broker.clone();
+        let session_id_for_question_cb = session_id.clone();
+        let question_callback: opencode_session::prompt::QuestionCallback = Some(Arc::new(
+            move |questions: Vec<opencode_tool::QuestionDef>| {
+                let broker = question_broker.clone();
+                let session_id = session_id_for_question_cb.clone();
+
+                Box::pin(async move {
+                    let info = crate::server::QuestionRequestInfo {
+                        id: uuid::Uuid::new_v4().to_string(),
+                        session_id,
+                        questions,
+                    };
+                    match broker.ask(info).await {
+                        crate::server::QuestionResponse::Answered(answers) => Ok(answers),
+                        crate::server::QuestionResponse::Rejected => {
+                            Err(opencode_tool::ToolError::QuestionRejected(
+                                "User rejected the question".to_string(),
+                            ))
+                        }
+                    }
+                })
+            },
+        ));
+
         // Build AgentRegistry from config
         let cwd = std::env::current_dir().unwrap_or_default();
         let config = load_config(&cwd).unwrap_or_default();
@@ -1964,6 +1990,7 @@ fn spawn_prompt_execution(
                 agent_params,
                 Some(update_hook),
                 permission_callback,
+                question_callback,
             )
             .await;
         if let Err(error) = &result {
@@ -3917,22 +3944,11 @@ fn question_routes() -> Router<Arc<ServerState>> {
         .route("/{id}/reject", post(reject_question))
 }
 
-#[derive(Debug, Clone, Serialize)]
-pub struct QuestionInfo {
-    pub id: String,
-    pub session_id: String,
-    pub questions: Vec<String>,
-    pub options: Option<Vec<Vec<String>>>,
-}
-
-static QUESTION_REQUESTS: Lazy<RwLock<HashMap<String, QuestionInfo>>> =
-    Lazy::new(|| RwLock::new(HashMap::new()));
-
-async fn list_questions() -> Json<Vec<QuestionInfo>> {
-    let pending = QUESTION_REQUESTS.read().await;
-    let mut result: Vec<_> = pending.values().cloned().collect();
-    result.sort_by(|a, b| a.id.cmp(&b.id));
-    Json(result)
+async fn list_questions(
+    State(state): State<Arc<ServerState>>,
+) -> Result<Json<Vec<crate::server::QuestionRequestInfo>>> {
+    let questions = state.question_broker.list().await;
+    Ok(Json(questions))
 }
 
 #[derive(Debug, Deserialize)]
@@ -3945,21 +3961,13 @@ async fn reply_question(
     Path(id): Path<String>,
     Json(req): Json<ReplyQuestionRequest>,
 ) -> Result<Json<bool>> {
-    let mut pending = QUESTION_REQUESTS.write().await;
-    let question = pending
-        .remove(&id)
-        .ok_or_else(|| ApiError::NotFound(format!("Question request not found: {}", id)))?;
-    drop(pending);
-
-    state.broadcast(
-        &serde_json::json!({
-            "type": "question.replied",
-            "requestID": id,
-            "sessionID": question.session_id,
-            "answers": req.answers,
-        })
-        .to_string(),
-    );
+    let ok = state.question_broker.reply(&id, req.answers).await;
+    if !ok {
+        return Err(ApiError::NotFound(format!(
+            "Question request not found: {}",
+            id
+        )));
+    }
     Ok(Json(true))
 }
 
@@ -3967,20 +3975,13 @@ async fn reject_question(
     State(state): State<Arc<ServerState>>,
     Path(id): Path<String>,
 ) -> Result<Json<bool>> {
-    let mut pending = QUESTION_REQUESTS.write().await;
-    let question = pending
-        .remove(&id)
-        .ok_or_else(|| ApiError::NotFound(format!("Question request not found: {}", id)))?;
-    drop(pending);
-
-    state.broadcast(
-        &serde_json::json!({
-            "type": "question.rejected",
-            "requestID": id,
-            "sessionID": question.session_id,
-        })
-        .to_string(),
-    );
+    let ok = state.question_broker.reject(&id).await;
+    if !ok {
+        return Err(ApiError::NotFound(format!(
+            "Question request not found: {}",
+            id
+        )));
+    }
     Ok(Json(true))
 }
 

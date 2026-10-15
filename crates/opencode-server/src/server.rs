@@ -159,6 +159,125 @@ impl PermissionBroker {
     }
 }
 
+#[derive(Debug, Clone, Serialize)]
+pub struct QuestionRequestInfo {
+    pub id: String,
+    pub session_id: String,
+    pub questions: Vec<opencode_tool::QuestionDef>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum QuestionResponse {
+    Answered(Vec<Vec<String>>),
+    Rejected,
+}
+
+#[derive(Debug)]
+struct PendingQuestion {
+    info: QuestionRequestInfo,
+    responder: oneshot::Sender<QuestionResponse>,
+}
+
+pub struct QuestionBroker {
+    pending: Mutex<HashMap<String, PendingQuestion>>,
+    event_bus: broadcast::Sender<String>,
+}
+
+impl QuestionBroker {
+    pub fn new(event_bus: broadcast::Sender<String>) -> Self {
+        Self {
+            pending: Mutex::new(HashMap::new()),
+            event_bus,
+        }
+    }
+
+    pub async fn ask(&self, info: QuestionRequestInfo) -> QuestionResponse {
+        let (tx, rx) = oneshot::channel();
+        let pending = PendingQuestion {
+            info: info.clone(),
+            responder: tx,
+        };
+
+        {
+            let mut pending_map = self.pending.lock().await;
+            pending_map.insert(info.id.clone(), pending);
+        }
+
+        // Broadcast question request event
+        let _ = self.event_bus.send(
+            serde_json::json!({
+                "type": "question.asked",
+                "request": info
+            })
+            .to_string(),
+        );
+
+        // Wait for an answer from the API client
+        match rx.await {
+            Ok(response) => response,
+            Err(_) => QuestionResponse::Rejected,
+        }
+    }
+
+    pub async fn reply(&self, id: &str, answers: Vec<Vec<String>>) -> bool {
+        let pending = {
+            let mut pending_map = self.pending.lock().await;
+            pending_map.remove(id)
+        };
+
+        if let Some(pending) = pending {
+            let _ = pending
+                .responder
+                .send(QuestionResponse::Answered(answers.clone()));
+
+            // Broadcast question reply event
+            let _ = self.event_bus.send(
+                serde_json::json!({
+                    "type": "question.replied",
+                    "requestID": id,
+                    "sessionID": pending.info.session_id,
+                    "answers": answers,
+                })
+                .to_string(),
+            );
+            true
+        } else {
+            false
+        }
+    }
+
+    pub async fn reject(&self, id: &str) -> bool {
+        let pending = {
+            let mut pending_map = self.pending.lock().await;
+            pending_map.remove(id)
+        };
+
+        if let Some(pending) = pending {
+            let _ = pending.responder.send(QuestionResponse::Rejected);
+
+            // Broadcast question rejection event
+            let _ = self.event_bus.send(
+                serde_json::json!({
+                    "type": "question.rejected",
+                    "requestID": id,
+                    "sessionID": pending.info.session_id,
+                })
+                .to_string(),
+            );
+            true
+        } else {
+            false
+        }
+    }
+
+    pub async fn list(&self) -> Vec<QuestionRequestInfo> {
+        let pending_map = self.pending.lock().await;
+        let mut result: Vec<_> = pending_map.values().map(|p| p.info.clone()).collect();
+        result.sort_by(|a, b| a.id.cmp(&b.id));
+        result
+    }
+}
+
 struct PluginBridgeFetchProxy {
     bridge: Arc<PluginAuthBridge>,
 }
@@ -245,6 +364,7 @@ pub struct ServerState {
     pub event_bus: broadcast::Sender<String>,
     pub auth_token: Option<String>,
     pub permission_broker: Arc<PermissionBroker>,
+    pub question_broker: Arc<QuestionBroker>,
     session_repo: Option<SessionRepository>,
     message_repo: Option<MessageRepository>,
     pub(crate) input_repo: Option<InputRepository>,
@@ -255,6 +375,7 @@ impl ServerState {
         let (tx, _) = broadcast::channel(1024);
         let auth_token = generate_auth_token();
         let permission_broker = Arc::new(PermissionBroker::new(tx.clone()));
+        let question_broker = Arc::new(QuestionBroker::new(tx.clone()));
         Self {
             sessions: Mutex::new(SessionManager::new()),
             providers: ProviderRegistry::new(),
@@ -262,6 +383,7 @@ impl ServerState {
             event_bus: tx,
             auth_token: Some(auth_token),
             permission_broker,
+            question_broker,
             session_repo: None,
             message_repo: None,
             input_repo: None,
@@ -935,5 +1057,98 @@ mod tests {
             .await
             .expect("get should succeed")
             .is_none());
+    }
+
+    fn question_defs() -> Vec<opencode_tool::QuestionDef> {
+        vec![opencode_tool::QuestionDef {
+            question: "Continue?".to_string(),
+            header: Some("Confirm".to_string()),
+            options: vec![opencode_tool::QuestionOption {
+                label: "Yes".to_string(),
+                description: None,
+            }],
+            multiple: false,
+        }]
+    }
+
+    async fn next_question_event(rx: &mut broadcast::Receiver<String>) -> serde_json::Value {
+        let event = rx.recv().await.expect("broker should broadcast an event");
+        serde_json::from_str(&event).expect("broadcast payload should be valid JSON")
+    }
+
+    #[tokio::test]
+    async fn question_broker_ask_resolves_with_reply_answers() {
+        let (tx, mut rx) = broadcast::channel(16);
+        let broker = Arc::new(QuestionBroker::new(tx));
+        let info = QuestionRequestInfo {
+            id: "qst_1".to_string(),
+            session_id: "ses_1".to_string(),
+            questions: question_defs(),
+        };
+
+        let ask_broker = broker.clone();
+        let ask_task = tokio::spawn(async move { ask_broker.ask(info).await });
+
+        let event = next_question_event(&mut rx).await;
+        assert_eq!(event["type"], "question.asked");
+        assert_eq!(event["request"]["id"], "qst_1");
+        assert_eq!(event["request"]["session_id"], "ses_1");
+
+        let pending = broker.list().await;
+        assert_eq!(pending.len(), 1);
+        assert_eq!(pending[0].questions[0].question, "Continue?");
+
+        assert!(broker.reply("qst_1", vec![vec!["Yes".to_string()]]).await);
+
+        match ask_task.await.expect("ask task should join") {
+            QuestionResponse::Answered(answers) => {
+                assert_eq!(answers, vec![vec!["Yes".to_string()]]);
+            }
+            other => panic!("expected answered response, got {:?}", other),
+        }
+
+        let event = next_question_event(&mut rx).await;
+        assert_eq!(event["type"], "question.replied");
+        assert_eq!(event["requestID"], "qst_1");
+        assert_eq!(event["sessionID"], "ses_1");
+        assert!(broker.list().await.is_empty());
+    }
+
+    #[tokio::test]
+    async fn question_broker_reject_resolves_with_rejection() {
+        let (tx, mut rx) = broadcast::channel(16);
+        let broker = Arc::new(QuestionBroker::new(tx));
+        let info = QuestionRequestInfo {
+            id: "qst_2".to_string(),
+            session_id: "ses_2".to_string(),
+            questions: question_defs(),
+        };
+
+        let ask_broker = broker.clone();
+        let ask_task = tokio::spawn(async move { ask_broker.ask(info).await });
+
+        let event = next_question_event(&mut rx).await;
+        assert_eq!(event["type"], "question.asked");
+
+        assert!(broker.reject("qst_2").await);
+        assert!(matches!(
+            ask_task.await.expect("ask task should join"),
+            QuestionResponse::Rejected
+        ));
+
+        let event = next_question_event(&mut rx).await;
+        assert_eq!(event["type"], "question.rejected");
+        assert_eq!(event["requestID"], "qst_2");
+        assert!(broker.list().await.is_empty());
+    }
+
+    #[tokio::test]
+    async fn question_broker_unknown_ids_return_false() {
+        let (tx, _rx) = broadcast::channel(16);
+        let broker = QuestionBroker::new(tx);
+
+        assert!(!broker.reply("missing", Vec::new()).await);
+        assert!(!broker.reject("missing").await);
+        assert!(broker.list().await.is_empty());
     }
 }
