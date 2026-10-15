@@ -18,9 +18,22 @@ pub enum CustomEvent {
     StreamChunk(String),
     StreamComplete,
     StreamError(String),
-    ToolCallStart { id: String, name: String },
-    ToolCallComplete { id: String, result: String },
+    ToolCallStart {
+        id: String,
+        name: String,
+    },
+    ToolCallComplete {
+        id: String,
+        result: String,
+    },
     StateChanged(StateChange),
+    QuestionAsked(crate::api::QuestionRequestInfo),
+    PermissionRequested {
+        id: String,
+        permission_type: String,
+        resource: String,
+        tool_name: String,
+    },
 }
 
 #[derive(Clone, Debug)]

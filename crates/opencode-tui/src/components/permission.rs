@@ -27,9 +27,30 @@ pub enum PermissionType {
     WebSearch,
     CodeSearch,
     ExternalDirectory,
+    Other,
 }
 
 impl PermissionType {
+    /// Map a tool permission identifier (for example `bash` or
+    /// `external_directory`) to the prompt representation.
+    pub fn from_permission_str(value: &str) -> Self {
+        match value {
+            "read" => PermissionType::ReadFile,
+            "write" => PermissionType::WriteFile,
+            "edit" => PermissionType::Edit,
+            "bash" => PermissionType::Bash,
+            "glob" => PermissionType::Glob,
+            "grep" => PermissionType::Grep,
+            "list" => PermissionType::List,
+            "task" => PermissionType::Task,
+            "webfetch" => PermissionType::WebFetch,
+            "websearch" => PermissionType::WebSearch,
+            "codesearch" => PermissionType::CodeSearch,
+            "external_directory" => PermissionType::ExternalDirectory,
+            _ => PermissionType::Other,
+        }
+    }
+
     pub fn label(&self) -> &'static str {
         match self {
             PermissionType::ReadFile => "Read file",
@@ -46,6 +67,7 @@ impl PermissionType {
             PermissionType::WebSearch => "Web search",
             PermissionType::CodeSearch => "Code search",
             PermissionType::ExternalDirectory => "External directory access",
+            PermissionType::Other => "Tool execution",
         }
     }
 
@@ -65,6 +87,7 @@ impl PermissionType {
             PermissionType::WebSearch => "[Q]",
             PermissionType::CodeSearch => "[C]",
             PermissionType::ExternalDirectory => "[D]",
+            PermissionType::Other => "[?]",
         }
     }
 }

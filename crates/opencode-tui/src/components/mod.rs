@@ -40,7 +40,7 @@ pub use markdown::{CodeBlock, MarkdownBlock, MarkdownRenderer};
 pub use message::{MessagePart, MessageRole, MessageView};
 pub use permission::{PermissionAction, PermissionPrompt, PermissionRequest, PermissionType};
 pub use prompt::{Prompt, PromptStashEntry};
-pub use question::{QuestionPrompt, QuestionRequest, QuestionType};
+pub use question::{QuestionOption, QuestionPrompt, QuestionRequest, QuestionType};
 pub use session::SessionView;
 pub use sidebar::Sidebar;
 pub use slash_command::SlashCommandPopup;

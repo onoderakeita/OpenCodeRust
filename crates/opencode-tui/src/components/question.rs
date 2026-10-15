@@ -137,26 +137,43 @@ impl QuestionPrompt {
         }
     }
 
-    pub fn confirm(&mut self) -> Option<(QuestionRequest, String)> {
+    /// Confirm the current question and return the answer values.
+    ///
+    /// Text questions return the typed text, choice questions return the
+    /// labels of the selected options. Single choice questions fall back to
+    /// the highlighted option when nothing was explicitly toggled.
+    pub fn confirm(&mut self) -> Option<Vec<String>> {
         let q = self.current_question.as_ref()?;
-        let answer = if q.question_type == QuestionType::Text {
-            self.text_input.clone()
+        let answers = if q.question_type == QuestionType::Text {
+            let text = self.text_input.trim().to_string();
+            if text.is_empty() {
+                Vec::new()
+            } else {
+                vec![text]
+            }
         } else {
-            // Collect selected option IDs
-            q.options
+            let mut selected: Vec<String> = q
+                .options
                 .iter()
                 .enumerate()
                 .filter(|(i, _)| self.selected_options.get(*i).copied().unwrap_or(false))
-                .map(|(_, opt)| opt.id.clone())
-                .collect::<Vec<_>>()
-                .join(",")
+                .map(|(_, opt)| opt.label.clone())
+                .collect();
+
+            if selected.is_empty() && q.question_type == QuestionType::SingleChoice {
+                if let Some(option) = q.options.get(self.selected_index) {
+                    selected.push(option.label.clone());
+                }
+            }
+
+            selected
         };
-        let request = self.current_question.take()?;
+        self.current_question.take()?;
         self.is_open = false;
         self.selected_index = 0;
         self.selected_options.clear();
         self.text_input.clear();
-        Some((request, answer))
+        Some(answers)
     }
 
     pub fn handle_click(&mut self, col: u16, row: u16) {
@@ -282,5 +299,86 @@ impl QuestionPrompt {
 impl Default for QuestionPrompt {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn choice_question(question_type: QuestionType) -> QuestionRequest {
+        QuestionRequest {
+            id: "qst_1".to_string(),
+            question: "Continue?".to_string(),
+            question_type,
+            options: vec![
+                QuestionOption {
+                    id: "Yes".to_string(),
+                    label: "Yes".to_string(),
+                },
+                QuestionOption {
+                    id: "No".to_string(),
+                    label: "No".to_string(),
+                },
+            ],
+        }
+    }
+
+    #[test]
+    fn confirm_returns_typed_text_for_text_questions() {
+        let mut prompt = QuestionPrompt::new();
+        prompt.ask(QuestionRequest {
+            id: "qst_text".to_string(),
+            question: "Name?".to_string(),
+            question_type: QuestionType::Text,
+            options: Vec::new(),
+        });
+
+        for c in "hello".chars() {
+            prompt.type_char(c);
+        }
+
+        assert_eq!(prompt.confirm(), Some(vec!["hello".to_string()]));
+        assert!(!prompt.is_open);
+        assert!(prompt.current().is_none());
+    }
+
+    #[test]
+    fn confirm_returns_highlighted_option_for_single_choice() {
+        let mut prompt = QuestionPrompt::new();
+        prompt.ask(choice_question(QuestionType::SingleChoice));
+        assert_eq!(prompt.confirm(), Some(vec!["Yes".to_string()]));
+
+        let mut prompt = QuestionPrompt::new();
+        prompt.ask(choice_question(QuestionType::SingleChoice));
+        prompt.move_down();
+        assert_eq!(prompt.confirm(), Some(vec!["No".to_string()]));
+    }
+
+    #[test]
+    fn confirm_collects_multiple_selections() {
+        let mut prompt = QuestionPrompt::new();
+        prompt.ask(choice_question(QuestionType::MultipleChoice));
+        prompt.toggle_selected();
+        prompt.move_down();
+        prompt.toggle_selected();
+
+        assert_eq!(
+            prompt.confirm(),
+            Some(vec!["Yes".to_string(), "No".to_string()])
+        );
+    }
+
+    #[test]
+    fn confirm_returns_empty_answer_for_unselected_multiple_choice() {
+        let mut prompt = QuestionPrompt::new();
+        prompt.ask(choice_question(QuestionType::MultipleChoice));
+        assert_eq!(prompt.confirm(), Some(Vec::<String>::new()));
+    }
+
+    #[test]
+    fn confirm_returns_none_when_no_question_is_pending() {
+        let mut prompt = QuestionPrompt::new();
+        assert_eq!(prompt.confirm(), None);
     }
 }

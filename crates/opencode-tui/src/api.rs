@@ -51,6 +51,31 @@ pub struct SessionStatusInfo {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct QuestionOptionInfo {
+    pub label: String,
+    #[serde(default)]
+    pub description: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct QuestionInfo {
+    pub question: String,
+    #[serde(default)]
+    pub header: Option<String>,
+    #[serde(default)]
+    pub options: Vec<QuestionOptionInfo>,
+    #[serde(default)]
+    pub multiple: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct QuestionRequestInfo {
+    pub id: String,
+    pub session_id: String,
+    pub questions: Vec<QuestionInfo>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MessagePart {
     pub id: String,
     #[serde(rename = "type")]
@@ -742,6 +767,31 @@ impl ApiClient {
                 status,
                 text
             );
+        }
+        Ok(())
+    }
+
+    pub fn reply_question(&self, request_id: &str, answers: &[Vec<String>]) -> anyhow::Result<()> {
+        let url = format!("{}/question/{}/reply", self.base_url, request_id);
+        let body = serde_json::json!({
+            "answers": answers,
+        });
+        let response = self.client.post(&url).json(&body).send()?;
+        if !response.status().is_success() {
+            let status = response.status();
+            let text = response.text().unwrap_or_default();
+            anyhow::bail!("Failed to reply to question: {} - {}", status, text);
+        }
+        Ok(())
+    }
+
+    pub fn reject_question(&self, request_id: &str) -> anyhow::Result<()> {
+        let url = format!("{}/question/{}/reject", self.base_url, request_id);
+        let response = self.client.post(&url).send()?;
+        if !response.status().is_success() {
+            let status = response.status();
+            let text = response.text().unwrap_or_default();
+            anyhow::bail!("Failed to reject question: {} - {}", status, text);
         }
         Ok(())
     }

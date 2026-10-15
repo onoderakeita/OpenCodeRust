@@ -1,5 +1,5 @@
 use std::collections::hash_map::DefaultHasher;
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::hash::{Hash, Hasher};
 use std::io::{BufRead, BufReader};
 use std::path::PathBuf;
@@ -11,14 +11,17 @@ use std::time::{Duration, Instant};
 use chrono::{TimeZone, Utc};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
-use crate::api::{ApiClient, McpStatusInfo, MessageInfo, SessionInfo, SessionRevertInfo};
+use crate::api::{
+    ApiClient, McpStatusInfo, MessageInfo, QuestionRequestInfo, SessionInfo, SessionRevertInfo,
+};
 use crate::app::state::AppState;
 use crate::app::terminal;
 use crate::command::CommandAction;
 use crate::components::{
     Agent, AgentSelectDialog, AlertDialog, CommandPalette, ForkDialog, ForkEntry, HelpDialog,
     HomeView, McpDialog, McpItem, Model, ModelSelectDialog, PermissionAction, PermissionPrompt,
-    Prompt, PromptStashDialog, ProviderDialog, QuestionPrompt, SessionDeleteState,
+    PermissionRequest, PermissionType, Prompt, PromptStashDialog, ProviderDialog, QuestionOption,
+    QuestionPrompt, QuestionRequest as QuestionPromptRequest, QuestionType, SessionDeleteState,
     SessionExportDialog, SessionItem, SessionListDialog, SessionRenameDialog, SessionView,
     SkillListDialog, SlashCommandPopup, StashItem, StatusDialog, StatusLine, SubagentDialog,
     TagDialog, TaskKind, ThemeListDialog, ThemeOption, TimelineDialog, TimelineEntry, Toast,
@@ -36,6 +39,17 @@ use crate::ui::{Clipboard, Selection};
 // TS parity: renderer targetFps is 60, ~16ms frame budget.
 const TICK_RATE_MS: u64 = 16;
 const MAX_EVENTS_PER_FRAME: usize = 256;
+
+/// A question request received from the server.
+///
+/// Multi-question requests are asked sequentially; answers are accumulated
+/// per question and posted back once every question has been answered.
+struct PendingQuestionRequest {
+    request_id: String,
+    questions: Vec<crate::api::QuestionInfo>,
+    index: usize,
+    answers: Vec<Vec<String>>,
+}
 
 pub struct App {
     context: Arc<AppContext>,
@@ -68,6 +82,8 @@ pub struct App {
     tag_dialog: TagDialog,
     permission_prompt: PermissionPrompt,
     question_prompt: QuestionPrompt,
+    pending_question_requests: VecDeque<PendingQuestionRequest>,
+    active_question_request: Option<PendingQuestionRequest>,
     toast: Toast,
     /// Snapshot of rendered screen lines for text selection copy.
     screen_lines: Vec<String>,
@@ -207,6 +223,8 @@ impl App {
             tag_dialog: TagDialog::new(),
             permission_prompt: PermissionPrompt::new(),
             question_prompt: QuestionPrompt::new(),
+            pending_question_requests: VecDeque::new(),
+            active_question_request: None,
             toast: Toast::new(),
             screen_lines: Vec::new(),
             available_models: HashSet::new(),
@@ -352,12 +370,12 @@ impl App {
                         KeyCode::Down => self.question_prompt.move_down(),
                         KeyCode::Char(' ') => self.question_prompt.toggle_selected(),
                         KeyCode::Enter => {
-                            if let Some((_question, _answer)) = self.question_prompt.confirm() {
-                                // TODO: Call API when available
+                            if let Some(answer) = self.question_prompt.confirm() {
+                                self.submit_question_answer(answer);
                             }
                         }
                         KeyCode::Esc => {
-                            self.question_prompt.close();
+                            self.reject_active_question();
                         }
                         KeyCode::Char(c) => self.question_prompt.type_char(c),
                         KeyCode::Backspace => self.question_prompt.backspace(),
@@ -717,6 +735,24 @@ impl App {
                         },
                     );
                     self.sync_prompt_spinner_state();
+                }
+                CustomEvent::QuestionAsked(request) => {
+                    self.enqueue_question_request(request.clone());
+                }
+                CustomEvent::PermissionRequested {
+                    id,
+                    permission_type,
+                    resource,
+                    tool_name,
+                } => {
+                    self.permission_prompt.add_request(PermissionRequest {
+                        id: id.clone(),
+                        permission_type: PermissionType::from_permission_str(permission_type),
+                        resource: resource.clone(),
+                        tool_name: tool_name.clone(),
+                    });
+                    self.context
+                        .set_pending_permissions(self.permission_prompt.pending_count());
                 }
                 _ => {}
             },
@@ -2205,6 +2241,97 @@ impl App {
         }
         std::fs::write(&path, transcript)?;
         Ok(path)
+    }
+
+    /// Queue a question request from the server and start asking it.
+    fn enqueue_question_request(&mut self, request: QuestionRequestInfo) {
+        if request.questions.is_empty() {
+            return;
+        }
+
+        self.pending_question_requests
+            .push_back(PendingQuestionRequest {
+                request_id: request.id,
+                questions: request.questions,
+                index: 0,
+                answers: Vec::new(),
+            });
+
+        self.ask_next_question();
+    }
+
+    /// Show the next unanswered question, if any.
+    fn ask_next_question(&mut self) {
+        if self.active_question_request.is_none() {
+            self.active_question_request = self.pending_question_requests.pop_front();
+        }
+
+        let Some(active) = self.active_question_request.as_ref() else {
+            return;
+        };
+        let Some(question) = active.questions.get(active.index) else {
+            return;
+        };
+
+        let question_type = if question.options.is_empty() {
+            QuestionType::Text
+        } else if question.multiple {
+            QuestionType::MultipleChoice
+        } else {
+            QuestionType::SingleChoice
+        };
+        let options = question
+            .options
+            .iter()
+            .map(|option| QuestionOption {
+                id: option.label.clone(),
+                label: option.label.clone(),
+            })
+            .collect();
+        let request_id = active.request_id.clone();
+        let question_text = question.question.clone();
+
+        self.question_prompt.ask(QuestionPromptRequest {
+            id: request_id,
+            question: question_text,
+            question_type,
+            options,
+        });
+    }
+
+    /// Record an answer for the active question and advance the request.
+    fn submit_question_answer(&mut self, answer: Vec<String>) {
+        let Some(active) = self.active_question_request.as_mut() else {
+            return;
+        };
+        active.answers.push(answer);
+        active.index += 1;
+
+        if active.index < active.questions.len() {
+            self.ask_next_question();
+            return;
+        }
+
+        if let Some(finished) = self.active_question_request.take() {
+            if let Some(client) = self.context.get_api_client() {
+                let _ = client.reply_question(&finished.request_id, &finished.answers);
+            }
+        }
+
+        self.ask_next_question();
+    }
+
+    /// Reject the active question request and continue with the next one.
+    fn reject_active_question(&mut self) {
+        self.question_prompt.close();
+
+        if let Some(active) = self.active_question_request.take() {
+            if let Some(client) = self.context.get_api_client() {
+                let _ = client.reject_question(&active.request_id);
+            }
+        }
+
+        self.ask_next_question();
     }
 
     fn submit_prompt(&mut self) -> anyhow::Result<()> {
@@ -3757,8 +3884,61 @@ fn forward_server_event(data_lines: &[String], event_tx: &Sender<Event>) {
                 _ => {}
             }
         }
+        Some("question.asked") => {
+            if let Some(event) = parse_question_asked(&value) {
+                let _ = event_tx.send(Event::Custom(event));
+            }
+        }
+        Some("permission.requested") => {
+            if let Some(event) = parse_permission_requested(&value) {
+                let _ = event_tx.send(Event::Custom(event));
+            }
+        }
         _ => {}
     }
+}
+
+/// Parse a `question.asked` server event into a TUI custom event.
+fn parse_question_asked(value: &serde_json::Value) -> Option<CustomEvent> {
+    let request = value.get("request")?;
+    let request = serde_json::from_value::<QuestionRequestInfo>(request.clone()).ok()?;
+    Some(CustomEvent::QuestionAsked(request))
+}
+
+/// Parse a `permission.requested` server event into a TUI custom event.
+fn parse_permission_requested(value: &serde_json::Value) -> Option<CustomEvent> {
+    let request = value.get("request")?;
+    let id = request.get("id").and_then(|item| item.as_str())?;
+    if id.is_empty() {
+        return None;
+    }
+    let permission_type = request
+        .get("permission_type")
+        .and_then(|item| item.as_str())
+        .unwrap_or_default()
+        .to_string();
+    let tool_name = request
+        .get("tool")
+        .and_then(|item| item.as_str())
+        .unwrap_or_default()
+        .to_string();
+    let resource = request
+        .get("patterns")
+        .and_then(|item| item.as_array())
+        .map(|patterns| {
+            patterns
+                .iter()
+                .filter_map(|item| item.as_str())
+                .collect::<Vec<_>>()
+                .join(", ")
+        })
+        .unwrap_or_default();
+    Some(CustomEvent::PermissionRequested {
+        id: id.to_string(),
+        permission_type,
+        resource,
+        tool_name,
+    })
 }
 
 fn format_theme_option_label(theme_id: &str) -> String {
@@ -3850,4 +4030,80 @@ fn default_export_filename(title: &str, session_id: &str) -> String {
         slug = format!("session-{}", short_id);
     }
     format!("{slug}.md")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_question_asked_reads_server_payload() {
+        let value = serde_json::json!({
+            "type": "question.asked",
+            "request": {
+                "id": "qst_1",
+                "session_id": "ses_1",
+                "questions": [{
+                    "question": "Continue?",
+                    "header": "Confirm",
+                    "options": [{"label": "Yes", "description": "Go on"}],
+                    "multiple": false
+                }]
+            }
+        });
+
+        match parse_question_asked(&value) {
+            Some(CustomEvent::QuestionAsked(request)) => {
+                assert_eq!(request.id, "qst_1");
+                assert_eq!(request.session_id, "ses_1");
+                assert_eq!(request.questions.len(), 1);
+                assert_eq!(request.questions[0].question, "Continue?");
+                assert_eq!(request.questions[0].options[0].label, "Yes");
+                assert!(!request.questions[0].multiple);
+            }
+            other => panic!("expected question.asked event, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn parse_question_asked_ignores_malformed_payloads() {
+        assert!(parse_question_asked(&serde_json::json!({"type": "question.asked"})).is_none());
+        assert!(parse_question_asked(&serde_json::json!({"request": {"id": 1}})).is_none());
+    }
+
+    #[test]
+    fn parse_permission_requested_maps_server_fields() {
+        let value = serde_json::json!({
+            "type": "permission.requested",
+            "request": {
+                "id": "per_1",
+                "session_id": "ses_1",
+                "tool": "bash",
+                "permission_type": "bash",
+                "patterns": ["ls", "pwd"],
+                "message": "Tool 'bash' is requesting permission"
+            }
+        });
+
+        match parse_permission_requested(&value) {
+            Some(CustomEvent::PermissionRequested {
+                id,
+                permission_type,
+                resource,
+                tool_name,
+            }) => {
+                assert_eq!(id, "per_1");
+                assert_eq!(permission_type, "bash");
+                assert_eq!(tool_name, "bash");
+                assert_eq!(resource, "ls, pwd");
+            }
+            other => panic!("expected permission.requested event, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn parse_permission_requested_requires_an_id() {
+        assert!(parse_permission_requested(&serde_json::json!({"request": {}})).is_none());
+        assert!(parse_permission_requested(&serde_json::json!({"request": {"id": ""}})).is_none());
+    }
 }
