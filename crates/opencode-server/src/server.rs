@@ -203,6 +203,13 @@ impl QuestionBroker {
             pending_map.insert(info.id.clone(), pending);
         }
 
+        tracing::info!(
+            question_id = %info.id,
+            session_id = %info.session_id,
+            questions = info.questions.len(),
+            "question requested; waiting for an answer"
+        );
+
         // Broadcast question request event
         let _ = self.event_bus.send(
             serde_json::json!({
@@ -226,6 +233,13 @@ impl QuestionBroker {
         };
 
         if let Some(pending) = pending {
+            tracing::info!(
+                question_id = %id,
+                session_id = %pending.info.session_id,
+                answered = answers.len(),
+                "question answered"
+            );
+
             let _ = pending
                 .responder
                 .send(QuestionResponse::Answered(answers.clone()));
@@ -242,6 +256,7 @@ impl QuestionBroker {
             );
             true
         } else {
+            tracing::warn!(question_id = %id, "reply for unknown question request");
             false
         }
     }
@@ -253,6 +268,12 @@ impl QuestionBroker {
         };
 
         if let Some(pending) = pending {
+            tracing::info!(
+                question_id = %id,
+                session_id = %pending.info.session_id,
+                "question rejected"
+            );
+
             let _ = pending.responder.send(QuestionResponse::Rejected);
 
             // Broadcast question rejection event
@@ -266,6 +287,7 @@ impl QuestionBroker {
             );
             true
         } else {
+            tracing::warn!(question_id = %id, "reject for unknown question request");
             false
         }
     }

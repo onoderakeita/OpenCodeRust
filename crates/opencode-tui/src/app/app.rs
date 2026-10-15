@@ -2246,6 +2246,15 @@ impl App {
     /// Queue a question request from the server and start asking it.
     fn enqueue_question_request(&mut self, request: QuestionRequestInfo) {
         if request.questions.is_empty() {
+            // Nothing to ask: reject the request so the server-side broker does
+            // not keep the tool waiting for an answer that can never arrive.
+            tracing::warn!(
+                question_id = %request.id,
+                "received question request without questions; rejecting"
+            );
+            if let Some(client) = self.context.get_api_client() {
+                let _ = client.reject_question(&request.id);
+            }
             return;
         }
 
@@ -2314,7 +2323,13 @@ impl App {
 
         if let Some(finished) = self.active_question_request.take() {
             if let Some(client) = self.context.get_api_client() {
-                let _ = client.reply_question(&finished.request_id, &finished.answers);
+                if let Err(error) = client.reply_question(&finished.request_id, &finished.answers) {
+                    self.toast.show(
+                        ToastVariant::Error,
+                        &format!("Failed to send answer: {}", error),
+                        3000,
+                    );
+                }
             }
         }
 
@@ -2327,7 +2342,13 @@ impl App {
 
         if let Some(active) = self.active_question_request.take() {
             if let Some(client) = self.context.get_api_client() {
-                let _ = client.reject_question(&active.request_id);
+                if let Err(error) = client.reject_question(&active.request_id) {
+                    self.toast.show(
+                        ToastVariant::Error,
+                        &format!("Failed to reject question: {}", error),
+                        3000,
+                    );
+                }
             }
         }
 
