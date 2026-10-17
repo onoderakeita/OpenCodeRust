@@ -1,0 +1,25 @@
+# 個人リポジトリ共通の再利用可能ワークフロー
+# （onoderakeita/workflows の rust-gates.yml）へ委譲する。
+# native-tls（reqwest / oauth2 経由）のビルド用に libssl-dev を導入する。
+name: CI
+
+on:
+  push:
+    branches:
+      - master
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  gates:
+    uses: onoderakeita/workflows/.github/workflows/rust-gates.yml@v1
+    with:
+      apt_packages: |
+        libssl-dev
