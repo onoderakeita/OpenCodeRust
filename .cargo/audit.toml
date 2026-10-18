@@ -1,0 +1,13 @@
+# cargo-audit の設定。
+# ignore は修正版が存在しない、または build graph に到達しない advisory に
+# 限り、根拠をコメントで残して追加する。
+
+[advisories]
+ignore = [
+    # rsa 0.9.10: Marvin Attack (RUSTSEC-2023-0071、2023-11)。
+    # patched = [] で修正版は存在しない (2026-09 時点でも未修正)。
+    # sqlx-mysql 経由で Cargo.lock にのみ存在し、本 workspace は sqlx の
+    # sqlite feature のみを使うため build graph に含まれない
+    # (cargo tree -i sqlx-mysql --target all は空)。
+    "RUSTSEC-2023-0071",
+]

@@ -52,6 +52,7 @@ This documentation set describes the current **OpenCodeRust** codebase
 - [Types](opencode-types.md) – Shared data types
 - [Util](opencode-util.md) – Filesystem, logging, and utilities
 - [Watcher](opencode-watcher.md) – Filesystem watcher
+- [Security audit](security-audit.md) – cargo-audit runbook and triage
 - [Termux build](TERMUX_BUILD.md) – Android build notes
 
 ## Code and documentation conventions
