@@ -1,6 +1,7 @@
 # 個人リポジトリ共通の再利用可能ワークフロー
 # （onoderakeita/workflows の rust-gates.yml）へ委譲する。
 # native-tls（reqwest / oauth2 経由）のビルド用に libssl-dev を導入する。
+# 依存監査（cargo audit）も有効化する。ignore は .cargo/audit.toml。
 name: CI
 
 on:
@@ -23,3 +24,4 @@ jobs:
     with:
       apt_packages: |
         libssl-dev
+      audit: true
