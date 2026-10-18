@@ -1,34 +1,71 @@
 ---
-type: Plan
-description: 公式 OpenCode と OpenCodeRust の機能整合に関する初期計画。
-status: Planning
+type: Reference
+title: "公式 OpenCode と Rust 実装のマッピング"
+description: "upstream packages と OpenCodeRust crate の対応、欠落領域、命名差を記録する。"
+status: Current
 tags:
   - mapping
   - compatibility
   - roadmap
+verified:
+  by: opencode
+  at: "2026-10-18T11:39:00+09:00"
 ---
-
-# 公式仕様と Rust 実装のマッピング
 
 ## 文書の位置付け
 
-この文書は初期の移行計画であり、現行実装との対応表ではない。
-記載された配置案や未完了項目を、現在の実装状態として扱わないこと。
-現行 workspace の責務は [Project architecture](docs/architecture.md)、
-crate 別の記述は [docs index](docs/README.md) を参照する。
+upstream checkout (`github.com/anomalyco/opencode` @ `941e71d`、2026-08-10)
+に対する 2026-10-18 時点の対応調査である。掲載した対応と欠落は checkout の
+path で確認した事実に基づく。旧版の初期計画 (specs/ 前提) は git 履歴を
+参照。フェーズ計画は [ALIGNMENT.md](ALIGNMENT.md)。
 
-## 初期計画の対象
+## upstream の構造前提
 
-- Session create/prompt/interrupt と storage の責務整理。
-- Context、system prompt、session event の構造化。
-- Durable session input inbox の追加。
-- TypeScript/Effect の非同期設計を Rust/Tokio に適合させること。
+upstream は v1 monolith (`packages/opencode/src/*`) と v2 engine
+(`packages/core/src/*`) の二層で、`packages/` は 32 ディレクトリ。
+Rust 側の crate 分割は v1 の subsystem 構成と概ね 1:1 で対応する。
 
-Durable input queue の現行決定は
-[ADR-0004](docs/adr/adr-0004-durable-session-input-queue.md) に分離している。
+## 対応 (高確度)
 
-## 参照の制約
+| upstream | Rust 側 |
+| --- | --- |
+| `opencode/src/{session,tool,agent,...}` | 同名 `opencode-*` crate |
+| `packages/cli` | `opencode-cli` |
+| `packages/server` | `opencode-server` |
+| `packages/tui` | `opencode-tui` (別実装: ratatui) |
+| `packages/llm` | `opencode-provider` |
+| `packages/schema` | `opencode-types` |
+| `packages/plugin` | `opencode-plugin` |
+| `packages/core` (v2 engine) | `opencode-core` ほか (責務別) |
 
-この repository には、旧版で参照していた `specs/v2/session.md` は存在
-しない。公式との機能差を更新するときは、比較対象の公式 checkout と
-version/commit を別途記録し、実装・テストで確認した事実と提案を分ける。
+v1 `opencode/src` の subsystem (`agent`、`session`、`tool`、`permission`、
+`pty`、`lsp`、`mcp`、`storage`、`config`、`command`) は同名 crate に存在する。
+
+## 欠落・未分化の領域
+
+未実装または対応層が未分化の主な領域 (重要性順):
+
+1. `codemode` — モデル生成 JS の制限実行。Rust に対応 tool がない。
+2. `protocol` / `client` / `httpapi-codegen` — 権威 HTTP 契約と生成
+   client 層が未分化 (Rust は `opencode-server` の routes が唯一の面)。
+3. `sdk` / `sdk-next` — JS SDK がない。
+4. `function` (cloud sync) と v1 `opencode/src/sync` — 同期基盤がない。
+5. `http-recorder` — HTTP/WS リプレイによるテスト基盤がない。
+6. `opencode/src/acp` — Rust は外部 ACP ブリッジ起動のみ (HTTP fallback)。
+7. v2 `core` の policy / location / integration / credential /
+   observability 層 — 対応 crate がない。
+
+## 命名差
+
+- upstream `core` = v2 engine 全体、Rust `opencode-core` = bus / fs /
+  git / id / repository。同名だが責務が異なる。
+- 共有型は upstream `schema` ↔ Rust `opencode-types`。
+- Rust 独自の crate 名: `opencode-grep`、`opencode-watcher`、
+  `opencode-pty`、`opencode-command` (upstream は `core/src` の module)。
+- `opencode-local-llm` は upstream に対応物がない (Ollama 用 stdio MCP)。
+- バイナリ名は `opencoderust` (upstream は `opencode`)。
+
+## 更新手順
+
+upstream を更新したら、本表の commit 記録を更新し、対応と欠落の状態を
+checkout の path で再確認する。

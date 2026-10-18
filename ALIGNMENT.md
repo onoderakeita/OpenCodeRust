@@ -9,7 +9,7 @@ tags:
   - compatibility
 verified:
   by: opencode
-  at: "2026-10-18T11:19:00+09:00"
+  at: "2026-10-18T11:39:00+09:00"
 ---
 
 ## 目標
@@ -42,8 +42,8 @@ verified:
   (ADR-0004)。残作業は prompt 経路と queue worker が同一 executor を
   共有する整理 ([DESIGN_RUNNER.md](DESIGN_RUNNER.md) の設計条件 1〜4)。
 - Phase 3: `opencode-agent` / `opencode-tool` は実装・テスト済み
-  (workspace テスト 388 件 green、2026-10-18 実行)。残作業は上流
-  checkout との差分照合と未移植機能の特定。
+  (workspace テスト 388 件 green、2026-10-18 実行)。差分照合の初版は
+  [MAPPING.md](MAPPING.md) に記録済み。未移植機能の実装が残作業。
 
 ## 参照元
 
