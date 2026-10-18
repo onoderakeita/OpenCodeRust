@@ -10,10 +10,10 @@ tags: [tui, terminal, crate]
 
 ## Branding and display
 
-- `APP_NAME`: `RustingOpenCode`
-- `APP_SHORT_NAME`: `ROCode`
+- `APP_NAME`: `OpenCodeRust`
+- `APP_SHORT_NAME`: `opencoderust`
 - `APP_VERSION_DATE`: `2026.02.23`
-- `APP_TAGLINE`: `A Rusted OpenCode Version`
+- `APP_TAGLINE`: `A Rust implementation of OpenCode`
 
 Defined in: `crates/opencode-tui/src/branding.rs`
 

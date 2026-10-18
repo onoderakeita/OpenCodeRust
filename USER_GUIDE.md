@@ -2,15 +2,18 @@
 type: Playbook
 description: OpenCodeRust の利用者向けセットアップと操作ガイド。
 tags: [user-guide, setup, usage]
+verified:
+  by: opencode
+  at: "2026-10-18T11:19:00+09:00"
 ---
 
-# USER GUIDE - RustingOpenCode (ROCode)
+# USER GUIDE - OpenCodeRust
 
 This guide is for day-to-day users. It covers startup, common commands, configuration, and troubleshooting.  
-The project is named `RustingOpenCode` (short: `ROCode`). The CLI command is `opencoderust`.
+The project is named `OpenCodeRust`. The CLI command is `opencoderust`.
 
 **Use this project's `opencoderust` binary.** From the
-**RustingOpenCode repo root** use one of:
+**OpenCodeRust repo root** use one of:
 
 - **`./target/debug/opencoderust`** — after `cargo build -p opencode-cli`
 - **`cargo run -p opencode-cli --`** — always uses this repo's version
@@ -21,7 +24,7 @@ In the commands below, `opencoderust` means this local binary (run from repo roo
 
 ## 1. Quick start
 
-From the RustingOpenCode repo root:
+From the OpenCodeRust repo root:
 
 ```bash
 cargo run -p opencode-cli -- --help
@@ -53,7 +56,7 @@ cargo run -p opencode-cli -- serve --port 3000 --hostname 127.0.0.1
 
 ## 2. Common commands
 
-Run these from the **RustingOpenCode repo root**; use
+Run these from the **OpenCodeRust repo root**; use
 `./target/debug/opencoderust` or `cargo run -p opencode-cli --`.
 
 ### 2.1 Session management

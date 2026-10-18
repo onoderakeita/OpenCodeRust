@@ -8,7 +8,7 @@
 
 - **名前**: OpenCodeRust
 - **言語**: Rust (Edition 2021)
-- **構成**: Cargo ワークスペース (23 クレート)
+- **構成**: Cargo ワークスペース (21 クレート)
 - **目的**: OpenCode v2 の Rust 実装・進化版
 
 ---
