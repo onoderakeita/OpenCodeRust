@@ -9,7 +9,7 @@ tags:
   - audit
 verified:
   by: opencode
-  at: "2026-10-18T11:46:00+09:00"
+  at: "2026-10-18T13:49:00+09:00"
 ---
 
 ## 実行手順
@@ -63,7 +63,12 @@ cargo audit --db ~/.cache/rustsec-advisory-db --no-fetch
 補足: `lru` の修正版は 0.16.3 以降のみで、ratatui 0.27 の `^0.12`
 制約では適用できない。ratatui 更新時に再評価する。
 
+## CI ゲート
+
+共通ワークフロー `rust-gates.yml` の `audit: true` で有効化済み
+(2026-10-18、workflows v1)。OpenCodeRust の `.github/workflows/ci.yml`
+が opt-in している。
+
 ## 残作業
 
-- CI への audit ゲート追加 (共通ワークフロー `rust-gates.yml` 側で検討)。
 - ratatui / syntect / portable-pty / notify 更新時に warning を再評価。
