@@ -13,8 +13,8 @@ This documentation set describes the current **OpenCodeRust** codebase
 
 - Project overview: [README](../README.md)
 - Project architecture: [Architecture](architecture.md)
-- Initial compatibility plan: [MAPPING](../MAPPING.md)
-- Runner proposal: [DESIGN_RUNNER](../DESIGN_RUNNER.md)
+- Compatibility mapping: [MAPPING](../MAPPING.md)
+- Runner design resolution: [DESIGN_RUNNER](../DESIGN_RUNNER.md)
 - User guide: [User guide](../USER_GUIDE.md)
 - CLI: [CLI](opencode-cli.md)
 - TUI: [TUI](opencode-tui.md)

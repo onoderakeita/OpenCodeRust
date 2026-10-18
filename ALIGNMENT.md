@@ -9,7 +9,7 @@ tags:
   - compatibility
 verified:
   by: opencode
-  at: "2026-10-18T11:39:00+09:00"
+  at: "2026-10-18T13:36:00+09:00"
 ---
 
 ## 目標
@@ -39,8 +39,10 @@ verified:
 
 - Phase 1: `MAPPING.md` と `docs/architecture.md` が現行構成を記述済み。
 - Phase 2: `opencode-session` / `opencode-storage` に主要実装がある
-  (ADR-0004)。残作業は prompt 経路と queue worker が同一 executor を
-  共有する整理 ([DESIGN_RUNNER.md](DESIGN_RUNNER.md) の設計条件 1〜4)。
+  (ADR-0004)。queue と通常 prompt は server の共通 executor を使い、
+  状態遷移は `InputRepository` に集約済み。残る制約 (admission と
+  snapshot の非同一 transaction、単一 process 前提) は
+  [DESIGN_RUNNER.md](DESIGN_RUNNER.md) に記録。
 - Phase 3: `opencode-agent` / `opencode-tool` は実装・テスト済み
   (workspace テスト 388 件 green、2026-10-18 実行)。差分照合の初版は
   [MAPPING.md](MAPPING.md) に記録済み。未移植機能の実装が残作業。
