@@ -9,7 +9,7 @@ tags:
   - roadmap
 verified:
   by: opencode
-  at: "2026-10-18T11:39:00+09:00"
+  at: "2026-10-18T14:27:00+09:00"
 ---
 
 ## 文書の位置付け
@@ -45,7 +45,8 @@ v1 `opencode/src` の subsystem (`agent`、`session`、`tool`、`permission`、
 
 未実装または対応層が未分化の主な領域 (重要性順):
 
-1. `codemode` — モデル生成 JS の制限実行。Rust に対応 tool がない。
+1. `codemode` — parser基盤 (`opencode-codemode`) のみ。interpreter、
+   tool runtime、制限実行は未実装。
 2. `protocol` / `client` / `httpapi-codegen` — 権威 HTTP 契約と生成
    client 層が未分化 (Rust は `opencode-server` の routes が唯一の面)。
 3. `sdk` / `sdk-next` — JS SDK がない。

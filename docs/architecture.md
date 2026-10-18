@@ -25,7 +25,7 @@ session、agent、tool、provider、MCP、LSP などの機能を組み合わせ�
 
 ## ワークスペース
 
-Workspace は `Cargo.toml` の `members` に列挙された21 crate から成る。
+Workspace は `Cargo.toml` の `members` に列挙された22 crate から成る。
 
 ### 起動・ユーザーインターフェース
 
@@ -39,6 +39,7 @@ Workspace は `Cargo.toml` の `members` に列挙された21 crate から成る
 - `opencode-session`: session/message model、prompt loop、状態・履歴処理。
 - `opencode-agent`: agent 定義、登録、実行制御。
 - `opencode-tool`: built-in tool、tool registry、実行と権限要求。
+- `opencode-codemode`: confined interpreter のparser基盤 (評価器は未実装)。
 - `opencode-command`: slash command の登録・テンプレート展開。
 
 ### Model・外部連携
