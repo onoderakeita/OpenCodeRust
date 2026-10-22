@@ -387,35 +387,14 @@ impl<'a> Interpreter<'a> {
             ("parse", Value::Builtin("JSON.parse")),
             ("stringify", Value::Builtin("JSON.stringify")),
         ]);
-        let object = Value::from_entries([
-            ("keys", Value::Builtin("Object.keys")),
-            ("values", Value::Builtin("Object.values")),
-            ("entries", Value::Builtin("Object.entries")),
-            ("fromEntries", Value::Builtin("Object.fromEntries")),
-            ("hasOwn", Value::Builtin("Object.hasOwn")),
-            ("assign", Value::Builtin("Object.assign")),
-        ]);
-        let array = Value::from_entries([
-            ("isArray", Value::Builtin("Array.isArray")),
-            ("from", Value::Builtin("Array.from")),
-            ("of", Value::Builtin("Array.of")),
-        ]);
-        let promise = Value::from_entries([
-            ("resolve", Value::Builtin("Promise.resolve")),
-            ("reject", Value::Builtin("Promise.reject")),
-            ("all", Value::Builtin("Promise.all")),
-            ("allSettled", Value::Builtin("Promise.allSettled")),
-            ("race", Value::Builtin("Promise.race")),
-        ]);
-
         let mut scope = self.scope.borrow_mut();
         for (name, value) in [
             ("console", console),
             ("Math", math),
             ("JSON", json),
-            ("Object", object),
-            ("Array", array),
-            ("Promise", promise),
+            ("Object", Value::Builtin("Object")),
+            ("Array", Value::Builtin("Array")),
+            ("Promise", Value::Builtin("Promise")),
             ("tools", Value::tool_ref(Vec::new())),
             ("Error", Value::Builtin("Error")),
             ("TypeError", Value::Builtin("TypeError")),
@@ -584,7 +563,17 @@ impl<'a> Interpreter<'a> {
             }
             Statement::ForInStatement(statement) => {
                 let value = self.eval_expression(&statement.right)?;
-                let keys = enumerable_keys(&value);
+                let keys = if let Some(path) = value.tool_path() {
+                    self.tool_host
+                        .as_ref()
+                        .map(|host| host.keys(path))
+                        .unwrap_or_default()
+                        .into_iter()
+                        .map(Value::String)
+                        .collect()
+                } else {
+                    enumerable_keys(&value, statement.right.span())?
+                };
                 self.eval_for_each(&statement.left, keys, &statement.body)
             }
             Statement::ForOfStatement(statement) => {
@@ -1123,6 +1112,21 @@ impl<'a> Interpreter<'a> {
         right: &Value,
         span: Span,
     ) -> Result<Value, RuntimeError> {
+        // `instanceof` observes operands without coercing them, so it is the
+        // only operator that accepts functions and un-awaited promises.
+        if !matches!(operator, BinaryOperator::Instanceof) {
+            let mut seen = Vec::new();
+            if contains_opaque_reference(left, &mut seen)
+                || contains_opaque_reference(right, &mut seen)
+            {
+                return Err(RuntimeError::new(
+                    RuntimeErrorKind::InvalidDataValue,
+                    "Binary operators require data values in CodeMode. Await promises \
+                     before using them in expressions.",
+                    span,
+                ));
+            }
+        }
         match operator {
             BinaryOperator::Equality => Ok(Value::Boolean(loose_equals(left, right))),
             BinaryOperator::Inequality => Ok(Value::Boolean(!loose_equals(left, right))),
@@ -1173,6 +1177,21 @@ impl<'a> Interpreter<'a> {
                 to_int32(to_number(left)) & to_int32(to_number(right)),
             ))),
             BinaryOperator::In => {
+                if !matches!(
+                    right,
+                    Value::Object(_)
+                        | Value::Array(_)
+                        | Value::Date(_)
+                        | Value::Error(_)
+                        | Value::Map(_)
+                        | Value::Set(_)
+                        | Value::Promise(_)
+                ) {
+                    return Err(RuntimeError::type_error(
+                        "The 'in' operator requires a data object on the right-hand side.",
+                        span,
+                    ));
+                }
                 let key = to_property_key(left, span)?;
                 Ok(Value::Boolean(has_property(right, &key)))
             }
@@ -1416,10 +1435,10 @@ impl<'a> Interpreter<'a> {
                 let mut text = String::new();
                 for value in arguments {
                     let code = to_number(value);
-                    let code = if code.is_nan() {
-                        0
+                    let code = if code.is_finite() {
+                        code.trunc().rem_euclid(65_536.0) as u32
                     } else {
-                        (code.trunc() as i64).rem_euclid(65_536) as u32
+                        0
                     };
                     text.push(char::from_u32(code).unwrap_or('\0'));
                 }
@@ -1519,6 +1538,17 @@ impl<'a> Interpreter<'a> {
                     )),
                     Err(JsonStringifyError::TooDeep) => Err(RuntimeError::type_error(
                         "Value is too deep to serialize as JSON.",
+                        _span,
+                    )),
+                    Err(JsonStringifyError::NonData) => Err(RuntimeError::new(
+                        RuntimeErrorKind::InvalidDataValue,
+                        "JSON.stringify value must contain data only.",
+                        _span,
+                    )),
+                    Err(JsonStringifyError::UnawaitedPromise) => Err(RuntimeError::new(
+                        RuntimeErrorKind::InvalidDataValue,
+                        "JSON.stringify cannot serialize an un-awaited Promise. \
+                         Await it first, for example `await tools.ns.tool(...)`.",
                         _span,
                     )),
                 }
@@ -1676,6 +1706,9 @@ impl<'a> Interpreter<'a> {
                 match &source {
                     Value::Object(object) => Ok(Value::Boolean(object.borrow().contains_key(&key))),
                     Value::Error(_) => Ok(Value::Boolean(own_keys(&source).contains(&key))),
+                    Value::Date(_) | Value::Map(_) | Value::Set(_) | Value::Promise(_) => {
+                        Ok(Value::Boolean(false))
+                    }
                     _ => Err(RuntimeError::type_error(
                         "Object.hasOwn expects a data object.",
                         _span,
@@ -1816,6 +1849,79 @@ impl<'a> Interpreter<'a> {
             }
             _ => Err(RuntimeError::unsupported(name, _span)),
         }
+    }
+
+    /// Implements the callable-replacement form of `String.replace` /
+    /// `String.replaceAll` for plain-string searches. Offsets are UTF-16 code
+    /// unit indices, matching JavaScript; strings containing lone surrogates
+    /// cannot be represented, so matches never split a surrogate pair.
+    fn replace_with_callback(
+        &mut self,
+        text: &str,
+        search: &str,
+        replacement: &Value,
+        all: bool,
+        span: Span,
+    ) -> Result<String, RuntimeError> {
+        let call = |this: &mut Self, matched: &str, offset: usize| {
+            let result = this.invoke_value(
+                replacement,
+                vec![
+                    Value::String(matched.to_owned()),
+                    Value::Number(offset as f64),
+                    Value::String(text.to_owned()),
+                ],
+                span,
+            )?;
+            if matches!(
+                result,
+                Value::Function(_)
+                    | Value::Builtin(_)
+                    | Value::BoundMethod { .. }
+                    | Value::ToolRef(_)
+            ) {
+                return Err(RuntimeError::new(
+                    RuntimeErrorKind::InvalidDataValue,
+                    "String.replace replacer result must be data.",
+                    span,
+                ));
+            }
+            Ok(to_js_string(&result))
+        };
+
+        let mut output = String::new();
+        if search.is_empty() {
+            let mut cursor = 0usize;
+            let mut utf16 = 0usize;
+            loop {
+                output.push_str(&call(self, "", utf16)?);
+                let Some(character) = text[cursor..].chars().next() else {
+                    break;
+                };
+                output.push(character);
+                cursor += character.len_utf8();
+                utf16 += character.len_utf16();
+                if !all {
+                    output.push_str(&text[cursor..]);
+                    break;
+                }
+            }
+            return Ok(output);
+        }
+
+        let mut cursor = 0usize;
+        while let Some(relative) = text[cursor..].find(search) {
+            let start = cursor + relative;
+            output.push_str(&text[cursor..start]);
+            let offset = text[..start].encode_utf16().count();
+            output.push_str(&call(self, search, offset)?);
+            cursor = start + search.len();
+            if !all {
+                break;
+            }
+        }
+        output.push_str(&text[cursor..]);
+        Ok(output)
     }
 
     fn sort_items(
@@ -2538,18 +2644,15 @@ impl<'a> Interpreter<'a> {
             "String.repeat" => {
                 let text = as_string(receiver, span)?;
                 let number = to_number(&argument(0));
-                if number < 0.0 || number == f64::INFINITY {
+                let count = if number.is_nan() { 0.0 } else { number.trunc() };
+                if count < 0.0 || count == f64::INFINITY {
                     return Err(RuntimeError::new(
                         RuntimeErrorKind::RangeError,
                         "Invalid count value.",
                         span,
                     ));
                 }
-                let count = if number.is_nan() {
-                    0
-                } else {
-                    number.trunc() as usize
-                };
+                let count = count as usize;
                 if text.len().saturating_mul(count) > MAX_STRING_LENGTH {
                     return Err(RuntimeError::new(
                         RuntimeErrorKind::RangeError,
@@ -2561,13 +2664,31 @@ impl<'a> Interpreter<'a> {
             }
             "String.replace" | "String.replaceAll" => {
                 let text = as_string(receiver, span)?;
-                let search = to_js_string(&argument(0));
-                let replacement = to_js_string(&argument(1));
+                let Value::String(search) = argument(0) else {
+                    return Err(RuntimeError::type_error(
+                        format!("{method} expects argument 1 to be a string."),
+                        span,
+                    ));
+                };
+                let replacement = argument(1);
+                let all = method == "String.replaceAll";
+                if matches!(
+                    replacement,
+                    Value::Function(_) | Value::Builtin(_) | Value::BoundMethod { .. }
+                ) {
+                    return Ok(Value::String(self.replace_with_callback(
+                        &text,
+                        &search,
+                        &replacement,
+                        all,
+                        span,
+                    )?));
+                }
                 Ok(Value::String(replace_string(
                     &text,
                     &search,
-                    &replacement,
-                    method == "String.replaceAll",
+                    &to_js_string(&replacement),
+                    all,
                 )))
             }
             "String.toString" => Ok(Value::String(as_string(receiver, span)?)),
@@ -3449,25 +3570,52 @@ fn make_error(name: &str, arguments: &[Value]) -> Value {
 
 fn instance_of(left: &Value, right: &Value, span: Span) -> Result<bool, RuntimeError> {
     let Value::Builtin(name) = right else {
-        return match right {
-            Value::Object(_) => Ok(false),
-            _ => Err(RuntimeError::type_error(
-                "The right-hand side of 'instanceof' is not callable.",
-                span,
-            )),
-        };
+        return Err(RuntimeError::type_error(
+            "The right-hand side of 'instanceof' must be a constructor CodeMode knows: \
+             Error (or a specific error type like TypeError), Date, RegExp, Map, Set, URL, \
+             URLSearchParams, Array, Object, or Promise.",
+            span,
+        ));
     };
-    let Some(kind) = ErrorKind::from_name(name) else {
-        return Ok(match *name {
-            "Map" => matches!(left, Value::Map(_)),
-            "Set" => matches!(left, Value::Set(_)),
-            "Date" => matches!(left, Value::Date(_)),
+    if let Some(kind) = ErrorKind::from_name(name) {
+        return Ok(match left {
+            Value::Error(error) => kind == ErrorKind::Error || error.kind == kind,
             _ => false,
         });
-    };
-    Ok(match left {
-        Value::Error(error) => kind == ErrorKind::Error || error.kind == kind,
-        _ => false,
+    }
+    Ok(match *name {
+        "Map" => matches!(left, Value::Map(_)),
+        "Set" => matches!(left, Value::Set(_)),
+        "Date" => matches!(left, Value::Date(_)),
+        "Array" => matches!(left, Value::Array(_)),
+        // `Object` matches every value that JS calls an object or a function;
+        // CodeMode namespaces and callables count as functions.
+        "Object" => matches!(
+            left,
+            Value::Array(_)
+                | Value::Object(_)
+                | Value::Error(_)
+                | Value::Promise(_)
+                | Value::Map(_)
+                | Value::Set(_)
+                | Value::Date(_)
+                | Value::Function(_)
+                | Value::Builtin(_)
+                | Value::BoundMethod { .. }
+                | Value::ToolRef(_)
+        ),
+        // Number/String/Boolean wrap primitives in JS; no boxed values exist in
+        // CodeMode, so primitives never match these constructors.
+        "Number" | "String" | "Boolean" => false,
+        "Promise" => matches!(left, Value::Promise(_)),
+        _ => {
+            return Err(RuntimeError::type_error(
+                "The right-hand side of 'instanceof' must be a constructor CodeMode knows: \
+                 Error (or a specific error type like TypeError), Date, RegExp, Map, Set, URL, \
+                 URLSearchParams, Array, Object, or Promise.",
+                span,
+            ))
+        }
     })
 }
 
@@ -3489,6 +3637,20 @@ fn builtin_property(name: &str, key: &str) -> Value {
         ("Number", "NaN") => Value::Number(f64::NAN),
         ("String", "fromCharCode") => Value::Builtin("String.fromCharCode"),
         ("String", "fromCodePoint") => Value::Builtin("String.fromCodePoint"),
+        ("Object", "keys") => Value::Builtin("Object.keys"),
+        ("Object", "values") => Value::Builtin("Object.values"),
+        ("Object", "entries") => Value::Builtin("Object.entries"),
+        ("Object", "fromEntries") => Value::Builtin("Object.fromEntries"),
+        ("Object", "hasOwn") => Value::Builtin("Object.hasOwn"),
+        ("Object", "assign") => Value::Builtin("Object.assign"),
+        ("Array", "isArray") => Value::Builtin("Array.isArray"),
+        ("Array", "from") => Value::Builtin("Array.from"),
+        ("Array", "of") => Value::Builtin("Array.of"),
+        ("Promise", "resolve") => Value::Builtin("Promise.resolve"),
+        ("Promise", "reject") => Value::Builtin("Promise.reject"),
+        ("Promise", "all") => Value::Builtin("Promise.all"),
+        ("Promise", "allSettled") => Value::Builtin("Promise.allSettled"),
+        ("Promise", "race") => Value::Builtin("Promise.race"),
         ("Date", "now") => Value::Builtin("Date.now"),
         ("Date", "parse") => Value::Builtin("Date.parse"),
         ("Date", "UTC") => Value::Builtin("Date.UTC"),
@@ -3920,7 +4082,7 @@ fn math_extreme(arguments: &[Value], maximum: bool) -> f64 {
 }
 
 fn parse_int(text: &str, radix: f64) -> f64 {
-    let text = text.trim_start();
+    let text = text.trim_start_matches(is_js_whitespace);
     let (sign, rest) = match text.strip_prefix('-') {
         Some(rest) => (-1.0, rest),
         None => match text.strip_prefix('+') {
@@ -3928,37 +4090,58 @@ fn parse_int(text: &str, radix: f64) -> f64 {
             None => (1.0, text),
         },
     };
-    let automatic = radix.is_nan() || radix == 0.0;
-    let requested = if automatic { 10 } else { radix.trunc() as u32 };
-    if !(2..=36).contains(&requested) {
+    let requested = to_int32(radix);
+    let automatic = requested == 0;
+    if !automatic && !(2..=36).contains(&requested) {
         return f64::NAN;
     }
+    let base = if automatic { 10 } else { requested as u32 };
     let hexadecimal = rest.starts_with("0x") || rest.starts_with("0X");
-    let (base, digits) = if (automatic || requested == 16) && hexadecimal {
+    let (base, digits) = if (automatic || base == 16) && hexadecimal {
         (16, &rest[2..])
     } else {
-        (requested, rest)
+        (base, rest)
     };
-    let mut value: u128 = 0;
-    let mut any = false;
+    let end = digits
+        .char_indices()
+        .find(|(_, character)| character.to_digit(base).is_none())
+        .map_or(digits.len(), |(index, _)| index);
+    let digits = &digits[..end];
+    if digits.is_empty() {
+        return f64::NAN;
+    }
+    // Decimal input goes through the correctly-rounded parser. Other bases
+    // accumulate exactly in `u128` and fall back to floating point only when
+    // the digit string outgrows it.
+    if base == 10 {
+        return sign * digits.parse::<f64>().unwrap_or(f64::NAN);
+    }
+    let mut exact = Some(0u128);
+    let mut value = 0.0f64;
     for character in digits.chars() {
-        let Some(digit) = character.to_digit(base) else {
-            break;
-        };
-        any = true;
-        value = value
-            .saturating_mul(u128::from(base))
-            .saturating_add(u128::from(digit));
+        let digit = character.to_digit(base).expect("digits are validated") as u128;
+        if let Some(current) = exact {
+            match current
+                .checked_mul(u128::from(base))
+                .and_then(|next| next.checked_add(digit))
+            {
+                Some(next) => {
+                    exact = Some(next);
+                    continue;
+                }
+                None => {
+                    value = current as f64;
+                    exact = None;
+                }
+            }
+        }
+        value = value * f64::from(base) + digit as f64;
     }
-    if any {
-        sign * value as f64
-    } else {
-        f64::NAN
-    }
+    sign * exact.map_or(value, |current| current as f64)
 }
 
 fn parse_float(text: &str) -> f64 {
-    let text = text.trim_start();
+    let text = text.trim_start_matches(is_js_whitespace);
     if text.is_empty() {
         return f64::NAN;
     }
@@ -3975,7 +4158,7 @@ fn parse_float(text: &str) -> f64 {
 }
 
 fn string_to_number(text: &str) -> f64 {
-    let text = text.trim();
+    let text = text.trim_matches(is_js_whitespace);
     if text.is_empty() {
         return 0.0;
     }
@@ -4028,6 +4211,46 @@ fn array_like_items(value: &Value) -> Option<Vec<Value>> {
             })
             .collect(),
     )
+}
+
+/// Mirrors upstream `containsOpaqueReference`: functions, tool references and
+/// un-awaited promises are interpreter machinery, not data operands. Sandbox
+/// values (Date, Map, Set, errors) are data even when they contain callables.
+fn contains_opaque_reference(value: &Value, seen: &mut Vec<usize>) -> bool {
+    match value {
+        Value::Function(_)
+        | Value::Builtin(_)
+        | Value::BoundMethod { .. }
+        | Value::ToolRef(_)
+        | Value::Promise(_) => true,
+        Value::Array(items) => {
+            let identity = Rc::as_ptr(items) as *const () as usize;
+            if seen.contains(&identity) {
+                return false;
+            }
+            seen.push(identity);
+            let found = items
+                .borrow()
+                .iter()
+                .any(|item| contains_opaque_reference(item, seen));
+            seen.pop();
+            found
+        }
+        Value::Object(object) => {
+            let identity = Rc::as_ptr(object) as *const () as usize;
+            if seen.contains(&identity) {
+                return false;
+            }
+            seen.push(identity);
+            let found = object
+                .borrow()
+                .values()
+                .any(|item| contains_opaque_reference(item, seen));
+            seen.pop();
+            found
+        }
+        _ => false,
+    }
 }
 
 fn own_keys(value: &Value) -> Vec<String> {
@@ -4094,6 +4317,8 @@ fn tool_error_value(error: &ToolError, span: Span) -> Value {
 enum JsonStringifyError {
     Circular,
     TooDeep,
+    NonData,
+    UnawaitedPromise,
 }
 
 fn stringify_json_with_indent(
@@ -4110,17 +4335,25 @@ fn stringify_json_inner(
     depth: usize,
 ) -> Result<Option<String>, JsonStringifyError> {
     match value {
-        Value::Undefined
-        | Value::Function(_)
-        | Value::Builtin(_)
-        | Value::BoundMethod { .. }
-        | Value::ToolRef(_) => Ok(None),
+        Value::Undefined | Value::ToolRef(_) => Ok(None),
+        Value::Function(_) | Value::Builtin(_) | Value::BoundMethod { .. } => {
+            Err(JsonStringifyError::NonData)
+        }
         Value::Error(error) => {
             let name = serde_json::to_string(error.kind.name()).unwrap_or_default();
             let message = serde_json::to_string(&error.message).unwrap_or_default();
-            Ok(Some(format!("{{\"name\":{name},\"message\":{message}}}")))
+            if indent.is_empty() {
+                Ok(Some(format!("{{\"name\":{name},\"message\":{message}}}")))
+            } else {
+                let inner = indent.repeat(depth + 1);
+                let outer = indent.repeat(depth);
+                Ok(Some(format!(
+                    "{{\n{inner}\"name\": {name},\n{inner}\"message\": {message}\n{outer}}}"
+                )))
+            }
         }
-        Value::Promise(_) | Value::Map(_) | Value::Set(_) => Ok(Some("{}".to_owned())),
+        Value::Promise(_) => Err(JsonStringifyError::UnawaitedPromise),
+        Value::Map(_) | Value::Set(_) => Ok(Some("{}".to_owned())),
         Value::Date(date) => Ok(Some(
             crate::date::iso_string(date.time_ms)
                 .and_then(|text| serde_json::to_string(&text).ok())
@@ -4544,19 +4777,20 @@ fn iterable_items(value: &Value, span: Span) -> Result<Vec<Value>, RuntimeError>
     })
 }
 
-fn enumerable_keys(value: &Value) -> Vec<Value> {
+fn enumerable_keys(value: &Value, span: Span) -> Result<Vec<Value>, RuntimeError> {
     match value {
-        Value::Object(object) => ordered_keys(&object.borrow())
+        Value::Object(object) => Ok(ordered_keys(&object.borrow())
             .into_iter()
             .map(Value::String)
-            .collect(),
-        Value::Array(array) => (0..array.borrow().len())
+            .collect()),
+        Value::Array(array) => Ok((0..array.borrow().len())
             .map(|index| Value::String(index.to_string()))
-            .collect(),
-        Value::String(value) => (0..value.chars().count())
-            .map(|index| Value::String(index.to_string()))
-            .collect(),
-        _ => Vec::new(),
+            .collect()),
+        _ => Err(RuntimeError::type_error(
+            "for...in requires a plain object, array, or tools reference. \
+             Use for...of for arrays/strings/Maps/Sets, or Object.keys(value).",
+            span,
+        )),
     }
 }
 
@@ -5649,6 +5883,201 @@ mod tests {
             run_value(r#"return "  x ".trimLeft() + "|" + "  x ".trimRight();"#),
             string("x |  x")
         );
+        assert_eq!(
+            run_value(
+                r#"return "banana".replace("na", (match, offset, input) => "[" + offset + "|" + input + "]");"#
+            ),
+            string("ba[2|banana]na")
+        );
+        assert_eq!(
+            run_value(r#"return "ab".replaceAll("", (match, offset) => offset);"#),
+            string("0a1b2")
+        );
+        assert_eq!(
+            run_value(r#"return "aaa".replaceAll("aa", "-");"#),
+            string("-a")
+        );
+        assert_eq!(
+            run_value(r#"return "a1".replace("1", (match) => match === "1" ? 7 : 0);"#),
+            string("a7")
+        );
+        assert_eq!(
+            run_value(r#"return "a1".replace("1", () => null);"#),
+            string("anull")
+        );
+        assert_eq!(
+            run_value(r#"return "a1".replace("1", () => ({ n: 3 }));"#),
+            string("a[object Object]")
+        );
+        let error = run("return 'a'.replace(1, 'b');").expect_err("non-string search");
+        assert_eq!(error.kind(), super::RuntimeErrorKind::TypeError);
+    }
+
+    #[test]
+    fn matches_upstream_sandbox_value_parity() {
+        assert_eq!(
+            run_value("const o = null; return JSON.stringify({ ...o, a: 1 });"),
+            string("{\"a\":1}")
+        );
+        let error = run("return { ...[1, 2], a: 1 };").expect_err("array spread into object");
+        assert_eq!(error.kind(), super::RuntimeErrorKind::InvalidDataValue);
+        assert_eq!(
+            run_value("const e = new Error('m'); return ({ ...e }) instanceof Error;"),
+            Value::Boolean(false)
+        );
+        assert_eq!(
+            run_value("const e = new Error('m'); return JSON.stringify({ ...e });"),
+            string("{\"name\":\"Error\",\"message\":\"m\"}")
+        );
+        assert_eq!(
+            run_value(
+                "const a = [1,2,3,4]; const r = a.splice(1,2); return JSON.stringify([r, a]);"
+            ),
+            string("[[2,3],[1,4]]")
+        );
+        assert_eq!(
+            run_value("return JSON.stringify([1,2,3].fill('z'));"),
+            string("[\"z\",\"z\",\"z\"]")
+        );
+        assert_eq!(
+            run_value("return JSON.stringify([1,2,3,4,5].copyWithin(0,3));"),
+            string("[4,5,3,4,5]")
+        );
+        assert_eq!(
+            run_value("return [...['x','y','z'].keys()].join(',');"),
+            string("0,1,2")
+        );
+        assert_eq!(
+            run_value("return ['x','y'].values().join(',');"),
+            string("x,y")
+        );
+        assert_eq!(
+            run_value("return [...[7].entries()].map(([i, v]) => i + ':' + v).join(',');"),
+            string("0:7")
+        );
+        assert_eq!(
+            run_value("let d = new Date(1000); d += 1; return d;"),
+            string("1970-01-01T00:00:01.000Z1")
+        );
+        assert_eq!(
+            run_value("let d = new Date(1000); d -= 400; return d;"),
+            number(600.0)
+        );
+        assert_eq!(
+            run_value("let d = new Date(1000); d /= 4; return d;"),
+            number(250.0)
+        );
+        assert_eq!(
+            run_value("let x = 'a'; x += { b: 1 }; return x;"),
+            string("a[object Object]")
+        );
+        assert_eq!(
+            run_value("const o = { s: 't' }; o.s += new Date(0); return o.s;"),
+            string("t1970-01-01T00:00:00.000Z")
+        );
+        assert_eq!(
+            run_value("let x = -7; x >>>= 1; return x;"),
+            number(2_147_483_644.0)
+        );
+        assert_eq!(
+            run_value("return [0, 1, '', 2, null, 3].filter(Boolean).join(',');"),
+            string("1,2,3")
+        );
+        assert_eq!(
+            run_value("return [1, 2, 3].map(String).join(',');"),
+            string("1,2,3")
+        );
+        let error = run("return [1,2,3].map(42);").expect_err("non-callable callback");
+        assert_eq!(error.kind(), super::RuntimeErrorKind::TypeError);
+    }
+
+    #[test]
+    fn matches_upstream_instanceof_and_namespace_types() {
+        assert_eq!(
+            run_value(
+                "return [typeof Object, typeof Array, typeof Promise, typeof Math, typeof JSON].join(',');"
+            ),
+            string("function,function,function,object,object")
+        );
+        assert_eq!(
+            run_value(
+                "return [[1] instanceof Array, [] instanceof Object, null instanceof Object, \
+                 1 instanceof Object, Promise.resolve(1) instanceof Promise, \
+                 new Date(0) instanceof Date, new Map() instanceof Map, \
+                 new Set() instanceof Set, new Error('x') instanceof Error].join(',');"
+            ),
+            string("true,true,false,false,true,true,true,true,true")
+        );
+        assert_eq!(
+            run_value("return [1 instanceof Number, 'x' instanceof String, true instanceof Boolean].join(',');"),
+            string("false,false,false")
+        );
+        let error = run("return 1 instanceof 5;").expect_err("unknown constructor");
+        assert_eq!(error.kind(), super::RuntimeErrorKind::TypeError);
+        assert!(error.message().contains("right-hand side of 'instanceof'"));
+        let error = run("return 1 instanceof {};").expect_err("plain object constructor");
+        assert_eq!(error.kind(), super::RuntimeErrorKind::TypeError);
+    }
+
+    #[test]
+    fn rejects_opaque_operands_and_unawaited_promises() {
+        for source in [
+            "return Promise.resolve(1) + 1;",
+            "return 1 + Promise.resolve(1);",
+            "const f = () => 1; return f + 1;",
+            "const f = () => 1; return [f] + '';",
+            "return tools + '';",
+        ] {
+            let error = run(source).expect_err("opaque operands must be rejected");
+            assert_eq!(error.kind(), super::RuntimeErrorKind::InvalidDataValue);
+            assert!(error
+                .message()
+                .contains("Binary operators require data values"));
+        }
+        let error = run("return JSON.stringify(Promise.resolve(1));")
+            .expect_err("un-awaited promise serialization");
+        assert_eq!(error.kind(), super::RuntimeErrorKind::InvalidDataValue);
+        assert!(error.message().contains("un-awaited Promise"));
+        let error = run("return JSON.stringify({ p: Promise.resolve(1) });")
+            .expect_err("nested un-awaited promise serialization");
+        assert_eq!(error.kind(), super::RuntimeErrorKind::InvalidDataValue);
+        assert!(error.message().contains("un-awaited Promise"));
+
+        assert_eq!(
+            run_value("return typeof Promise.resolve(1);"),
+            string("object")
+        );
+        assert_eq!(
+            run_value("return Promise.resolve(1) instanceof Promise;"),
+            Value::Boolean(true)
+        );
+        assert_eq!(
+            run_value("return JSON.stringify(new Map([['a', 1]]));"),
+            string("{}")
+        );
+        assert_eq!(
+            run_value("return JSON.stringify(new Error('m'), null, 2);"),
+            string("{\n  \"name\": \"Error\",\n  \"message\": \"m\"\n}")
+        );
+        let error = run("const f = () => 1; return JSON.stringify(f);")
+            .expect_err("functions are not data");
+        assert_eq!(error.kind(), super::RuntimeErrorKind::InvalidDataValue);
+        assert!(error.message().contains("data only"));
+    }
+
+    #[test]
+    fn for_in_rejects_non_enumerable_values() {
+        for expression in ["'text'", "new Map([[1, 2]])", "new Set([1])", "42", "null"] {
+            let source = format!("for (const key in {expression}) {{}}; return 'no';");
+            let error = run(&source).expect_err("for...in must reject the value");
+            assert_eq!(error.kind(), super::RuntimeErrorKind::TypeError);
+            assert!(error
+                .message()
+                .contains("for...in requires a plain object, array, or tools reference"));
+            assert!(error
+                .message()
+                .contains("Use for...of for arrays/strings/Maps/Sets"));
+        }
     }
 
     #[test]
@@ -6349,6 +6778,12 @@ mod tests {
             run_value("return (0.25).toExponential(1);"),
             string("2.5e-1")
         );
+        assert_eq!(run_value("return 'a'.repeat(-0.5);"), string(""));
+        assert_eq!(run_value("return 'a'.repeat(2.9);"), string("aa"));
+        let error = run("return 'a'.repeat(-1);").expect_err("negative repeat");
+        assert_eq!(error.kind(), super::RuntimeErrorKind::RangeError);
+        let error = run("return 'a'.repeat(Infinity);").expect_err("infinite repeat");
+        assert_eq!(error.kind(), super::RuntimeErrorKind::RangeError);
         assert_eq!(
             run_value("return (9.999999999999999e20).toExponential(2);"),
             string("1.00e+21")
@@ -6680,6 +7115,27 @@ mod tests {
             number(f64::NEG_INFINITY)
         );
         assert_eq!(run_value("return parseInt('08', 10);"), number(8.0));
+        assert_eq!(run_value("return parseInt('10', Infinity);"), number(10.0));
+        assert_eq!(
+            run_value("return Number.isNaN(parseInt('10', -1));"),
+            Value::Boolean(true)
+        );
+        assert_eq!(
+            run_value("return parseInt('10', 4294967296);"),
+            number(10.0)
+        );
+        assert_eq!(run_value("return parseInt('9'.repeat(40));"), number(1e40));
+        assert_eq!(
+            run_value(r#"return String.fromCharCode(Infinity) === "\u0000";"#),
+            Value::Boolean(true)
+        );
+        assert_eq!(
+            run_value(r#"return String.fromCharCode(-1) === "\uFFFF";"#),
+            Value::Boolean(true)
+        );
+        assert_eq!(run_value(r#"return Number("\uFEFF1");"#), number(1.0));
+        assert_eq!(run_value(r#"return parseFloat("\uFEFF1.5");"#), number(1.5));
+        assert_eq!(run_value(r#"return parseInt("\uFEFF10");"#), number(10.0));
 
         assert_eq!(
             run_value("const a = [1]; a.push(a); return a.join('-');"),
@@ -6934,6 +7390,14 @@ mod tests {
             run_value("return new Error('m') + 1;"),
             string("[object Object]1")
         );
+        assert_eq!(run_value("return 'length' in [];"), Value::Boolean(true));
+        assert_eq!(run_value("return '0' in ['a'];"), Value::Boolean(true));
+        assert_eq!(run_value("return 'a' in { a: 1 };"), Value::Boolean(true));
+        assert_eq!(run_value("return 'b' in { a: 1 };"), Value::Boolean(false));
+        let error = run("return 'length' in 'abc';").expect_err("string right-hand side");
+        assert_eq!(error.kind(), super::RuntimeErrorKind::TypeError);
+        let error = run("return 'x' in null;").expect_err("null right-hand side");
+        assert_eq!(error.kind(), super::RuntimeErrorKind::TypeError);
 
         assert_eq!(
             run_value("return [1, 2, 3].reduceRight((acc, value, index) => acc + index, 0);"),

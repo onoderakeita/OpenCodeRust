@@ -98,15 +98,17 @@ upstreamは未対応構文を評価到達時に拒否する。`inspect_support` 
   `ReferenceError` のconstructorと `Map` / `Set` / `Date` を許可する。
   `Error(...)` は `new` なしでも同じ値を作り、`Map` / `Set` / `Date` は
   `new` なしでは `TypeError` にする。
-- `instanceof` はこれらのError brandと `Map` / `Set` / `Date` を判定する。
-  それ以外の object namespaceは `false`、非callableな右辺は `TypeError` に
-  する。
+- `instanceof` はError brandと `Map` / `Set` / `Date` / `Array` / `Object` /
+  `Promise` を判定する。`Number` / `String` / `Boolean` は常に `false`
+  (boxed値を作らないため)、未知の右辺は `TypeError` にする。
 - Error値は `name` と `message` を持ち、`{ name, message }` として直列化する。
   `Object.keys` は `["name", "message"]` を返し、spreadするとbrandを失う。
 - 捕捉された実行時失敗は対応するbrandのError値になる。
 - 未対応: regexp/bigint literal、`void`/`delete`、Error/Map/Set/Date以外の
   `new`。
-- 緩い等価 (`==`) は基本型のcoercionのみで、objectのToPrimitiveは未実装。
+- 緩い等価 (`==`) はToPrimitiveを使い、Dateは時刻値、その他のobjectは
+  文字列化で比較する。object同士は参照同一性で判定する。
+- `+` はToPrimitive、関係比較と `==` はDateを時刻値として扱う。
 
 ## Stdlib baseline
 
@@ -128,10 +130,11 @@ shadowingできる。
   sign、log、log2、log10、exp、sin、cos、tan、PI、E、LN2、LN10、LOG2E、
   LOG10E、SQRT2、SQRT1_2。
 - `JSON`: parse、stringify。objectのkey順はECMAScriptと同じく配列indexの
-  昇順、その後に挿入順で、parseでも入力順を保つ。stringifyは関数と
-  `undefined` をobjectから省略、arrayでは `null` にする。第3引数のindent
-  (数値0..10または先頭10文字の文字列) を受け付ける。replacerの配列・関数は
-  `UnsupportedSyntax`、循環参照と深すぎる値は `TypeError` にする。
+  昇順、その後に挿入順で、parseでも入力順を保つ。stringifyは `undefined` を
+  objectから省略、arrayでは `null` にする。関数・callable・未await Promiseは
+  `InvalidDataValue`、循環参照と深すぎる値は `TypeError` にする。第3引数の
+  indent (数値0..10または先頭10文字の文字列) を受け付ける。replacerの配列・
+  関数は `UnsupportedSyntax` にする。Errorはindent指定時も整形する。
 - `Number` statics: `Number.isNaN`、`isFinite`、`isInteger`、`isSafeInteger`、
   `parseInt`、`parseFloat`、定数 (`MAX_SAFE_INTEGER` など)。
 - `String` statics: `String.fromCharCode`、`String.fromCodePoint`。
@@ -142,7 +145,8 @@ shadowingできる。
   無視する。fromEntriesのkeyは `String(...)` でcoercionする。列挙は
   ECMAScriptのproperty順 (配列indexの昇順、その後に挿入順) で行い、
   `Object.keys` / `values` / `entries`、`for...in`、`JSON.stringify`、
-  spread、`Object.assign` に適用する。
+  spread、`Object.assign` に適用する。`for...in` はplain object、配列、
+  `tools` 参照だけを受け、文字列・Map/Set・数値・nullは `TypeError` にする。
 - `Array`: isArray、of、from (array-like含む)。インスタンスmethodは map、filter、forEach、
   reduce、reduceRight、find、findIndex、findLast、findLastIndex、some、
   every、join、slice、includes、indexOf、lastIndexOf、push、pop、shift、
@@ -156,7 +160,9 @@ shadowingできる。
   includes、startsWith、endsWith、trim系 (trimLeft/trimRight含む)、
   case変換、charAt、charCodeAt、codePointAt、at、padStart、padEnd、repeat、
   replace、replaceAll、concat、toString、localeCompare。`replace` 系は
-  `$$` / `$&` / ``$` `` / `$'` のreplacement patternを展開する。trim系は
+  `$$` / `$&` / ``$` `` / `$'` のreplacement patternを展開し、callableの
+  replacerは `(match, offset, input)` で呼ぶ。offsetはUTF-16 code unitで
+  数える。searchはstringのみを受け、それ以外は `TypeError` にする。trim系は
   BOM (U+FEFF) も除去し、`<` / `>` の文字列比較はUTF-16 code unit順になる。
   `normalize` とRegExp依存のmatch系は未実装。
 - `Number` instance methods: toFixed、toPrecision、toExponential、toString
@@ -205,8 +211,11 @@ shadowingできる。
   rejected理由をthrowする。空の `Promise.race` はエラーにする。
 - `.then` / `.catch` / `.finally` と、未await Promiseのproperty読み取りは
   awaitを促す診断を返す。
+- 未await Promiseは、境界に加えてbinary operatorと `JSON.stringify` でも
+  `InvalidDataValue` として拒否する。`typeof` と `instanceof` はcoercion
+  しないため、そのまま観察できる。
 - 真の非同期実行、tool呼び出しの同時実行制御、未await rejectionの診断は
-  未実装。境界に到達した未解決のPromiseは `InvalidDataValue` になる。
+  未実装。
 
 ## High-level execution API
 
