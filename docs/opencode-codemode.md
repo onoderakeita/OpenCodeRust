@@ -144,7 +144,10 @@ shadowingできる。
   replace、replaceAll、concat、toString、localeCompare。`replace` 系は
   `$$` / `$&` / ``$` `` / `$'` のreplacement patternを展開する。
   `normalize` とRegExp依存のmatch系は未実装。
-- `Number` instance methods: toFixed、toString (radix 2..36の整数)、valueOf。
+- `Number` instance methods: toFixed、toPrecision、toExponential、toString
+  (radix 2..36の整数)、valueOf。digitsが範囲外なら `RangeError` にする。
+- 数値の文字列化はECMAScriptの `Number::toString` に合わせ、指数が -6 未満または
+  20 超のとき指数表記 (`1e+21`、`1e-7`) を使う。
 - `Map`: `new Map(entries | Map)`、get、set、has、delete、clear、forEach、
   keys、values、entries、size。keyはSameValueZeroで比較し、`NaN` は同一key、
   objectは参照同一性で区別する。`keys` / `values` / `entries` は配列を返す。

@@ -1388,19 +1388,20 @@ impl<'a> Interpreter<'a> {
             "Date.UTC" => Ok(Value::Number(crate::date::from_components(
                 &arguments.iter().map(to_number).collect::<Vec<_>>(),
             ))),
-            "Number.isNaN" => Ok(Value::Boolean(to_number(&argument(0)).is_nan())),
-            "Number.isFinite" => Ok(Value::Boolean(to_number(&argument(0)).is_finite())),
-            "Number.isInteger" => {
-                let number = to_number(&argument(0));
-                Ok(Value::Boolean(number.is_finite() && number.fract() == 0.0))
-            }
+            "Number.isNaN" => Ok(Value::Boolean(
+                matches!(argument(0), Value::Number(value) if value.is_nan()),
+            )),
+            "Number.isFinite" => Ok(Value::Boolean(
+                matches!(argument(0), Value::Number(value) if value.is_finite()),
+            )),
+            "Number.isInteger" => Ok(Value::Boolean(
+                matches!(argument(0), Value::Number(value) if value.is_finite() && value.fract() == 0.0),
+            )),
             "Number.isSafeInteger" => {
-                let number = to_number(&argument(0));
-                Ok(Value::Boolean(
-                    number.is_finite()
-                        && number.fract() == 0.0
-                        && number.abs() <= 9_007_199_254_740_991.0,
-                ))
+                Ok(Value::Boolean(matches!(argument(0), Value::Number(value)
+                    if value.is_finite()
+                        && value.fract() == 0.0
+                        && value.abs() <= 9_007_199_254_740_991.0)))
             }
             "Number.parseInt" => Ok(Value::Number(parse_int(
                 &to_js_string(&argument(0)),
@@ -2394,14 +2395,41 @@ impl<'a> Interpreter<'a> {
             }
             "Number.toFixed" => {
                 let number = as_number(receiver, span)?;
-                let digits = to_number(&argument(0)).clamp(0.0, 100.0) as usize;
+                let digits =
+                    optional_digits(arguments.first(), "toFixed", 0, 100, span)?.unwrap_or(0);
+                if number.abs() >= 1e21 {
+                    return Ok(Value::String(format_number(number)));
+                }
                 Ok(Value::String(format!("{number:.digits$}")))
+            }
+            "Number.toPrecision" => {
+                let number = as_number(receiver, span)?;
+                match optional_digits(arguments.first(), "toPrecision", 1, 100, span)? {
+                    None => Ok(Value::String(format_number(number))),
+                    Some(precision) => Ok(Value::String(number_to_precision(number, precision))),
+                }
+            }
+            "Number.toExponential" => {
+                let number = as_number(receiver, span)?;
+                let digits = optional_digits(arguments.first(), "toExponential", 0, 100, span)?;
+                Ok(Value::String(number_to_exponential(number, digits)))
             }
             "Number.toString" => {
                 let number = as_number(receiver, span)?;
                 let radix = match arguments.first() {
                     None | Some(Value::Undefined) => 10,
-                    Some(value) => to_number(value) as u32,
+                    Some(value) => {
+                        let number = to_number(value);
+                        let radix = if number.is_nan() { 0.0 } else { number.trunc() };
+                        if !(2.0..=36.0).contains(&radix) {
+                            return Err(RuntimeError::new(
+                                RuntimeErrorKind::RangeError,
+                                "toString() radix must be between 2 and 36.",
+                                span,
+                            ));
+                        }
+                        radix as u32
+                    }
                 };
                 Ok(Value::String(number_to_string(number, radix)))
             }
@@ -3366,6 +3394,8 @@ fn string_method(name: &str) -> Option<&'static str> {
 fn number_method(name: &str) -> Option<&'static str> {
     Some(match name {
         "toFixed" => "Number.toFixed",
+        "toPrecision" => "Number.toPrecision",
+        "toExponential" => "Number.toExponential",
         "toString" => "Number.toString",
         "valueOf" => "Number.valueOf",
         _ => return None,
@@ -3932,6 +3962,119 @@ fn stringify_json_inner(value: &Value, ancestors: &mut Vec<usize>) -> Option<Str
     }
 }
 
+/// Coerces an optional method digit argument, enforcing the JavaScript range.
+fn optional_digits(
+    value: Option<&Value>,
+    method: &str,
+    minimum: usize,
+    maximum: usize,
+    span: Span,
+) -> Result<Option<usize>, RuntimeError> {
+    let Some(value) = value else {
+        return Ok(None);
+    };
+    if value.is_undefined() {
+        return Ok(None);
+    }
+    let number = to_number(value);
+    let digits = if number.is_nan() { 0.0 } else { number.trunc() };
+    if digits < minimum as f64 || digits > maximum as f64 {
+        return Err(RuntimeError::new(
+            RuntimeErrorKind::RangeError,
+            format!("{method}() digits argument must be between {minimum} and {maximum}."),
+            span,
+        ));
+    }
+    Ok(Some(digits as usize))
+}
+
+/// Formats a number with `precision` significant digits, matching the fixed
+/// and exponential selection rules of `Number.prototype.toPrecision`.
+fn number_to_precision(value: f64, precision: usize) -> String {
+    if value.is_nan() {
+        return "NaN".to_owned();
+    }
+    if value.is_infinite() {
+        return if value < 0.0 { "-Infinity" } else { "Infinity" }.to_owned();
+    }
+    if value == 0.0 {
+        return if precision == 1 {
+            "0".to_owned()
+        } else {
+            format!("0.{}", "0".repeat(precision - 1))
+        };
+    }
+
+    let scientific = format!("{:.*e}", precision - 1, value);
+    let (mantissa, exponent) = scientific
+        .split_once('e')
+        .expect("scientific formatting always contains an exponent");
+    let exponent: i32 = exponent.parse().unwrap_or(0);
+    let negative = mantissa.starts_with('-');
+    let digits = mantissa
+        .chars()
+        .filter(|character| character.is_ascii_digit())
+        .collect::<String>();
+
+    let mut output = String::new();
+    if negative {
+        output.push('-');
+    }
+    if exponent < -6 || exponent >= precision as i32 {
+        output.push_str(&digits[..1]);
+        if precision > 1 {
+            output.push('.');
+            output.push_str(&digits[1..]);
+        }
+        output.push('e');
+        if exponent >= 0 {
+            output.push('+');
+        }
+        output.push_str(&exponent.to_string());
+    } else if exponent >= 0 {
+        let point = exponent as usize + 1;
+        if point >= precision {
+            output.push_str(&digits);
+            output.push_str(&"0".repeat(point - precision));
+        } else {
+            output.push_str(&digits[..point]);
+            output.push('.');
+            output.push_str(&digits[point..]);
+        }
+    } else {
+        output.push_str("0.");
+        output.push_str(&"0".repeat((-exponent - 1) as usize));
+        output.push_str(&digits);
+    }
+    output
+}
+
+/// Formats a number in exponential notation. Without `digits`, the shortest
+/// round-trip mantissa is used.
+fn number_to_exponential(value: f64, digits: Option<usize>) -> String {
+    if value.is_nan() {
+        return "NaN".to_owned();
+    }
+    if value.is_infinite() {
+        return if value < 0.0 { "-Infinity" } else { "Infinity" }.to_owned();
+    }
+    let text = match digits {
+        Some(digits) => format!("{value:.digits$e}"),
+        None => format!("{value:e}"),
+    };
+    match text.split_once('e') {
+        Some((mantissa, exponent)) => {
+            let exponent: i32 = exponent.parse().unwrap_or(0);
+            if exponent >= 0 {
+                format!("{mantissa}e+{exponent}")
+            } else {
+                format!("{mantissa}e{exponent}")
+            }
+        }
+        None => text,
+    }
+}
+
 fn number_to_string(number: f64, radix: u32) -> String {
     if radix == 10 || !(2..=36).contains(&radix) || !number.is_finite() || number.fract() != 0.0 {
         return format_number(number);
@@ -4430,7 +4573,56 @@ fn format_number(value: f64) -> String {
             "Infinity".to_owned()
         };
     }
-    value.to_string()
+    if value == 0.0 {
+        return "0".to_owned();
+    }
+
+    // Rust's shortest round-trip exponential form supplies the digits; the
+    // fixed/exponential switch below follows ECMAScript Number::toString.
+    let scientific = format!("{value:e}");
+    let (mantissa, exponent) = scientific
+        .split_once('e')
+        .expect("exponential formatting always contains an exponent");
+    let exponent: i32 = exponent.parse().unwrap_or(0);
+    let negative = mantissa.starts_with('-');
+    let digits = mantissa
+        .chars()
+        .filter(|character| character.is_ascii_digit())
+        .collect::<String>();
+
+    let mut output = String::new();
+    if negative {
+        output.push('-');
+    }
+    if (-6..=20).contains(&exponent) {
+        if exponent >= 0 {
+            let point = exponent as usize + 1;
+            if digits.len() <= point {
+                output.push_str(&digits);
+                output.push_str(&"0".repeat(point - digits.len()));
+            } else {
+                output.push_str(&digits[..point]);
+                output.push('.');
+                output.push_str(&digits[point..]);
+            }
+        } else {
+            output.push_str("0.");
+            output.push_str(&"0".repeat((-exponent - 1) as usize));
+            output.push_str(&digits);
+        }
+    } else {
+        output.push_str(&digits[..1]);
+        if digits.len() > 1 {
+            output.push('.');
+            output.push_str(&digits[1..]);
+        }
+        output.push('e');
+        if exponent >= 0 {
+            output.push('+');
+        }
+        output.push_str(&exponent.to_string());
+    }
+    output
 }
 
 fn to_property_key(value: &Value, span: Span) -> Result<String, RuntimeError> {
@@ -5629,6 +5821,75 @@ mod tests {
             run_value("return Math.LN2 === Math.log(2);"),
             Value::Boolean(true)
         );
+    }
+
+    #[test]
+    fn supports_number_precision_and_formatting() {
+        assert_eq!(
+            run_value("return (123.456).toPrecision(4);"),
+            string("123.5")
+        );
+        assert_eq!(
+            run_value("return (0.000001234).toPrecision(2);"),
+            string("0.0000012")
+        );
+        assert_eq!(
+            run_value("return (0.0000001234).toPrecision(2);"),
+            string("1.2e-7")
+        );
+        assert_eq!(
+            run_value("return (999.9).toPrecision(3);"),
+            string("1.00e+3")
+        );
+        assert_eq!(run_value("return (9.99).toPrecision(2);"), string("10"));
+        assert_eq!(run_value("return (1).toPrecision(3);"), string("1.00"));
+        assert_eq!(run_value("return (100).toPrecision(2);"), string("1.0e+2"));
+        assert_eq!(run_value("return (0).toPrecision(3);"), string("0.00"));
+        assert_eq!(run_value("return (-1.234).toPrecision(2);"), string("-1.2"));
+
+        assert_eq!(
+            run_value("return (123.456).toExponential();"),
+            string("1.23456e+2")
+        );
+        assert_eq!(
+            run_value("return (123.456).toExponential(2);"),
+            string("1.23e+2")
+        );
+        assert_eq!(run_value("return (0).toExponential();"), string("0e+0"));
+        assert_eq!(run_value("return (0).toExponential(2);"), string("0.00e+0"));
+        assert_eq!(run_value("return (1).toExponential(2);"), string("1.00e+0"));
+        assert_eq!(run_value("return (1.005).toFixed(2);"), string("1.00"));
+        assert_eq!(run_value("return (1e21).toFixed(2);"), string("1e+21"));
+
+        assert_eq!(
+            run_value(
+                r#"return [Number.isNaN("NaN"), Number.isFinite("5"), Number.isInteger("5"), Number.isSafeInteger(5), Number.isSafeInteger(9007199254740992)].join(",");"#
+            ),
+            string("false,false,false,true,false")
+        );
+        assert_eq!(run_value("return Number.isNaN(NaN);"), Value::Boolean(true));
+        assert_eq!(
+            run_value("return Number.isFinite(5);"),
+            Value::Boolean(true)
+        );
+
+        assert_eq!(run_value("return String(1e21);"), string("1e+21"));
+        assert_eq!(
+            run_value("return String(1e20);"),
+            string("100000000000000000000")
+        );
+        assert_eq!(run_value("return String(1e-7);"), string("1e-7"));
+        assert_eq!(run_value("return String(1e-6);"), string("0.000001"));
+        assert_eq!(run_value("return String(-0);"), string("0"));
+        assert_eq!(
+            run_value("return String(0.1 + 0.2);"),
+            string("0.30000000000000004")
+        );
+
+        let error = run("return (5).toString(1);").expect_err("invalid radix");
+        assert_eq!(error.kind(), super::RuntimeErrorKind::RangeError);
+        let error = run("return (1).toPrecision(0);").expect_err("invalid precision");
+        assert_eq!(error.kind(), super::RuntimeErrorKind::RangeError);
     }
 
     #[test]
