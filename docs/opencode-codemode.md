@@ -124,9 +124,10 @@ shadowingできる。
 - `Math`: abs、cbrt、ceil、floor、round、trunc、max、min、pow、sqrt、hypot、
   sign、log、log2、log10、exp、sin、cos、tan、PI、E、LN2、LN10、LOG2E、
   LOG10E、SQRT2、SQRT1_2。
-- `JSON`: parse、stringify。stringifyは挿入順を保持し、関数と `undefined` は
-  objectから省略、arrayでは `null` にする。第3引数のindent (数値0..10または
-  先頭10文字の文字列) を受け付ける。replacerの配列・関数は
+- `JSON`: parse、stringify。objectのkey順はECMAScriptと同じく配列indexの
+  昇順、その後に挿入順で、parseでも入力順を保つ。stringifyは関数と
+  `undefined` をobjectから省略、arrayでは `null` にする。第3引数のindent
+  (数値0..10または先頭10文字の文字列) を受け付ける。replacerの配列・関数は
   `UnsupportedSyntax`、循環参照と深すぎる値は `TypeError` にする。
 - `Number` statics: `Number.isNaN`、`isFinite`、`isInteger`、`isSafeInteger`、
   `parseInt`、`parseFloat`、定数 (`MAX_SAFE_INTEGER` など)。
@@ -135,7 +136,10 @@ shadowingできる。
   `keys` はdata objectと配列を受け、Date/Map/Set/Promiseでは空配列を返す。
   `values` / `entries` / `hasOwn` はdata objectのみを受け、配列は `TypeError`
   にする。`assign` は全引数をsourceとして新しいobjectを返し、sandbox値は
-  無視する。fromEntriesのkeyは `String(...)` でcoercionする。
+  無視する。fromEntriesのkeyは `String(...)` でcoercionする。列挙は
+  ECMAScriptのproperty順 (配列indexの昇順、その後に挿入順) で行い、
+  `Object.keys` / `values` / `entries`、`for...in`、`JSON.stringify`、
+  spread、`Object.assign` に適用する。
 - `Array`: isArray、of、from (array-like含む)。インスタンスmethodは map、filter、forEach、
   reduce、reduceRight、find、findIndex、findLast、findLastIndex、some、
   every、join、slice、includes、indexOf、lastIndexOf、push、pop、shift、
@@ -143,12 +147,14 @@ shadowingできる。
   with、at、splice、fill、copyWithin、keys、values、entries。
   `keys` / `values` / `entries` はiteratorではなく配列を返す。
   `includes` はSameValueZero、`indexOf` / `lastIndexOf` はstrict equalityで
-  比較する。
+  比較する。`sort` / `toSorted` の既定比較は `String(...)` のUTF-16 code
+  unit順で、`undefined` は末尾に置く。
 - `String` instance methods: split、slice、substring、substr、indexOf、lastIndexOf、
   includes、startsWith、endsWith、trim系 (trimLeft/trimRight含む)、
   case変換、charAt、charCodeAt、codePointAt、at、padStart、padEnd、repeat、
   replace、replaceAll、concat、toString、localeCompare。`replace` 系は
-  `$$` / `$&` / ``$` `` / `$'` のreplacement patternを展開する。
+  `$$` / `$&` / ``$` `` / `$'` のreplacement patternを展開する。trim系は
+  BOM (U+FEFF) も除去し、`<` / `>` の文字列比較はUTF-16 code unit順になる。
   `normalize` とRegExp依存のmatch系は未実装。
 - `Number` instance methods: toFixed、toPrecision、toExponential、toString
   (radix 2..36の整数)、valueOf。digitsが範囲外なら `RangeError` にする。

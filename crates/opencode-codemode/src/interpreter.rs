@@ -25,7 +25,8 @@ use oxc_syntax::operator::BinaryOperator;
 use crate::limits::ToolCallBudget;
 use crate::tools::{ToolError, ToolHost};
 use crate::value::{
-    check_data, is_blocked_member, ErrorKind, FunctionId, MapValue, PromiseState, SetValue, Value,
+    check_data, is_blocked_member, ordered_keys, ErrorKind, FunctionId, MapValue, PromiseState,
+    SetValue, Value,
 };
 
 /// Maximum nested user-function calls before the interpreter raises a
@@ -901,14 +902,17 @@ impl<'a> Interpreter<'a> {
                             match value {
                                 Value::Null | Value::Undefined => {}
                                 Value::Object(source) => {
-                                    for (key, value) in source.borrow().iter() {
-                                        if is_blocked_member(key) {
+                                    let source = source.borrow();
+                                    for key in ordered_keys(&source) {
+                                        if is_blocked_member(&key) {
                                             return Err(RuntimeError::type_error(
                                                 format!("Property '{key}' is not available in CodeMode."),
                                                 spread.span,
                                             ));
                                         }
-                                        values.insert(key.clone(), value.clone());
+                                        let value =
+                                            source.get(&key).expect("ordered keys exist").clone();
+                                        values.insert(key, value);
                                     }
                                 }
                                 Value::Error(error) => {
@@ -1715,14 +1719,16 @@ impl<'a> Interpreter<'a> {
                     match source {
                         Value::Undefined | Value::Null => continue,
                         Value::Object(object) => {
-                            for (key, value) in object.borrow().iter() {
-                                if is_blocked_member(key) {
+                            let source = object.borrow();
+                            for key in ordered_keys(&source) {
+                                if is_blocked_member(&key) {
                                     return Err(RuntimeError::type_error(
                                         format!("Property '{key}' is not available in CodeMode."),
                                         _span,
                                     ));
                                 }
-                                merged.insert(key.clone(), value.clone());
+                                let value = source.get(&key).expect("ordered keys exist").clone();
+                                merged.insert(key, value);
                             }
                         }
                         Value::Error(error) => {
@@ -1832,7 +1838,29 @@ impl<'a> Interpreter<'a> {
                     index += 1;
                 }
             }
-            _ => items.sort_by_cached_key(to_js_string),
+            _ => {
+                let mut keyed = items
+                    .iter()
+                    .cloned()
+                    .map(|item| {
+                        let key = if item.is_undefined() {
+                            None
+                        } else {
+                            Some(to_js_string(&item).encode_utf16().collect::<Vec<u16>>())
+                        };
+                        (key, item)
+                    })
+                    .collect::<Vec<_>>();
+                keyed.sort_by(|(left, _), (right, _)| match (left, right) {
+                    (None, None) => std::cmp::Ordering::Equal,
+                    (None, Some(_)) => std::cmp::Ordering::Greater,
+                    (Some(_), None) => std::cmp::Ordering::Less,
+                    (Some(left), Some(right)) => left.cmp(right),
+                });
+                for (slot, (_, item)) in items.iter_mut().zip(keyed) {
+                    *slot = item;
+                }
+            }
         }
         Ok(())
     }
@@ -2378,12 +2406,20 @@ impl<'a> Interpreter<'a> {
                 };
                 Ok(Value::Boolean(result))
             }
-            "String.trim" => Ok(Value::String(as_string(receiver, span)?.trim().to_owned())),
+            "String.trim" => Ok(Value::String(
+                as_string(receiver, span)?
+                    .trim_matches(is_js_whitespace)
+                    .to_owned(),
+            )),
             "String.trimStart" => Ok(Value::String(
-                as_string(receiver, span)?.trim_start().to_owned(),
+                as_string(receiver, span)?
+                    .trim_start_matches(is_js_whitespace)
+                    .to_owned(),
             )),
             "String.trimEnd" => Ok(Value::String(
-                as_string(receiver, span)?.trim_end().to_owned(),
+                as_string(receiver, span)?
+                    .trim_end_matches(is_js_whitespace)
+                    .to_owned(),
             )),
             "String.toUpperCase" => Ok(Value::String(as_string(receiver, span)?.to_uppercase())),
             "String.toLowerCase" => Ok(Value::String(as_string(receiver, span)?.to_lowercase())),
@@ -3944,7 +3980,7 @@ fn array_like_items(value: &Value) -> Option<Vec<Value>> {
 
 fn own_keys(value: &Value) -> Vec<String> {
     match value {
-        Value::Object(object) => object.borrow().keys().cloned().collect(),
+        Value::Object(object) => ordered_keys(&object.borrow()),
         Value::Array(array) => (0..array.borrow().len())
             .map(|index| index.to_string())
             .collect(),
@@ -3954,6 +3990,12 @@ fn own_keys(value: &Value) -> Vec<String> {
         Value::Error(_) => vec!["name".to_owned(), "message".to_owned()],
         _ => Vec::new(),
     }
+}
+
+/// Whitespace trimmed by `String.prototype.trim`, including the BOM that
+/// `char::is_whitespace` does not cover.
+fn is_js_whitespace(character: char) -> bool {
+    character.is_whitespace() || character == '\u{FEFF}'
 }
 
 fn json_to_value(json: &serde_json::Value, span: Span) -> Result<Value, RuntimeError> {
@@ -4084,13 +4126,15 @@ fn stringify_json_inner(
                 return Err(JsonStringifyError::TooDeep);
             }
             ancestors.push(identity);
+            let source = object.borrow();
             let mut parts = Vec::new();
-            for (key, value) in object.borrow().iter() {
+            for key in ordered_keys(&source) {
+                let value = source.get(&key).expect("ordered keys exist");
                 let Some(serialized) = stringify_json_inner(value, ancestors, indent, depth + 1)?
                 else {
                     continue;
                 };
-                let key = serde_json::to_string(key).unwrap_or_default();
+                let key = serde_json::to_string(&key).unwrap_or_default();
                 if indent.is_empty() {
                     parts.push(format!("{key}:{serialized}"));
                 } else {
@@ -4312,10 +4356,9 @@ fn iterable_items(value: &Value, span: Span) -> Result<Vec<Value>, RuntimeError>
 
 fn enumerable_keys(value: &Value) -> Vec<Value> {
     match value {
-        Value::Object(object) => object
-            .borrow()
-            .keys()
-            .map(|key| Value::String(key.clone()))
+        Value::Object(object) => ordered_keys(&object.borrow())
+            .into_iter()
+            .map(Value::String)
             .collect(),
         Value::Array(array) => (0..array.borrow().len())
             .map(|index| Value::String(index.to_string()))
@@ -4392,14 +4435,17 @@ fn loose_equals(left: &Value, right: &Value) -> bool {
     }
 }
 
+/// Compares strings by UTF-16 code units, as JavaScript relational operators do.
+fn utf16_cmp(left: &str, right: &str) -> std::cmp::Ordering {
+    left.encode_utf16().cmp(right.encode_utf16())
+}
+
 fn compare(left: &Value, right: &Value, _span: Span) -> Result<f64, RuntimeError> {
     match (left, right) {
-        (Value::String(left), Value::String(right)) => Ok(if left < right {
-            -1.0
-        } else if left > right {
-            1.0
-        } else {
-            0.0
+        (Value::String(left), Value::String(right)) => Ok(match utf16_cmp(left, right) {
+            std::cmp::Ordering::Less => -1.0,
+            std::cmp::Ordering::Equal => 0.0,
+            std::cmp::Ordering::Greater => 1.0,
         }),
         _ => {
             let left = to_number(left);
@@ -4551,12 +4597,13 @@ fn format_console_value(value: &Value, seen: &mut Vec<usize>, depth: usize) -> S
                 return "[Circular]".to_owned();
             }
             seen.push(pointer);
-            let entries = object
-                .borrow()
-                .iter()
-                .map(|(key, value)| {
-                    let key = serde_json::to_string(key).unwrap_or_default();
-                    format!("{key}:{}", format_console_value(value, seen, depth + 1))
+            let source = object.borrow();
+            let entries = ordered_keys(&source)
+                .into_iter()
+                .map(|key| {
+                    let value = source.get(&key).expect("ordered keys exist");
+                    let name = serde_json::to_string(&key).unwrap_or_default();
+                    format!("{name}:{}", format_console_value(value, seen, depth + 1))
                 })
                 .collect::<Vec<_>>()
                 .join(",");
@@ -6419,6 +6466,80 @@ mod tests {
                 .kind(),
             super::RuntimeErrorKind::TypeError
         );
+    }
+
+    #[test]
+    fn matches_upstream_property_order_and_sort_semantics() {
+        assert_eq!(
+            run_value(r#"return Object.keys({ b: 1, 2: 2, 1: 3 }).join(",");"#),
+            string("1,2,b")
+        );
+        assert_eq!(
+            run_value(r#"return Object.keys({ "01": 1, 0: 2, "4294967295": 3 }).join(",");"#),
+            string("0,01,4294967295")
+        );
+        assert_eq!(
+            run_value(r#"return Object.keys({ b: 1, "4294967294": 2, 0: 3 }).join(",");"#),
+            string("0,4294967294,b")
+        );
+        assert_eq!(
+            run_value(r#"return Object.keys({ "1.5": 1, "-1": 2 }).join(",");"#),
+            string("1.5,-1")
+        );
+        assert_eq!(
+            run_value(r#"return JSON.stringify({ b: 1, 2: 2, 1: 3 });"#),
+            string(r#"{"1":3,"2":2,"b":1}"#)
+        );
+        assert_eq!(
+            run_value(r#"return JSON.stringify(JSON.parse('{"b":1,"a":2,"2":3,"1":4}'));"#),
+            string(r#"{"1":4,"2":3,"b":1,"a":2}"#)
+        );
+        assert_eq!(
+            run_value(
+                r#"let keys = ""; for (const key in { b: 1, 2: 2, 1: 3 }) keys += key; return keys;"#
+            ),
+            string("12b")
+        );
+        assert_eq!(
+            run_value(r#"return Object.keys({ ...{ b: 1, 2: 2, 1: 3 } }).join(",");"#),
+            string("1,2,b")
+        );
+        assert_eq!(
+            run_value(r#"return Object.keys(Object.assign({}, { b: 1, 2: 2, 1: 3 })).join(",");"#),
+            string("1,2,b")
+        );
+        assert_eq!(
+            run_value(
+                r#"return Object.entries({ b: 1, 2: 2, 1: 3 }).map(([key]) => key).join(",");"#
+            ),
+            string("1,2,b")
+        );
+
+        assert_eq!(
+            run_value(
+                "return [\"😀\", \"\u{E000}\"].sort().map((value) => value.codePointAt(0)).join(',');"
+            ),
+            string("128512,57344")
+        );
+        assert_eq!(
+            run_value("return \"😀\" < \"\u{FFFF}\";"),
+            Value::Boolean(true)
+        );
+        assert_eq!(
+            run_value("return \"😀\" < \"\u{E000}\";"),
+            Value::Boolean(true)
+        );
+        assert_eq!(
+            run_value("return [undefined, 'z'].sort().map((value) => String(value)).join(',');"),
+            string("z,undefined")
+        );
+
+        assert_eq!(
+            run_value(r#"return "\u{FEFF} x \u{FEFF}".trim();"#),
+            string("x")
+        );
+        assert_eq!(run_value(r#"return "\u{FEFF}x".trimStart();"#), string("x"));
+        assert_eq!(run_value(r#"return "x\u{FEFF}".trimEnd();"#), string("x"));
     }
 
     #[test]

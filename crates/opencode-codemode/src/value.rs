@@ -423,6 +423,35 @@ pub enum Value {
     },
 }
 
+/// Returns the canonical array-index value of a property key, mirroring the
+/// ECMAScript array-index definition (0 .. 2^32 - 2, no leading zeros).
+pub(crate) fn array_index(key: &str) -> Option<u32> {
+    if key.is_empty() || (key.len() > 1 && key.starts_with('0')) {
+        return None;
+    }
+    let value = key.parse::<u32>().ok()?;
+    (value != u32::MAX).then_some(value)
+}
+
+/// Orders object keys like ECMAScript: array indices ascending, then the
+/// remaining keys in insertion order.
+pub(crate) fn ordered_keys(object: &IndexMap<String, Value>) -> Vec<String> {
+    let mut indices = Vec::new();
+    let mut names = Vec::new();
+    for key in object.keys() {
+        match array_index(key) {
+            Some(index) => indices.push((index, key.clone())),
+            None => names.push(key.clone()),
+        }
+    }
+    indices.sort_by_key(|(index, _)| *index);
+    indices
+        .into_iter()
+        .map(|(_, key)| key)
+        .chain(names)
+        .collect()
+}
+
 impl Value {
     /// Creates an empty object.
     pub fn object() -> Self {
@@ -589,9 +618,11 @@ impl Value {
                     return JsonValue::Null;
                 }
                 ancestors.push(identity);
-                let mut map = JsonMap::with_capacity(object.borrow().len());
-                for (key, value) in object.borrow().iter() {
-                    map.insert(key.clone(), value.to_json_inner(ancestors));
+                let object = object.borrow();
+                let mut map = JsonMap::with_capacity(object.len());
+                for key in ordered_keys(&object) {
+                    let value = object.get(&key).expect("ordered keys exist");
+                    map.insert(key, value.to_json_inner(ancestors));
                 }
                 ancestors.pop();
                 JsonValue::Object(map)
@@ -906,7 +937,18 @@ mod tests {
         let object = value.as_object().expect("object value");
         let keys: Vec<&str> = object.keys().map(String::as_str).collect();
         assert_eq!(keys, ["z", "a", "m"]);
-        assert_eq!(value.to_json().to_string(), r#"{"a":2.0,"m":3.0,"z":1.0}"#);
+        assert_eq!(value.to_json().to_string(), r#"{"z":1.0,"a":2.0,"m":3.0}"#);
+    }
+
+    #[test]
+    fn orders_object_json_keys_like_javascript() {
+        let value = object(&[
+            ("b", Value::Number(1.0)),
+            ("2", Value::Number(2.0)),
+            ("1", Value::Number(3.0)),
+        ]);
+
+        assert_eq!(value.to_json().to_string(), r#"{"1":3.0,"2":2.0,"b":1.0}"#);
     }
 
     #[test]
