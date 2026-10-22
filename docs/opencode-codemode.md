@@ -153,6 +153,25 @@ upstreamは未対応構文を評価到達時に拒否する。`inspect_support` 
 - 真の非同期実行、tool呼び出しの同時実行制御、未await rejectionの診断は
   未実装。境界に到達した未解決のPromiseは `InvalidDataValue` になる。
 
+## High-level execution API
+
+`execute_code(code, host, limits)` は upstream `CodeMode.execute` に相当する
+入口で、parse、評価、limit適用、data境界の正規化をまとめて行う。
+
+- 成功は `CodeModeResult::Success` で、`value` (JSON)、`logs`、`truncated`、
+  `tool_calls` を返す。`value` は `to_json` で正規化し、`NaN` / `Infinity` は
+  `null` になる。
+- 失敗は `CodeModeResult::Failure` で、`Diagnostic` と失敗までの `logs`、
+  `tool_calls` を返す。Rustの `Result` ではなくデータとして扱う。
+- `DiagnosticKind` は `ParseError`、`UnsupportedSyntax`、`InvalidDataValue`、
+  `ToolCallLimitExceeded`、`TimeoutExceeded`、`ToolFailure`、
+  `ExecutionFailure` などを区別する。
+- `Location` は1-basedのlineとcolumnで、runtime errorのspanから算出する。
+  parse errorは位置を持たない。
+- `max_output_bytes` は値とlogsに適用し、超過時は `truncated` をtrueにして
+  upstreamと同じmarker文字列へ置き換える。
+- `tool_calls` は `maxToolCalls` の有無にかかわらず、admitされた順に記録する。
+
 ## 未実装
 
 - TypeScriptの型消去・transpile parity

@@ -34,7 +34,7 @@ This documentation set describes the current **OpenCodeRust** codebase
 - [Agent](opencode-agent.md) – Registration, execution, and messages
 - [CLI](opencode-cli.md) – `opencoderust` command and subcommands
 - [Command](opencode-command.md) – Slash commands and rendering
-- [CodeMode](opencode-codemode.md) – Confined interpreter parser foundation
+- [CodeMode](opencode-codemode.md) – Confined interpreter and execution API
 - [Config](opencode-config.md) – Configuration loading and merging
 - [Core](opencode-core.md) – Event bus and ID infrastructure
 - [Grep](opencode-grep.md) – Code and text search

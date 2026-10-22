@@ -2,6 +2,7 @@
 //! boundary, execution limits, synchronous evaluator, standard library, and
 //! host tool references.
 
+pub mod api;
 pub mod interpreter;
 pub mod limits;
 pub mod support;
@@ -15,6 +16,9 @@ use oxc_ast::ast::Program;
 use oxc_parser::{ParseOptions, Parser};
 use oxc_span::SourceType;
 
+pub use api::{
+    execute_code, CodeModeResult, Diagnostic, DiagnosticKind, Failure, Location, Success,
+};
 pub use interpreter::{execute, execute_with_host, Interpreter, RuntimeError, RuntimeErrorKind};
 pub use limits::{
     bound_logs, bound_output, bound_serialized_value, truncate_utf8, BoundedLogs, BoundedOutput,

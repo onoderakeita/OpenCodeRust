@@ -240,7 +240,7 @@ pub struct Interpreter<'a> {
     scope: Rc<RefCell<Scope>>,
     logs: Vec<String>,
     tool_host: Option<Box<dyn ToolHost>>,
-    tool_budget: Option<ToolCallBudget>,
+    tool_budget: ToolCallBudget,
     timeout: Option<Duration>,
     deadline: Option<Instant>,
     call_depth: usize,
@@ -262,7 +262,7 @@ impl<'a> Interpreter<'a> {
             scope: Rc::new(RefCell::new(Scope::global())),
             logs: Vec::new(),
             tool_host: None,
-            tool_budget: None,
+            tool_budget: ToolCallBudget::new(None),
             timeout: None,
             deadline: None,
             call_depth: 0,
@@ -283,8 +283,11 @@ impl<'a> Interpreter<'a> {
     }
 
     /// Applies an optional tool-call budget to this interpreter.
+    ///
+    /// Calls are recorded even without a budget so callers can report the
+    /// invocation order.
     pub fn set_tool_call_limit(&mut self, limit: Option<usize>) {
-        self.tool_budget = limit.map(|limit| ToolCallBudget::new(Some(limit)));
+        self.tool_budget = ToolCallBudget::new(limit);
     }
 
     /// Applies the tool-call and timeout portions of an execution limit set.
@@ -292,9 +295,7 @@ impl<'a> Interpreter<'a> {
     /// Output bounds are applied by the caller because they depend on how the
     /// result is serialized for the model.
     pub fn set_limits(&mut self, limits: &crate::limits::ExecutionLimits) {
-        self.tool_budget = limits
-            .max_tool_calls
-            .map(|limit| ToolCallBudget::new(Some(limit)));
+        self.tool_budget = ToolCallBudget::new(limits.max_tool_calls);
         self.timeout = limits.timeout_ms.map(Duration::from_millis);
     }
 
@@ -326,7 +327,7 @@ impl<'a> Interpreter<'a> {
 
     /// Admitted tool calls in invocation order.
     pub fn tool_calls(&self) -> &[String] {
-        self.tool_budget.as_ref().map_or(&[], ToolCallBudget::calls)
+        self.tool_budget.calls()
     }
 
     fn install_globals(&mut self) {
@@ -2219,15 +2220,13 @@ impl<'a> Interpreter<'a> {
             ));
         }
         let name = path.join(".");
-        if let Some(budget) = self.tool_budget.as_mut() {
-            budget.admit(name.clone()).map_err(|error| {
-                RuntimeError::new(
-                    RuntimeErrorKind::ToolCallLimitExceeded,
-                    error.to_string(),
-                    span,
-                )
-            })?;
-        }
+        self.tool_budget.admit(name.clone()).map_err(|error| {
+            RuntimeError::new(
+                RuntimeErrorKind::ToolCallLimitExceeded,
+                error.to_string(),
+                span,
+            )
+        })?;
         for (index, argument) in arguments.iter().enumerate() {
             check_data(argument, &format!("tool argument {}", index + 1)).map_err(|error| {
                 RuntimeError::new(RuntimeErrorKind::InvalidDataValue, error.to_string(), span)
