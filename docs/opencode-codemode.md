@@ -82,8 +82,11 @@ upstreamは未対応構文を評価到達時に拒否する。`inspect_support` 
   arrow/function、assignment (compound/logical)、await (通過)、
   binary/logical/unary、call、conditional、member、optional chain、update。
 - 配列とobjectは共有参照で、代入はaliasし、`===` は参照同一性で比較する。
+- 文字列連結時のobjectは `[object Object]`、配列は要素のカンマ結合になる。
+- 返り値はデータ境界で検証し、関数・tool参照・循環・深さ超過を
+  `InvalidDataValue` として拒否する。
 - `typeof` は未宣言識別子に `"undefined"` を返す。
-- `await` は値をそのまま返す。promise導入時に解決器へ置き換える。
+- `await` は値をそのまま返す。tool呼び出しは同期hostで即時に解決する。
 - 配列・文字列・数値のmethodは値として取り出せる (`const map = [].map`)。
 - 関数呼び出しの深さと文・式の評価深さは、それぞれ64で `RangeError` にする。
   Rustの評価frameがJavaScriptより大きいための固定上限である。
@@ -94,7 +97,8 @@ upstreamは未対応構文を評価到達時に拒否する。`inspect_support` 
 ## Stdlib baseline
 
 `install_globals` は `console`、`Math`、`JSON`、`Object`、`Array`、`String`、
-`Number`、`Boolean`、`parseInt`、`parseFloat`、`isNaN`、`isFinite` を登録する。
+`Number`、`Boolean`、`Promise`、`parseInt`、`parseFloat`、`isNaN`、`isFinite`、
+`undefined`、`NaN`、`Infinity` を登録する。
 
 - `console.log/info/warn/error` は引数を空白で連結し、interpreterの
   `logs()` に保存する。出力先は呼び出し側が決める。
@@ -103,15 +107,20 @@ upstreamは未対応構文を評価到達時に拒否する。`inspect_support` 
 - `JSON`: parse、stringify。stringifyは挿入順を保持し、関数と `undefined` は
   objectから省略、arrayでは `null` にする。循環参照と深い値は `null` に
   落として停止する。
+- `Number` statics: `Number.isNaN`、`isFinite`、`isInteger`、`isSafeInteger`、
+  `parseInt`、`parseFloat`、定数 (`MAX_SAFE_INTEGER` など)。
+- `String` statics: `String.fromCharCode`、`String.fromCodePoint`。
 - `Object`: keys、values、entries、fromEntries、assign。
 - `Array`: isArray、from。インスタンスmethodは map、filter、forEach、
   reduce、reduceRight、find、findIndex、some、every、join、slice、
   includes、indexOf、push、pop、shift、unshift、reverse、concat、flat、
-  sort、at。
-- `String`: split、slice、substring、substr、indexOf、lastIndexOf、
-  includes、startsWith、endsWith、trim系、case変換、charAt、charCodeAt、
-  at、padStart、padEnd、repeat、replace、concat。
-- `Number`: toFixed、toString (radix 2..36の整数)、valueOf。
+  sort、at、splice、fill、copyWithin、keys、values、entries。
+  `keys` / `values` / `entries` はiteratorではなく配列を返す。
+- `String` instance methods: split、slice、substring、substr、indexOf、lastIndexOf、
+  includes、startsWith、endsWith、trim系 (trimLeft/trimRight含む)、
+  case変換、charAt、charCodeAt、at、padStart、padEnd、repeat、replace、
+  concat、localeCompare。`normalize` は未実装。
+- `Number` instance methods: toFixed、toString (radix 2..36の整数)、valueOf。
 
 文字列のindexはUTF-16 code unitではなくUnicode scalar値で数える。
 `toUpperCase` / `toLowerCase` はRustのUnicode変換を使う。callbackを取る

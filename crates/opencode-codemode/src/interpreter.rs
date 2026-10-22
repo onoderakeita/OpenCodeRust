@@ -377,6 +377,9 @@ impl<'a> Interpreter<'a> {
             ("Array", array),
             ("Promise", promise),
             ("tools", Value::tool_ref(Vec::new())),
+            ("undefined", Value::Undefined),
+            ("NaN", Value::Number(f64::NAN)),
+            ("Infinity", Value::Number(f64::INFINITY)),
             ("String", Value::Builtin("String")),
             ("Number", Value::Builtin("Number")),
             ("Boolean", Value::Builtin("Boolean")),
@@ -405,7 +408,16 @@ impl<'a> Interpreter<'a> {
         for statement in &program.body {
             match self.eval_statement(statement)? {
                 Flow::Normal => {}
-                Flow::Return(value) => return Ok(value),
+                Flow::Return(value) => {
+                    check_data(&value, "result").map_err(|error| {
+                        RuntimeError::new(
+                            RuntimeErrorKind::InvalidDataValue,
+                            error.to_string(),
+                            statement.span(),
+                        )
+                    })?;
+                    return Ok(value);
+                }
                 Flow::Break | Flow::Continue => {
                     return Err(RuntimeError::new(
                         RuntimeErrorKind::ExecutionFailure,
@@ -853,7 +865,8 @@ impl<'a> Interpreter<'a> {
                                     }
                                 }
                                 _ => {
-                                    return Err(RuntimeError::type_error(
+                                    return Err(RuntimeError::new(
+                                        RuntimeErrorKind::InvalidDataValue,
                                         "Object spread requires a data object in CodeMode.",
                                         spread.span,
                                     ));
@@ -1277,6 +1290,61 @@ impl<'a> Interpreter<'a> {
             "parseFloat" => Ok(Value::Number(parse_float(&to_js_string(&argument(0))))),
             "isNaN" => Ok(Value::Boolean(to_number(&argument(0)).is_nan())),
             "isFinite" => Ok(Value::Boolean(to_number(&argument(0)).is_finite())),
+            "Number.isNaN" => Ok(Value::Boolean(to_number(&argument(0)).is_nan())),
+            "Number.isFinite" => Ok(Value::Boolean(to_number(&argument(0)).is_finite())),
+            "Number.isInteger" => {
+                let number = to_number(&argument(0));
+                Ok(Value::Boolean(number.is_finite() && number.fract() == 0.0))
+            }
+            "Number.isSafeInteger" => {
+                let number = to_number(&argument(0));
+                Ok(Value::Boolean(
+                    number.is_finite()
+                        && number.fract() == 0.0
+                        && number.abs() <= 9_007_199_254_740_991.0,
+                ))
+            }
+            "Number.parseInt" => Ok(Value::Number(parse_int(
+                &to_js_string(&argument(0)),
+                to_number(&argument(1)),
+            ))),
+            "Number.parseFloat" => Ok(Value::Number(parse_float(&to_js_string(&argument(0))))),
+            "String.fromCharCode" => {
+                let mut text = String::new();
+                for value in arguments {
+                    let code = to_number(value);
+                    let code = if code.is_nan() {
+                        0
+                    } else {
+                        (code.trunc() as i64).rem_euclid(65_536) as u32
+                    };
+                    text.push(char::from_u32(code).unwrap_or('\0'));
+                }
+                Ok(Value::String(text))
+            }
+            "String.fromCodePoint" => {
+                let mut text = String::new();
+                for value in arguments {
+                    let code = to_number(value);
+                    let character = if code.is_finite()
+                        && code.fract() == 0.0
+                        && (0.0..=1_114_111.0).contains(&code)
+                    {
+                        char::from_u32(code as u32)
+                    } else {
+                        None
+                    };
+                    let Some(character) = character else {
+                        return Err(RuntimeError::new(
+                            RuntimeErrorKind::RangeError,
+                            format!("Invalid code point: {code}."),
+                            _span,
+                        ));
+                    };
+                    text.push(character);
+                }
+                Ok(Value::String(text))
+            }
             "Math.abs" => Ok(Value::Number(to_number(&argument(0)).abs())),
             "Math.ceil" => Ok(Value::Number(to_number(&argument(0)).ceil())),
             "Math.floor" => Ok(Value::Number(to_number(&argument(0)).floor())),
@@ -1469,7 +1537,7 @@ impl<'a> Interpreter<'a> {
                 self.logs.push(
                     arguments
                         .iter()
-                        .map(to_js_string)
+                        .map(format_display)
                         .collect::<Vec<_>>()
                         .join(" "),
                 );
@@ -1741,6 +1809,98 @@ impl<'a> Interpreter<'a> {
                     items[index as usize].clone()
                 })
             }
+            "Array.splice" => {
+                let array = as_array_ref(receiver, span)?;
+                let length = array.borrow().len() as i64;
+                let start = normalize_index(&argument(0), length, 0).clamp(0, length) as usize;
+                let delete_count = if arguments.len() > 1 {
+                    let count = to_number(&argument(1));
+                    if count.is_nan() {
+                        0
+                    } else {
+                        count.max(0.0).min((length - start as i64) as f64) as usize
+                    }
+                } else {
+                    (length as usize) - start
+                };
+                let inserted = arguments.iter().skip(2).cloned().collect::<Vec<_>>();
+                let target = Rc::as_ptr(&array) as *const () as usize;
+                if inserted
+                    .iter()
+                    .any(|value| contains_identity(value, target, &mut Vec::new()))
+                {
+                    return Err(RuntimeError::new(
+                        RuntimeErrorKind::InvalidDataValue,
+                        "Array.splice cannot insert a value that contains the receiver.",
+                        span,
+                    ));
+                }
+                let removed = {
+                    let mut array = array.borrow_mut();
+                    let removed = array.drain(start..start + delete_count).collect::<Vec<_>>();
+                    for (offset, value) in inserted.into_iter().enumerate() {
+                        array.insert(start + offset, value);
+                    }
+                    removed
+                };
+                Ok(Value::array(removed))
+            }
+            "Array.fill" => {
+                let array = as_array_ref(receiver, span)?;
+                let length = array.borrow().len() as i64;
+                let value = argument(0);
+                let start = normalize_index(&argument(1), length, 0).clamp(0, length) as usize;
+                let end = normalize_index(&argument(2), length, length).clamp(0, length) as usize;
+                let mut items = array.borrow_mut();
+                for item in items.iter_mut().take(end).skip(start) {
+                    *item = value.clone();
+                }
+                drop(items);
+                Ok(receiver.clone())
+            }
+            "Array.copyWithin" => {
+                let array = as_array_ref(receiver, span)?;
+                let length = array.borrow().len() as i64;
+                let target = normalize_index(&argument(0), length, 0).clamp(0, length) as usize;
+                let start = normalize_index(&argument(1), length, 0).clamp(0, length) as usize;
+                let end = normalize_index(&argument(2), length, length).clamp(0, length) as usize;
+                let count = end.saturating_sub(start).min(length as usize - target);
+                let copied = {
+                    let items = array.borrow();
+                    items[start..start + count].to_vec()
+                };
+                let mut items = array.borrow_mut();
+                items[target..target + count].clone_from_slice(&copied);
+                drop(items);
+                Ok(receiver.clone())
+            }
+            "Array.keys" => {
+                let array = as_array_ref(receiver, span)?;
+                let length = array.borrow().len();
+                Ok(Value::array(
+                    (0..length)
+                        .map(|index| Value::Number(index as f64))
+                        .collect(),
+                ))
+            }
+            "Array.values" => {
+                let array = as_array_ref(receiver, span)?;
+                let items = array.borrow().clone();
+                Ok(Value::array(items))
+            }
+            "Array.entries" => {
+                let array = as_array_ref(receiver, span)?;
+                let items = array.borrow().clone();
+                Ok(Value::array(
+                    items
+                        .into_iter()
+                        .enumerate()
+                        .map(|(index, value)| {
+                            Value::array(vec![Value::Number(index as f64), value])
+                        })
+                        .collect(),
+                ))
+            }
             "String.split" => {
                 let text = as_string(receiver, span)?;
                 let limit = match arguments.get(1) {
@@ -1865,6 +2025,15 @@ impl<'a> Interpreter<'a> {
             )),
             "String.toUpperCase" => Ok(Value::String(as_string(receiver, span)?.to_uppercase())),
             "String.toLowerCase" => Ok(Value::String(as_string(receiver, span)?.to_lowercase())),
+            "String.localeCompare" => {
+                let text = as_string(receiver, span)?;
+                let other = to_js_string(&argument(0));
+                Ok(Value::Number(match text.cmp(&other) {
+                    std::cmp::Ordering::Less => -1.0,
+                    std::cmp::Ordering::Equal => 0.0,
+                    std::cmp::Ordering::Greater => 1.0,
+                }))
+            }
             "String.charAt" => {
                 let text = as_string(receiver, span)?;
                 let index = to_number(&argument(0));
@@ -2466,6 +2635,7 @@ impl<'a> Interpreter<'a> {
                     Err(_) => Ok(bound_method(object, string_method(key))),
                 }
             }
+            Value::Builtin(name) => Ok(builtin_property(name, key)),
             Value::Number(_) => Ok(bound_method(object, number_method(key))),
             Value::ToolRef(path) => {
                 let mut next = path.as_ref().clone();
@@ -2520,6 +2690,28 @@ impl<'a> Interpreter<'a> {
     }
 }
 
+fn builtin_property(name: &str, key: &str) -> Value {
+    match (name, key) {
+        ("Number", "isNaN") => Value::Builtin("Number.isNaN"),
+        ("Number", "isFinite") => Value::Builtin("Number.isFinite"),
+        ("Number", "isInteger") => Value::Builtin("Number.isInteger"),
+        ("Number", "isSafeInteger") => Value::Builtin("Number.isSafeInteger"),
+        ("Number", "parseInt") => Value::Builtin("Number.parseInt"),
+        ("Number", "parseFloat") => Value::Builtin("Number.parseFloat"),
+        ("Number", "MAX_SAFE_INTEGER") => Value::Number(9_007_199_254_740_991.0),
+        ("Number", "MIN_SAFE_INTEGER") => Value::Number(-9_007_199_254_740_991.0),
+        ("Number", "EPSILON") => Value::Number(f64::EPSILON),
+        ("Number", "MAX_VALUE") => Value::Number(f64::MAX),
+        ("Number", "MIN_VALUE") => Value::Number(f64::MIN_POSITIVE),
+        ("Number", "POSITIVE_INFINITY") => Value::Number(f64::INFINITY),
+        ("Number", "NEGATIVE_INFINITY") => Value::Number(f64::NEG_INFINITY),
+        ("Number", "NaN") => Value::Number(f64::NAN),
+        ("String", "fromCharCode") => Value::Builtin("String.fromCharCode"),
+        ("String", "fromCodePoint") => Value::Builtin("String.fromCodePoint"),
+        _ => Value::Undefined,
+    }
+}
+
 fn bound_method(receiver: &Value, method: Option<&'static str>) -> Value {
     match method {
         Some(method) => Value::BoundMethod {
@@ -2554,6 +2746,12 @@ fn array_method(name: &str) -> Option<&'static str> {
         "flat" => "Array.flat",
         "sort" => "Array.sort",
         "at" => "Array.at",
+        "splice" => "Array.splice",
+        "fill" => "Array.fill",
+        "copyWithin" => "Array.copyWithin",
+        "keys" => "Array.keys",
+        "values" => "Array.values",
+        "entries" => "Array.entries",
         _ => return None,
     })
 }
@@ -2572,6 +2770,9 @@ fn string_method(name: &str) -> Option<&'static str> {
         "trim" => "String.trim",
         "trimStart" => "String.trimStart",
         "trimEnd" => "String.trimEnd",
+        "trimLeft" => "String.trimStart",
+        "trimRight" => "String.trimEnd",
+        "localeCompare" => "String.localeCompare",
         "toUpperCase" => "String.toUpperCase",
         "toLowerCase" => "String.toLowerCase",
         "charAt" => "String.charAt",
@@ -3104,6 +3305,53 @@ fn to_number(value: &Value) -> f64 {
     }
 }
 
+fn contains_identity(value: &Value, target: usize, visited: &mut Vec<usize>) -> bool {
+    match value {
+        Value::Array(items) => {
+            let identity = Rc::as_ptr(items) as *const () as usize;
+            if identity == target {
+                return true;
+            }
+            if visited.contains(&identity) {
+                return false;
+            }
+            visited.push(identity);
+            let found = items
+                .borrow()
+                .iter()
+                .any(|item| contains_identity(item, target, visited));
+            visited.pop();
+            found
+        }
+        Value::Object(object) => {
+            let identity = Rc::as_ptr(object) as *const () as usize;
+            if identity == target {
+                return true;
+            }
+            if visited.contains(&identity) {
+                return false;
+            }
+            visited.push(identity);
+            let found = object
+                .borrow()
+                .values()
+                .any(|item| contains_identity(item, target, visited));
+            visited.pop();
+            found
+        }
+        _ => false,
+    }
+}
+
+fn format_display(value: &Value) -> String {
+    match value {
+        Value::Array(_) | Value::Object(_) => {
+            stringify_json(value).unwrap_or_else(|| to_js_string(value))
+        }
+        _ => to_js_string(value),
+    }
+}
+
 fn to_int32(value: f64) -> i32 {
     if !value.is_finite() {
         return 0;
@@ -3140,7 +3388,7 @@ fn to_js_string(value: &Value) -> String {
             })
             .collect::<Vec<_>>()
             .join(","),
-        Value::Object(_) => value.to_json().to_string(),
+        Value::Object(_) => "[object Object]".to_owned(),
         Value::Function(_) | Value::Builtin(_) | Value::BoundMethod { .. } => {
             "[Function]".to_owned()
         }
@@ -3646,6 +3894,98 @@ mod tests {
         let error = interpreter.run(&program).expect_err("should fail");
         assert_eq!(error.kind(), super::RuntimeErrorKind::ToolCallLimitExceeded);
         assert_eq!(interpreter.tool_calls(), ["echo"]);
+    }
+
+    #[test]
+    fn evaluates_parity_globals_and_number_statics() {
+        let source = r#"
+            return [
+                Number.isNaN(NaN),
+                Number.isFinite(Infinity),
+                Number.isInteger(3),
+                Number.isSafeInteger(2 ** 53),
+                String.fromCharCode(65, 66),
+                undefined === undefined,
+                Infinity > 1e9,
+            ];
+        "#;
+        let value = run_value(source);
+        let array = value.as_array().expect("array result");
+        assert_eq!(array[0], Value::Boolean(true));
+        assert_eq!(array[1], Value::Boolean(false));
+        assert_eq!(array[2], Value::Boolean(true));
+        assert_eq!(array[3], Value::Boolean(false));
+        assert_eq!(array[4], string("AB"));
+        assert_eq!(array[5], Value::Boolean(true));
+        assert_eq!(array[6], Value::Boolean(true));
+    }
+
+    #[test]
+    fn evaluates_parity_array_methods() {
+        let source = r#"
+            const values = [1, 2, 3, 4];
+            const removed = values.splice(1, 2);
+            values.fill(0, 0, 1);
+            const copied = [1, 2, 3, 4, 5].copyWithin(0, 3);
+            return [
+                removed.join(","),
+                values.join(","),
+                copied.join(","),
+                [10, 20].keys().join(","),
+                [7, 8].values().join(","),
+                JSON.stringify([7].entries()),
+            ];
+        "#;
+        let value = run_value(source);
+        let array = value.as_array().expect("array result");
+        assert_eq!(array[0], string("2,3"));
+        assert_eq!(array[1], string("0,4"));
+        assert_eq!(array[2], string("4,5,3,4,5"));
+        assert_eq!(array[3], string("0,1"));
+        assert_eq!(array[4], string("7,8"));
+        assert_eq!(array[5], string("[[0,7]]"));
+    }
+
+    #[test]
+    fn coerces_objects_like_javascript() {
+        let source = r#"
+            let text = "a";
+            text += { b: 1 };
+            const other = "a" + [1, 2];
+            return [text, other, String({}), `${[]}`];
+        "#;
+        let value = run_value(source);
+        let array = value.as_array().expect("array result");
+        assert_eq!(array[0], string("a[object Object]"));
+        assert_eq!(array[1], string("a1,2"));
+        assert_eq!(array[2], string("[object Object]"));
+        assert_eq!(array[3], string(""));
+    }
+
+    #[test]
+    fn evaluates_parity_string_methods() {
+        assert_eq!(
+            run_value(r#"return ["b", "a"].sort((x, y) => x.localeCompare(y)).join("");"#),
+            string("ab")
+        );
+        assert_eq!(
+            run_value(r#"return "  x ".trimLeft() + "|" + "  x ".trimRight();"#),
+            string("x |  x")
+        );
+    }
+
+    #[test]
+    fn rejects_circular_splice_insertion() {
+        let error = run("const a = [1]; a.splice(0, 0, [a]); return a;")
+            .expect_err("should reject a circular insertion");
+        assert_eq!(error.kind(), super::RuntimeErrorKind::InvalidDataValue);
+    }
+
+    #[test]
+    fn rejects_circular_results() {
+        let error =
+            run("const a = []; a.push(a); return a;").expect_err("should reject a circular result");
+        assert_eq!(error.kind(), super::RuntimeErrorKind::InvalidDataValue);
     }
 
     #[test]
