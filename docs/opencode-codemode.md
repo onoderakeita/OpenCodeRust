@@ -94,8 +94,8 @@ upstreamは未対応構文を評価到達時に拒否する。`inspect_support` 
 - `new` は `Error`、`TypeError`、`RangeError`、`SyntaxError`、
   `ReferenceError` のconstructorのみを許可する。`Error(...)` は `new` なしでも
   同じ値を作る。
-- `instanceof` はこれらのError brandを判定する。Error以外のobject namespaceは
-  `false`、非callableな右辺は `TypeError` にする。
+- `instanceof` はこれらのError brandと `Map` / `Set` を判定する。それ以外の
+  object namespaceは `false`、非callableな右辺は `TypeError` にする。
 - Error値は `name` と `message` を持ち、`{ name, message }` として直列化する。
   `Object.keys` は `["name", "message"]` を返し、spreadするとbrandを失う。
 - 捕捉された実行時失敗は対応するbrandのError値になる。
@@ -105,8 +105,8 @@ upstreamは未対応構文を評価到達時に拒否する。`inspect_support` 
 ## Stdlib baseline
 
 `install_globals` は `console`、`Math`、`JSON`、`Object`、`Array`、`String`、
-`Number`、`Boolean`、`Promise`、`parseInt`、`parseFloat`、`isNaN`、`isFinite`、
-`undefined`、`NaN`、`Infinity` を登録する。
+`Number`、`Boolean`、`Promise`、`Map`、`Set`、`parseInt`、`parseFloat`、
+`isNaN`、`isFinite`、`undefined`、`NaN`、`Infinity` を登録する。
 
 - `console.log/info/warn/error` は引数を空白で連結し、interpreterの
   `logs()` に保存する。出力先は呼び出し側が決める。
@@ -129,6 +129,13 @@ upstreamは未対応構文を評価到達時に拒否する。`inspect_support` 
   case変換、charAt、charCodeAt、at、padStart、padEnd、repeat、replace、
   concat、localeCompare。`normalize` は未実装。
 - `Number` instance methods: toFixed、toString (radix 2..36の整数)、valueOf。
+- `Map`: `new Map(entries | Map)`、get、set、has、delete、clear、forEach、
+  keys、values、entries、size。keyはSameValueZeroで比較し、`NaN` は同一key、
+  objectは参照同一性で区別する。`keys` / `values` / `entries` は配列を返す。
+- `Set`: `new Set(array | Set | string)`、add、has、delete、clear、forEach、
+  keys、values、entries、size。membershipはSameValueZero。
+- Map/Setはspreadとfor-ofで反復でき、Mapは `[key, value]`、Setは値を返す。
+  実データ境界では `{}` に直列化する。
 
 文字列のindexはUTF-16 code unitではなくUnicode scalar値で数える。
 `toUpperCase` / `toLowerCase` はRustのUnicode変換を使う。callbackを取る
@@ -174,6 +181,7 @@ upstreamは未対応構文を評価到達時に拒否する。`inspect_support` 
 
 ## 未実装
 
+- Date、RegExp、URL、`String.normalize`
 - TypeScriptの型消去・transpile parity
 - 非同期tool実行と未await rejectionの診断
 - 同期host呼び出しを中断するtimeout

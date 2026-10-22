@@ -14,9 +14,10 @@
 
 use std::cell::{Ref, RefCell};
 use std::fmt::{self, Display, Formatter};
+use std::hash::{Hash, Hasher};
 use std::rc::Rc;
 
-use indexmap::IndexMap;
+use indexmap::{IndexMap, IndexSet};
 use serde_json::Map as JsonMap;
 use serde_json::Value as JsonValue;
 
@@ -115,6 +116,253 @@ pub enum PromiseState {
 /// Shared reference to a settled promise.
 pub type PromiseRef = Rc<PromiseState>;
 
+/// Key wrapper providing SameValueZero equality and hashing for `Map` and
+/// `Set` keys.
+#[derive(Debug, Clone)]
+struct CollectionKey(Value);
+
+impl PartialEq for CollectionKey {
+    fn eq(&self, other: &Self) -> bool {
+        same_value_zero(&self.0, &other.0)
+    }
+}
+
+impl Eq for CollectionKey {}
+
+impl Hash for CollectionKey {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        hash_value(&self.0, state);
+    }
+}
+
+fn same_value_zero(left: &Value, right: &Value) -> bool {
+    match (left, right) {
+        (Value::Number(left), Value::Number(right)) => {
+            left == right || (left.is_nan() && right.is_nan())
+        }
+        (Value::Undefined, Value::Undefined) | (Value::Null, Value::Null) => true,
+        (Value::Boolean(left), Value::Boolean(right)) => left == right,
+        (Value::String(left), Value::String(right)) => left == right,
+        _ => left.same_reference(right),
+    }
+}
+
+fn hash_value<H: Hasher>(value: &Value, state: &mut H) {
+    match value {
+        Value::Undefined => 0u8.hash(state),
+        Value::Null => 1u8.hash(state),
+        Value::Boolean(value) => {
+            2u8.hash(state);
+            value.hash(state);
+        }
+        Value::Number(value) => {
+            3u8.hash(state);
+            let canonical = if value.is_nan() {
+                f64::NAN.to_bits()
+            } else if *value == 0.0 {
+                0.0f64.to_bits()
+            } else {
+                value.to_bits()
+            };
+            canonical.hash(state);
+        }
+        Value::String(value) => {
+            4u8.hash(state);
+            value.hash(state);
+        }
+        Value::Array(value) => {
+            5u8.hash(state);
+            (Rc::as_ptr(value) as *const () as usize).hash(state);
+        }
+        Value::Object(value) => {
+            6u8.hash(state);
+            (Rc::as_ptr(value) as *const () as usize).hash(state);
+        }
+        Value::Function(value) => {
+            7u8.hash(state);
+            value.hash(state);
+        }
+        Value::Builtin(value) => {
+            8u8.hash(state);
+            value.hash(state);
+        }
+        Value::ToolRef(value) => {
+            9u8.hash(state);
+            value.as_slice().hash(state);
+        }
+        Value::Error(value) => {
+            10u8.hash(state);
+            (Rc::as_ptr(value) as *const () as usize).hash(state);
+        }
+        Value::Promise(value) => {
+            11u8.hash(state);
+            (Rc::as_ptr(value) as *const () as usize).hash(state);
+        }
+        Value::Map(value) => {
+            12u8.hash(state);
+            (Rc::as_ptr(value) as *const () as usize).hash(state);
+        }
+        Value::Set(value) => {
+            13u8.hash(state);
+            (Rc::as_ptr(value) as *const () as usize).hash(state);
+        }
+        Value::BoundMethod { receiver, method } => {
+            14u8.hash(state);
+            method.hash(state);
+            hash_value(receiver, state);
+        }
+    }
+}
+
+/// Shared storage for a JavaScript `Map`.
+#[derive(Debug, Default)]
+pub struct MapValue {
+    entries: RefCell<IndexMap<CollectionKey, Value>>,
+}
+
+impl MapValue {
+    /// Creates an empty map.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Creates a map from insertion-ordered entries.
+    pub fn from_entries(entries: impl IntoIterator<Item = (Value, Value)>) -> Self {
+        let map = entries
+            .into_iter()
+            .map(|(key, value)| (CollectionKey(key), value))
+            .collect();
+        Self {
+            entries: RefCell::new(map),
+        }
+    }
+
+    /// Number of entries.
+    pub fn len(&self) -> usize {
+        self.entries.borrow().len()
+    }
+
+    /// Returns `true` when the map has no entries.
+    pub fn is_empty(&self) -> bool {
+        self.entries.borrow().is_empty()
+    }
+
+    /// Looks up a key using SameValueZero equality.
+    pub fn get(&self, key: &Value) -> Option<Value> {
+        self.entries
+            .borrow()
+            .get(&CollectionKey(key.clone()))
+            .cloned()
+    }
+
+    /// Inserts an entry and returns the previous value.
+    pub fn insert(&self, key: Value, value: Value) -> Option<Value> {
+        self.entries.borrow_mut().insert(CollectionKey(key), value)
+    }
+
+    /// Removes an entry and returns its value.
+    pub fn remove(&self, key: &Value) -> Option<Value> {
+        self.entries
+            .borrow_mut()
+            .shift_remove(&CollectionKey(key.clone()))
+    }
+
+    /// Removes every entry.
+    pub fn clear(&self) {
+        self.entries.borrow_mut().clear();
+    }
+
+    /// Entries in insertion order.
+    pub fn entries(&self) -> Vec<(Value, Value)> {
+        self.entries
+            .borrow()
+            .iter()
+            .map(|(key, value)| (key.0.clone(), value.clone()))
+            .collect()
+    }
+
+    /// Keys in insertion order.
+    pub fn keys(&self) -> Vec<Value> {
+        self.entries
+            .borrow()
+            .keys()
+            .map(|key| key.0.clone())
+            .collect()
+    }
+
+    /// Values in insertion order.
+    pub fn values(&self) -> Vec<Value> {
+        self.entries.borrow().values().cloned().collect()
+    }
+}
+
+/// Shared storage for a JavaScript `Set`.
+#[derive(Debug, Default)]
+pub struct SetValue {
+    values: RefCell<IndexSet<CollectionKey>>,
+}
+
+impl SetValue {
+    /// Creates an empty set.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Creates a set from insertion-ordered values.
+    pub fn from_values(values: impl IntoIterator<Item = Value>) -> Self {
+        Self {
+            values: RefCell::new(values.into_iter().map(CollectionKey).collect()),
+        }
+    }
+
+    /// Number of values.
+    pub fn len(&self) -> usize {
+        self.values.borrow().len()
+    }
+
+    /// Returns `true` when the set has no values.
+    pub fn is_empty(&self) -> bool {
+        self.values.borrow().is_empty()
+    }
+
+    /// Returns `true` when the value is present.
+    pub fn has(&self, value: &Value) -> bool {
+        self.values.borrow().contains(&CollectionKey(value.clone()))
+    }
+
+    /// Inserts a value and reports whether it was new.
+    pub fn add(&self, value: Value) -> bool {
+        self.values.borrow_mut().insert(CollectionKey(value))
+    }
+
+    /// Removes a value and reports whether it was present.
+    pub fn remove(&self, value: &Value) -> bool {
+        self.values
+            .borrow_mut()
+            .shift_remove(&CollectionKey(value.clone()))
+    }
+
+    /// Removes every value.
+    pub fn clear(&self) {
+        self.values.borrow_mut().clear();
+    }
+
+    /// Values in insertion order.
+    pub fn values(&self) -> Vec<Value> {
+        self.values
+            .borrow()
+            .iter()
+            .map(|key| key.0.clone())
+            .collect()
+    }
+}
+
+/// Shared reference to a map.
+pub type MapRef = Rc<MapValue>;
+
+/// Shared reference to a set.
+pub type SetRef = Rc<SetValue>;
+
 /// A value inside the confined interpreter.
 ///
 /// Objects preserve insertion order, mirroring JavaScript own-key order for
@@ -146,6 +394,10 @@ pub enum Value {
     Error(ErrorRef),
     /// Settled promise value in the synchronous model.
     Promise(PromiseRef),
+    /// JavaScript `Map`.
+    Map(MapRef),
+    /// JavaScript `Set`.
+    Set(SetRef),
     /// Native method bound to a receiver, such as `array.map`.
     BoundMethod {
         /// Receiver value the method operates on.
@@ -197,6 +449,16 @@ impl Value {
         Self::Promise(Rc::new(PromiseState::Rejected(reason)))
     }
 
+    /// Creates an empty map.
+    pub fn map() -> Self {
+        Self::Map(Rc::new(MapValue::new()))
+    }
+
+    /// Creates an empty set.
+    pub fn set() -> Self {
+        Self::Set(Rc::new(SetValue::new()))
+    }
+
     /// Creates a reference into the host tool tree.
     pub fn tool_ref(path: Vec<String>) -> Self {
         Self::ToolRef(Rc::new(path))
@@ -244,12 +506,21 @@ impl Value {
             (Self::Object(left), Self::Object(right)) => Rc::ptr_eq(left, right),
             (Self::Function(left), Self::Function(right)) => left == right,
             (Self::Builtin(left), Self::Builtin(right)) => left == right,
-            (Self::BoundMethod { method: left, .. }, Self::BoundMethod { method: right, .. }) => {
-                left == right
-            }
+            (
+                Self::BoundMethod {
+                    receiver: left_receiver,
+                    method: left_method,
+                },
+                Self::BoundMethod {
+                    receiver: right_receiver,
+                    method: right_method,
+                },
+            ) => left_method == right_method && left_receiver.same_reference(right_receiver),
             (Self::ToolRef(left), Self::ToolRef(right)) => left == right,
             (Self::Error(left), Self::Error(right)) => Rc::ptr_eq(left, right),
             (Self::Promise(left), Self::Promise(right)) => Rc::ptr_eq(left, right),
+            (Self::Map(left), Self::Map(right)) => Rc::ptr_eq(left, right),
+            (Self::Set(left), Self::Set(right)) => Rc::ptr_eq(left, right),
             _ => false,
         }
     }
@@ -314,6 +585,7 @@ impl Value {
                 JsonValue::Object(map)
             }
             Self::Promise(_) => JsonValue::Null,
+            Self::Map(_) | Self::Set(_) => JsonValue::Object(JsonMap::new()),
             Self::Function(_) | Self::Builtin(_) | Self::BoundMethod { .. } | Self::ToolRef(_) => {
                 JsonValue::Null
             }
@@ -337,7 +609,9 @@ impl PartialEq for Value {
             | (Self::BoundMethod { .. }, Self::BoundMethod { .. })
             | (Self::ToolRef(_), Self::ToolRef(_))
             | (Self::Error(_), Self::Error(_))
-            | (Self::Promise(_), Self::Promise(_)) => self.same_reference(other),
+            | (Self::Promise(_), Self::Promise(_))
+            | (Self::Map(_), Self::Map(_))
+            | (Self::Set(_), Self::Set(_)) => self.same_reference(other),
             _ => false,
         }
     }
@@ -397,6 +671,8 @@ impl Display for Value {
                 }
             }
             Self::Promise(_) => formatter.write_str("[Promise]"),
+            Self::Map(_) => formatter.write_str("[object Map]"),
+            Self::Set(_) => formatter.write_str("[object Set]"),
             Self::ToolRef(path) => {
                 if path.is_empty() {
                     formatter.write_str("[tools]")
@@ -434,7 +710,9 @@ fn check_data_at(
         | Value::Boolean(_)
         | Value::Number(_)
         | Value::String(_)
-        | Value::Error(_) => Ok(()),
+        | Value::Error(_)
+        | Value::Map(_)
+        | Value::Set(_) => Ok(()),
         Value::Function(_)
         | Value::Builtin(_)
         | Value::BoundMethod { .. }

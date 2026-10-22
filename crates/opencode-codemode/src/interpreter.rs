@@ -24,7 +24,9 @@ use oxc_syntax::operator::BinaryOperator;
 
 use crate::limits::ToolCallBudget;
 use crate::tools::{ToolError, ToolHost};
-use crate::value::{check_data, is_blocked_member, ErrorKind, FunctionId, PromiseState, Value};
+use crate::value::{
+    check_data, is_blocked_member, ErrorKind, FunctionId, MapValue, PromiseState, SetValue, Value,
+};
 
 /// Maximum nested user-function calls before the interpreter raises a
 /// `RangeError`. The ceiling is conservative because Rust evaluation frames are
@@ -393,6 +395,8 @@ impl<'a> Interpreter<'a> {
             ("RangeError", Value::Builtin("RangeError")),
             ("SyntaxError", Value::Builtin("SyntaxError")),
             ("ReferenceError", Value::Builtin("ReferenceError")),
+            ("Map", Value::Builtin("Map")),
+            ("Set", Value::Builtin("Set")),
             ("undefined", Value::Undefined),
             ("NaN", Value::Number(f64::NAN)),
             ("Infinity", Value::Number(f64::INFINITY)),
@@ -1004,6 +1008,8 @@ impl<'a> Interpreter<'a> {
                 let callee = self.eval_expression(&expression.callee)?;
                 let arguments = self.eval_arguments(&expression.arguments)?;
                 match callee {
+                    Value::Builtin("Map") => construct_map(arguments.first(), expression.span),
+                    Value::Builtin("Set") => construct_set(arguments.first(), expression.span),
                     Value::Builtin(name) if ErrorKind::from_name(name).is_some() => {
                         Ok(make_error(name, &arguments))
                     }
@@ -1341,6 +1347,10 @@ impl<'a> Interpreter<'a> {
             "Error" | "TypeError" | "RangeError" | "SyntaxError" | "ReferenceError" => {
                 Ok(make_error(name, arguments))
             }
+            "Map" | "Set" => Err(RuntimeError::type_error(
+                format!("Constructor {name} requires 'new'."),
+                _span,
+            )),
             "Number.isNaN" => Ok(Value::Boolean(to_number(&argument(0)).is_nan())),
             "Number.isFinite" => Ok(Value::Boolean(to_number(&argument(0)).is_finite())),
             "Number.isInteger" => {
@@ -2203,6 +2213,96 @@ impl<'a> Interpreter<'a> {
                 Ok(Value::String(number_to_string(number, radix)))
             }
             "Number.valueOf" => Ok(Value::Number(as_number(receiver, span)?)),
+            "Map.get" => {
+                let map = as_map_ref(receiver, span)?;
+                Ok(map.get(&argument(0)).unwrap_or(Value::Undefined))
+            }
+            "Map.has" => {
+                let map = as_map_ref(receiver, span)?;
+                Ok(Value::Boolean(map.get(&argument(0)).is_some()))
+            }
+            "Map.set" => {
+                let map = as_map_ref(receiver, span)?;
+                map.insert(argument(0), argument(1));
+                Ok(receiver.clone())
+            }
+            "Map.delete" => {
+                let map = as_map_ref(receiver, span)?;
+                Ok(Value::Boolean(map.remove(&argument(0)).is_some()))
+            }
+            "Map.clear" => {
+                let map = as_map_ref(receiver, span)?;
+                map.clear();
+                Ok(Value::Undefined)
+            }
+            "Map.keys" => {
+                let map = as_map_ref(receiver, span)?;
+                Ok(Value::array(map.keys()))
+            }
+            "Map.values" => {
+                let map = as_map_ref(receiver, span)?;
+                Ok(Value::array(map.values()))
+            }
+            "Map.entries" => {
+                let map = as_map_ref(receiver, span)?;
+                Ok(Value::array(
+                    map.entries()
+                        .into_iter()
+                        .map(|(key, value)| Value::array(vec![key, value]))
+                        .collect(),
+                ))
+            }
+            "Map.forEach" => {
+                let map = as_map_ref(receiver, span)?;
+                let callback = argument(0);
+                for (key, value) in map.entries() {
+                    self.invoke_value(&callback, vec![value, key, receiver.clone()], span)?;
+                }
+                Ok(Value::Undefined)
+            }
+            "Set.has" => {
+                let set = as_set_ref(receiver, span)?;
+                Ok(Value::Boolean(set.has(&argument(0))))
+            }
+            "Set.add" => {
+                let set = as_set_ref(receiver, span)?;
+                set.add(argument(0));
+                Ok(receiver.clone())
+            }
+            "Set.delete" => {
+                let set = as_set_ref(receiver, span)?;
+                Ok(Value::Boolean(set.remove(&argument(0))))
+            }
+            "Set.clear" => {
+                let set = as_set_ref(receiver, span)?;
+                set.clear();
+                Ok(Value::Undefined)
+            }
+            "Set.keys" | "Set.values" => {
+                let set = as_set_ref(receiver, span)?;
+                Ok(Value::array(set.values()))
+            }
+            "Set.entries" => {
+                let set = as_set_ref(receiver, span)?;
+                Ok(Value::array(
+                    set.values()
+                        .into_iter()
+                        .map(|value| Value::array(vec![value.clone(), value]))
+                        .collect(),
+                ))
+            }
+            "Set.forEach" => {
+                let set = as_set_ref(receiver, span)?;
+                let callback = argument(0);
+                for value in set.values() {
+                    self.invoke_value(
+                        &callback,
+                        vec![value.clone(), value, receiver.clone()],
+                        span,
+                    )?;
+                }
+                Ok(Value::Undefined)
+            }
             _ => Err(RuntimeError::unsupported(method, span)),
         }
     }
@@ -2729,6 +2829,18 @@ impl<'a> Interpreter<'a> {
                 "message" => Value::String(error.message.clone()),
                 _ => Value::Undefined,
             }),
+            Value::Map(map) => {
+                if key == "size" {
+                    return Ok(Value::Number(map.len() as f64));
+                }
+                Ok(bound_method(object, map_method(key)))
+            }
+            Value::Set(set) => {
+                if key == "size" {
+                    return Ok(Value::Number(set.len() as f64));
+                }
+                Ok(bound_method(object, set_method(key)))
+            }
             Value::Promise(_) => match key {
                 "then" | "catch" | "finally" => Err(RuntimeError::new(
                     RuntimeErrorKind::UnsupportedSyntax,
@@ -2807,6 +2919,69 @@ fn settle_promise(value: &Value) -> Result<Value, Value> {
     }
 }
 
+fn construct_map(init: Option<&Value>, span: Span) -> Result<Value, RuntimeError> {
+    let map = MapValue::new();
+    match init {
+        None | Some(Value::Undefined) | Some(Value::Null) => {}
+        Some(Value::Array(entries)) => {
+            for pair in entries.borrow().iter() {
+                let Value::Array(pair) = pair else {
+                    return Err(RuntimeError::type_error(
+                        "new Map(...) expects [key, value] pairs.",
+                        span,
+                    ));
+                };
+                let pair = pair.borrow();
+                map.insert(
+                    pair.first().cloned().unwrap_or(Value::Undefined),
+                    pair.get(1).cloned().unwrap_or(Value::Undefined),
+                );
+            }
+        }
+        Some(Value::Map(source)) => {
+            for (key, value) in source.entries() {
+                map.insert(key, value);
+            }
+        }
+        Some(_) => {
+            return Err(RuntimeError::type_error(
+                "new Map(...) expects an array of [key, value] pairs, a Map, or no argument.",
+                span,
+            ));
+        }
+    }
+    Ok(Value::Map(Rc::new(map)))
+}
+
+fn construct_set(init: Option<&Value>, span: Span) -> Result<Value, RuntimeError> {
+    let set = SetValue::new();
+    match init {
+        None | Some(Value::Undefined) | Some(Value::Null) => {}
+        Some(Value::Array(items)) => {
+            for item in items.borrow().iter() {
+                set.add(item.clone());
+            }
+        }
+        Some(Value::Set(source)) => {
+            for value in source.values() {
+                set.add(value);
+            }
+        }
+        Some(Value::String(text)) => {
+            for character in text.chars() {
+                set.add(Value::String(character.to_string()));
+            }
+        }
+        Some(_) => {
+            return Err(RuntimeError::type_error(
+                "new Set(...) expects an array, Set, string, or no argument.",
+                span,
+            ));
+        }
+    }
+    Ok(Value::Set(Rc::new(set)))
+}
+
 fn make_error(name: &str, arguments: &[Value]) -> Value {
     let kind = ErrorKind::from_name(name).unwrap_or(ErrorKind::Error);
     let message = match arguments.first() {
@@ -2827,7 +3002,11 @@ fn instance_of(left: &Value, right: &Value, span: Span) -> Result<bool, RuntimeE
         };
     };
     let Some(kind) = ErrorKind::from_name(name) else {
-        return Ok(false);
+        return Ok(match *name {
+            "Map" => matches!(left, Value::Map(_)),
+            "Set" => matches!(left, Value::Set(_)),
+            _ => false,
+        });
     };
     Ok(match left {
         Value::Error(error) => kind == ErrorKind::Error || error.kind == kind,
@@ -2941,11 +3120,60 @@ fn number_method(name: &str) -> Option<&'static str> {
     })
 }
 
+fn map_method(name: &str) -> Option<&'static str> {
+    Some(match name {
+        "get" => "Map.get",
+        "set" => "Map.set",
+        "has" => "Map.has",
+        "delete" => "Map.delete",
+        "clear" => "Map.clear",
+        "forEach" => "Map.forEach",
+        "keys" => "Map.keys",
+        "values" => "Map.values",
+        "entries" => "Map.entries",
+        _ => return None,
+    })
+}
+
+fn set_method(name: &str) -> Option<&'static str> {
+    Some(match name {
+        "add" => "Set.add",
+        "has" => "Set.has",
+        "delete" => "Set.delete",
+        "clear" => "Set.clear",
+        "forEach" => "Set.forEach",
+        "keys" => "Set.keys",
+        "values" => "Set.values",
+        "entries" => "Set.entries",
+        _ => return None,
+    })
+}
+
 fn as_array_ref(value: &Value, span: Span) -> Result<crate::value::ArrayRef, RuntimeError> {
     match value {
         Value::Array(array) => Ok(Rc::clone(array)),
         _ => Err(RuntimeError::type_error(
             "Array method requires an array receiver.",
+            span,
+        )),
+    }
+}
+
+fn as_map_ref(value: &Value, span: Span) -> Result<crate::value::MapRef, RuntimeError> {
+    match value {
+        Value::Map(map) => Ok(Rc::clone(map)),
+        _ => Err(RuntimeError::type_error(
+            "Map method requires a Map receiver.",
+            span,
+        )),
+    }
+}
+
+fn as_set_ref(value: &Value, span: Span) -> Result<crate::value::SetRef, RuntimeError> {
+    match value {
+        Value::Set(set) => Ok(Rc::clone(set)),
+        _ => Err(RuntimeError::type_error(
+            "Set method requires a Set receiver.",
             span,
         )),
     }
@@ -3205,7 +3433,7 @@ fn stringify_json_inner(value: &Value, ancestors: &mut Vec<usize>) -> Option<Str
             let message = serde_json::to_string(&error.message).ok()?;
             Some(format!("{{\"name\":{name},\"message\":{message}}}"))
         }
-        Value::Promise(_) => Some("{}".to_owned()),
+        Value::Promise(_) | Value::Map(_) | Value::Set(_) => Some("{}".to_owned()),
         Value::Null => Some("null".to_owned()),
         Value::Boolean(value) => Some(value.to_string()),
         Value::Number(value) => Some(if value.is_finite() {
@@ -3317,6 +3545,13 @@ fn spread_items(value: &Value) -> Option<Vec<Value>> {
                 .map(|c| Value::String(c.to_string()))
                 .collect(),
         ),
+        Value::Map(map) => Some(
+            map.entries()
+                .into_iter()
+                .map(|(key, value)| Value::array(vec![key, value]))
+                .collect(),
+        ),
+        Value::Set(set) => Some(set.values()),
         _ => None,
     }
 }
@@ -3360,6 +3595,8 @@ fn has_property(value: &Value, key: &str) -> bool {
                     .is_ok_and(|index| index < value.chars().count())
         }
         Value::Error(_) => key == "name" || key == "message",
+        Value::Map(_) => key == "size" || map_method(key).is_some(),
+        Value::Set(_) => key == "size" || set_method(key).is_some(),
         _ => false,
     }
 }
@@ -3377,7 +3614,9 @@ fn is_truthy(value: &Value) -> bool {
         | Value::BoundMethod { .. }
         | Value::ToolRef(_)
         | Value::Error(_)
-        | Value::Promise(_) => true,
+        | Value::Promise(_)
+        | Value::Map(_)
+        | Value::Set(_) => true,
     }
 }
 
@@ -3458,7 +3697,9 @@ fn to_number(value: &Value) -> f64 {
         | Value::Builtin(_)
         | Value::BoundMethod { .. }
         | Value::Error(_)
-        | Value::Promise(_) => f64::NAN,
+        | Value::Promise(_)
+        | Value::Map(_)
+        | Value::Set(_) => f64::NAN,
         Value::ToolRef(_) => f64::NAN,
     }
 }
@@ -3505,6 +3746,26 @@ fn format_display(value: &Value) -> String {
     match value {
         Value::Array(_) | Value::Object(_) => {
             stringify_json(value).unwrap_or_else(|| to_js_string(value))
+        }
+        Value::Map(map) => {
+            let entries = map
+                .entries()
+                .into_iter()
+                .map(|(key, value)| {
+                    format!("[{},{}]", format_display(&key), format_display(&value))
+                })
+                .collect::<Vec<_>>()
+                .join(",");
+            format!("Map({}) [{}]", map.len(), entries)
+        }
+        Value::Set(set) => {
+            let values = set
+                .values()
+                .into_iter()
+                .map(|value| format_display(&value))
+                .collect::<Vec<_>>()
+                .join(",");
+            format!("Set({}) [{}]", set.len(), values)
         }
         _ => to_js_string(value),
     }
@@ -3558,6 +3819,8 @@ fn to_js_string(value: &Value) -> String {
             }
         }
         Value::Promise(_) => "[object Promise]".to_owned(),
+        Value::Map(_) => "[object Map]".to_owned(),
+        Value::Set(_) => "[object Set]".to_owned(),
         Value::ToolRef(_) => value.to_string(),
     }
 }
@@ -3594,7 +3857,12 @@ fn type_of(value: &Value) -> &'static str {
         Value::Boolean(_) => "boolean",
         Value::Number(_) => "number",
         Value::String(_) => "string",
-        Value::Array(_) | Value::Object(_) | Value::Error(_) | Value::Promise(_) => "object",
+        Value::Array(_)
+        | Value::Object(_)
+        | Value::Error(_)
+        | Value::Promise(_)
+        | Value::Map(_)
+        | Value::Set(_) => "object",
         Value::ToolRef(path) if path.is_empty() => "object",
         Value::Function(_) | Value::Builtin(_) | Value::BoundMethod { .. } | Value::ToolRef(_) => {
             "function"
@@ -4301,6 +4569,131 @@ mod tests {
 
         let error = run("return await Promise.race([]);").expect_err("empty race should fail");
         assert!(error.message().contains("never settle"));
+    }
+
+    #[test]
+    fn evaluates_maps_with_same_value_zero_keys() {
+        assert_eq!(
+            run_value(
+                r#"const m = new Map([["a",1],["b",2]]); return [m.size, m.get("a"), m.has("b"), m.get("z") === undefined].join(",");"#
+            ),
+            string("2,1,true,true")
+        );
+        assert_eq!(
+            run_value(r#"const m = new Map(); m.set(NaN, "nan"); return m.get(NaN);"#),
+            string("nan")
+        );
+        assert_eq!(
+            run_value(
+                r#"const m = new Map(); const key = { id: 1 }; m.set(key, "yes"); return [m.get(key), m.get({ id: 1 }) === undefined].join(",");"#
+            ),
+            string("yes,true")
+        );
+        assert_eq!(
+            run_value(
+                r#"const m = new Map([["a",1],["b",2]]); const same = m.set("c", 3) === m; return [same, m.size, m.delete("a"), m.has("a")].join(",");"#
+            ),
+            string("true,3,true,false")
+        );
+        assert_eq!(
+            run_value(
+                r#"const source = new Map([["a",1]]); const copy = new Map(source); return copy.get("a");"#
+            ),
+            number(1.0)
+        );
+    }
+
+    #[test]
+    fn iterates_maps_in_insertion_order() {
+        let value = run_value(
+            r#"
+            const m = new Map([["a",1],["b",2]]);
+            const out = [];
+            m.forEach((value, key, map) => out.push(key + ":" + value + ":" + (map === m)));
+            for (const [key, value] of m) out.push(key + "=" + value);
+            out.push([...m.keys()].join(","));
+            out.push([...m.values()].join(","));
+            out.push(JSON.stringify([...m.entries()]));
+            return out.join("|");
+        "#,
+        );
+        assert_eq!(
+            value,
+            string(r#"a:1:true|b:2:true|a=1|b=2|a,b|1,2|[["a",1],["b",2]]"#)
+        );
+    }
+
+    #[test]
+    fn evaluates_sets_with_same_value_zero_members() {
+        assert_eq!(
+            run_value(
+                r#"const s = new Set([1,1,2,NaN,NaN]); return [s.size, s.has(1), s.has(NaN), s.has(4)].join(",");"#
+            ),
+            string("3,true,true,false")
+        );
+        assert_eq!(
+            run_value(
+                r#"const s = new Set([1]); const same = s.add(2) === s; return [same, [...s.values()].join(","), s.delete(1), [...s.values()].join(",")].join("|");"#
+            ),
+            string("true|1,2|true|2")
+        );
+        assert_eq!(
+            run_value(r#"return [...new Set("aba")].join("");"#),
+            string("ab")
+        );
+        assert_eq!(
+            run_value(r#"const s = new Set([1]); return JSON.stringify([...s.entries()]);"#),
+            string("[[1,1]]")
+        );
+    }
+
+    #[test]
+    fn iterates_sets_and_for_each_arguments() {
+        let value = run_value(
+            r#"
+            const s = new Set(["x","y"]);
+            const out = [];
+            s.forEach((value, key, set) => out.push(key + ":" + value + ":" + (set === s)));
+            for (const value of s) out.push(value);
+            return out.join("|");
+        "#,
+        );
+        assert_eq!(value, string("x:x:true|y:y:true|x|y"));
+    }
+
+    #[test]
+    fn serializes_collections_as_empty_objects_at_the_boundary() {
+        let value = run_value(
+            r#"return [JSON.stringify(new Map([["a",1]])), JSON.stringify(new Set([1])), Object.keys(new Map([["a",1]])).length].join(",");"#,
+        );
+        assert_eq!(value, string("{},{},0"));
+    }
+
+    #[test]
+    fn brands_maps_and_sets_for_instanceof() {
+        let value = run_value(
+            r#"return [new Map() instanceof Map, new Set() instanceof Set, ({}) instanceof Map, new Map() instanceof Set].join(",");"#,
+        );
+        assert_eq!(value, string("true,true,false,false"));
+    }
+
+    #[test]
+    fn rejects_invalid_collection_construction() {
+        let error = run("return new Map(5);").expect_err("should reject the argument");
+        assert_eq!(error.kind(), super::RuntimeErrorKind::TypeError);
+        assert!(error.message().contains("[key, value] pairs"));
+
+        let error = run("return new Map([1]);").expect_err("should reject the pair");
+        assert!(error.message().contains("[key, value] pairs"));
+
+        let error = run("return new Set(5);").expect_err("should reject the argument");
+        assert!(error.message().contains("expects an array"));
+
+        let error = run("return Map();").expect_err("should require new");
+        assert!(error.message().contains("requires 'new'"));
+
+        let error = run("return Set();").expect_err("should require new");
+        assert!(error.message().contains("requires 'new'"));
     }
 
     #[test]
