@@ -83,8 +83,9 @@ upstreamは未対応構文を評価到達時に拒否する。`inspect_support` 
   binary/logical/unary、call、conditional、member、optional chain、update。
 - 配列とobjectは共有参照で、代入はaliasし、`===` は参照同一性で比較する。
 - 文字列連結時のobjectは `[object Object]`、配列は要素のカンマ結合になる。
-  `+` と `<` / `>` はToPrimitive (object/arrayの文字列化) を経て評価し、
-  NaNを含む関係比較はすべてfalseになる。
+  `+` と関係比較はoperandをcoerceしてから評価し、NaNを含む関係比較は
+  すべてfalseになる。`Date` は `+` でISO文字列、関係比較と `==` では
+  時刻値になる。`==` は同じ型のobject同士なら参照同一性で比較する。
 - 返り値はデータ境界で検証し、関数・tool参照・循環・深さ超過を
   `InvalidDataValue` として拒否する。
 - `typeof` は未宣言識別子に `"undefined"` を返す。

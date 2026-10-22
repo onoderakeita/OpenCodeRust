@@ -1135,8 +1135,8 @@ impl<'a> Interpreter<'a> {
                 Ok(Value::Boolean(compare(left, right, span)? >= 0.0))
             }
             BinaryOperator::Addition => {
-                let left = to_primitive(left);
-                let right = to_primitive(right);
+                let left = addition_operand(left);
+                let right = addition_operand(right);
                 if matches!(left, Value::String(_)) || matches!(right, Value::String(_)) {
                     Ok(Value::String(format!(
                         "{}{}",
@@ -4607,21 +4607,46 @@ fn strict_equals(left: &Value, right: &Value) -> bool {
     left == right
 }
 
+fn is_object_like(value: &Value) -> bool {
+    !matches!(
+        value,
+        Value::Undefined | Value::Null | Value::Boolean(_) | Value::Number(_) | Value::String(_)
+    )
+}
+
+/// Coerces an operand of `==`. Two objects compare by identity before this
+/// runs; a lone object stringifies except for `Date`, which upstream turns into
+/// its time value for every operator except `+`.
+fn equality_operand(value: &Value) -> Value {
+    match value {
+        Value::Date(date) => Value::Number(date.time_ms),
+        Value::Undefined
+        | Value::Null
+        | Value::Boolean(_)
+        | Value::Number(_)
+        | Value::String(_) => value.clone(),
+        _ => Value::String(to_js_string(value)),
+    }
+}
+
 fn loose_equals(left: &Value, right: &Value) -> bool {
+    if is_object_like(left) && is_object_like(right) {
+        return strict_equals(left, right);
+    }
+    primitive_loose_equals(&equality_operand(left), &equality_operand(right))
+}
+
+fn primitive_loose_equals(left: &Value, right: &Value) -> bool {
     match (left, right) {
         (Value::Null | Value::Undefined, Value::Null | Value::Undefined) => true,
         (Value::Number(left), Value::Number(right)) => left == right,
         (Value::String(left), Value::String(right)) => left == right,
         (Value::Boolean(left), Value::Boolean(right)) => left == right,
-        (Value::Number(left), Value::String(right)) => {
-            *left == to_number(&Value::String(right.clone()))
-        }
-        (Value::String(left), Value::Number(right)) => {
-            to_number(&Value::String(left.clone())) == *right
-        }
-        (Value::Boolean(_), _) => loose_equals(&Value::Number(to_number(left)), right),
-        (_, Value::Boolean(_)) => loose_equals(left, &Value::Number(to_number(right))),
-        _ => left == right,
+        (Value::Number(left), Value::String(right)) => *left == string_to_number(right),
+        (Value::String(left), Value::Number(right)) => string_to_number(left) == *right,
+        (Value::Boolean(_), _) => primitive_loose_equals(&Value::Number(to_number(left)), right),
+        (_, Value::Boolean(_)) => primitive_loose_equals(left, &Value::Number(to_number(right))),
+        _ => false,
     }
 }
 
@@ -4630,10 +4655,8 @@ fn utf16_cmp(left: &str, right: &str) -> std::cmp::Ordering {
     left.encode_utf16().cmp(right.encode_utf16())
 }
 
-/// Applies the JavaScript `ToPrimitive` default hint used by `+` and the
-/// relational operators: objects become their string form, except that
-/// `Date` already stringifies through `to_js_string`.
-fn to_primitive(value: &Value) -> Value {
+/// Coerces an operand of `+`: objects stringify, including `Date`.
+fn addition_operand(value: &Value) -> Value {
     match value {
         Value::Undefined
         | Value::Null
@@ -4644,9 +4667,23 @@ fn to_primitive(value: &Value) -> Value {
     }
 }
 
+/// Coerces an operand of a relational comparison. Upstream maps `Date` to its
+/// time value for ordering while other objects stringify.
+fn comparison_operand(value: &Value) -> Value {
+    match value {
+        Value::Date(date) => Value::Number(date.time_ms),
+        Value::Undefined
+        | Value::Null
+        | Value::Boolean(_)
+        | Value::Number(_)
+        | Value::String(_) => value.clone(),
+        _ => Value::String(to_js_string(value)),
+    }
+}
+
 fn compare(left: &Value, right: &Value, _span: Span) -> Result<f64, RuntimeError> {
-    let left = to_primitive(left);
-    let right = to_primitive(right);
+    let left = comparison_operand(left);
+    let right = comparison_operand(right);
     match (&left, &right) {
         (Value::String(left), Value::String(right)) => Ok(match utf16_cmp(left, right) {
             std::cmp::Ordering::Less => -1.0,
@@ -4970,13 +5007,7 @@ fn to_js_string_seen(value: &Value, seen: &mut Vec<usize>) -> String {
         Value::Function(_) | Value::Builtin(_) | Value::BoundMethod { .. } => {
             "[Function]".to_owned()
         }
-        Value::Error(error) => {
-            if error.message.is_empty() {
-                error.kind.name().to_owned()
-            } else {
-                format!("{}: {}", error.kind.name(), error.message)
-            }
-        }
+        Value::Error(_) => "[object Object]".to_owned(),
         Value::Promise(_) => "[object Promise]".to_owned(),
         Value::Map(_) => "[object Map]".to_owned(),
         Value::Set(_) => "[object Set]".to_owned(),
@@ -6852,6 +6883,57 @@ mod tests {
             number(f64::NEG_INFINITY)
         );
         assert_eq!(run_value("return Math.round(-1.5);"), number(-1.0));
+
+        assert_eq!(
+            run_value("return new Date(1000) > 0;"),
+            Value::Boolean(true)
+        );
+        assert_eq!(
+            run_value("return new Date(1000) < 2000;"),
+            Value::Boolean(true)
+        );
+        assert_eq!(
+            run_value("return new Date(NaN) >= 0;"),
+            Value::Boolean(false)
+        );
+        assert_eq!(
+            run_value("return new Date(0) > new Date(-1);"),
+            Value::Boolean(true)
+        );
+        assert_eq!(
+            run_value("return new Date(0) === 0;"),
+            Value::Boolean(false)
+        );
+        assert_eq!(run_value("return new Date(0) == 0;"), Value::Boolean(true));
+        assert_eq!(
+            run_value("return new Date(0) == '1970-01-01T00:00:00.000Z';"),
+            Value::Boolean(false)
+        );
+        assert_eq!(run_value("return [] == false;"), Value::Boolean(true));
+        assert_eq!(run_value("return [1] == 1;"), Value::Boolean(true));
+        assert_eq!(run_value("return ['1'] == 1;"), Value::Boolean(true));
+        assert_eq!(
+            run_value("return ({}) == '[object Object]';"),
+            Value::Boolean(true)
+        );
+        assert_eq!(run_value("return [] == [];"), Value::Boolean(false));
+        assert_eq!(run_value("return null == false;"), Value::Boolean(false));
+        assert_eq!(run_value("return null == 0;"), Value::Boolean(false));
+        assert_eq!(run_value("return null == undefined;"), Value::Boolean(true));
+        assert_eq!(run_value("return 0 == '';"), Value::Boolean(true));
+        assert_eq!(run_value("return NaN == NaN;"), Value::Boolean(false));
+        assert_eq!(
+            run_value("return new Map() == '[object Map]';"),
+            Value::Boolean(true)
+        );
+        assert_eq!(
+            run_value("return String(new Error('m'));"),
+            string("[object Object]")
+        );
+        assert_eq!(
+            run_value("return new Error('m') + 1;"),
+            string("[object Object]1")
+        );
 
         assert_eq!(
             run_value("return [1, 2, 3].reduceRight((acc, value, index) => acc + index, 0);"),
