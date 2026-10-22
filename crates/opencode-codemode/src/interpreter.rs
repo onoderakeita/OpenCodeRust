@@ -1483,7 +1483,33 @@ impl<'a> Interpreter<'a> {
                 json_to_value(&json, _span)
             }
             "JSON.stringify" => {
-                Ok(stringify_json(&argument(0)).map_or(Value::Undefined, Value::String))
+                if let Some(Value::Array(_)) | Some(Value::Function(_)) = arguments.get(1) {
+                    return Err(RuntimeError::unsupported("JSON.stringify replacer", _span));
+                }
+                let indent = match arguments.get(2) {
+                    Some(Value::Number(number)) => {
+                        let count = if number.is_nan() {
+                            0
+                        } else {
+                            number.trunc().clamp(0.0, 10.0) as usize
+                        };
+                        " ".repeat(count)
+                    }
+                    Some(Value::String(text)) => text.chars().take(10).collect(),
+                    _ => String::new(),
+                };
+                match stringify_json_with_indent(&argument(0), &indent) {
+                    Ok(Some(text)) => Ok(Value::String(text)),
+                    Ok(None) => Ok(Value::Undefined),
+                    Err(JsonStringifyError::Circular) => Err(RuntimeError::type_error(
+                        "Converting circular structure to JSON.",
+                        _span,
+                    )),
+                    Err(JsonStringifyError::TooDeep) => Err(RuntimeError::type_error(
+                        "Value is too deep to serialize as JSON.",
+                        _span,
+                    )),
+                }
             }
             "Promise.resolve" => {
                 let value = argument(0);
@@ -2016,7 +2042,13 @@ impl<'a> Interpreter<'a> {
                     .iter()
                     .enumerate()
                     .skip(from)
-                    .find(|(_, item)| strict_equals(item, &needle))
+                    .find(|(_, item)| {
+                        if method == "Array.includes" {
+                            crate::value::same_value_zero(item, &needle)
+                        } else {
+                            strict_equals(item, &needle)
+                        }
+                    })
                     .map(|(index, _)| index);
                 if method == "Array.includes" {
                     Ok(Value::Boolean(position.is_some()))
@@ -3964,70 +3996,121 @@ fn tool_error_value(error: &ToolError, span: Span) -> Value {
     Value::from_entries(entries)
 }
 
-fn stringify_json(value: &Value) -> Option<String> {
-    stringify_json_inner(value, &mut Vec::new())
+#[derive(Clone, Copy)]
+enum JsonStringifyError {
+    Circular,
+    TooDeep,
 }
 
-fn stringify_json_inner(value: &Value, ancestors: &mut Vec<usize>) -> Option<String> {
+fn stringify_json_with_indent(
+    value: &Value,
+    indent: &str,
+) -> Result<Option<String>, JsonStringifyError> {
+    stringify_json_inner(value, &mut Vec::new(), indent, 0)
+}
+
+fn stringify_json_inner(
+    value: &Value,
+    ancestors: &mut Vec<usize>,
+    indent: &str,
+    depth: usize,
+) -> Result<Option<String>, JsonStringifyError> {
     match value {
         Value::Undefined
         | Value::Function(_)
         | Value::Builtin(_)
         | Value::BoundMethod { .. }
-        | Value::ToolRef(_) => None,
+        | Value::ToolRef(_) => Ok(None),
         Value::Error(error) => {
-            let name = serde_json::to_string(error.kind.name()).ok()?;
-            let message = serde_json::to_string(&error.message).ok()?;
-            Some(format!("{{\"name\":{name},\"message\":{message}}}"))
+            let name = serde_json::to_string(error.kind.name()).unwrap_or_default();
+            let message = serde_json::to_string(&error.message).unwrap_or_default();
+            Ok(Some(format!("{{\"name\":{name},\"message\":{message}}}")))
         }
-        Value::Promise(_) | Value::Map(_) | Value::Set(_) => Some("{}".to_owned()),
-        Value::Date(date) => Some(
+        Value::Promise(_) | Value::Map(_) | Value::Set(_) => Ok(Some("{}".to_owned())),
+        Value::Date(date) => Ok(Some(
             crate::date::iso_string(date.time_ms)
                 .and_then(|text| serde_json::to_string(&text).ok())
                 .unwrap_or_else(|| "null".to_owned()),
-        ),
-        Value::Null => Some("null".to_owned()),
-        Value::Boolean(value) => Some(value.to_string()),
-        Value::Number(value) => Some(if value.is_finite() {
+        )),
+        Value::Null => Ok(Some("null".to_owned())),
+        Value::Boolean(value) => Ok(Some(value.to_string())),
+        Value::Number(value) => Ok(Some(if value.is_finite() {
             format_number(*value)
         } else {
             "null".to_owned()
-        }),
-        Value::String(value) => serde_json::to_string(value).ok(),
+        })),
+        Value::String(value) => Ok(Some(
+            serde_json::to_string(value).unwrap_or_else(|_| "\"\"".to_owned()),
+        )),
         Value::Array(items) => {
             let identity = Rc::as_ptr(items) as *const () as usize;
-            if ancestors.contains(&identity) || ancestors.len() >= crate::value::MAX_VALUE_DEPTH * 2
-            {
-                return None;
+            if ancestors.contains(&identity) {
+                return Err(JsonStringifyError::Circular);
+            }
+            if ancestors.len() >= crate::value::MAX_VALUE_DEPTH * 2 {
+                return Err(JsonStringifyError::TooDeep);
             }
             ancestors.push(identity);
-            let parts = items
-                .borrow()
-                .iter()
-                .map(|item| {
-                    stringify_json_inner(item, ancestors).unwrap_or_else(|| "null".to_owned())
-                })
-                .collect::<Vec<_>>();
+            let mut parts = Vec::new();
+            for item in items.borrow().iter() {
+                parts.push(
+                    match stringify_json_inner(item, ancestors, indent, depth + 1)? {
+                        Some(text) => text,
+                        None => "null".to_owned(),
+                    },
+                );
+            }
             ancestors.pop();
-            Some(format!("[{}]", parts.join(",")))
+            if indent.is_empty() {
+                Ok(Some(format!("[{}]", parts.join(","))))
+            } else if parts.is_empty() {
+                Ok(Some("[]".to_owned()))
+            } else {
+                let inner = indent.repeat(depth + 1);
+                let separator = format!(",\n{inner}");
+                Ok(Some(format!(
+                    "[\n{inner}{}\n{}]",
+                    parts.join(&separator),
+                    indent.repeat(depth)
+                )))
+            }
         }
         Value::Object(object) => {
             let identity = Rc::as_ptr(object) as *const () as usize;
-            if ancestors.contains(&identity) || ancestors.len() >= crate::value::MAX_VALUE_DEPTH * 2
-            {
-                return None;
+            if ancestors.contains(&identity) {
+                return Err(JsonStringifyError::Circular);
+            }
+            if ancestors.len() >= crate::value::MAX_VALUE_DEPTH * 2 {
+                return Err(JsonStringifyError::TooDeep);
             }
             ancestors.push(identity);
             let mut parts = Vec::new();
             for (key, value) in object.borrow().iter() {
-                let Some(serialized) = stringify_json_inner(value, ancestors) else {
+                let Some(serialized) = stringify_json_inner(value, ancestors, indent, depth + 1)?
+                else {
                     continue;
                 };
-                let key = serde_json::to_string(key).ok()?;
-                parts.push(format!("{key}:{serialized}"));
+                let key = serde_json::to_string(key).unwrap_or_default();
+                if indent.is_empty() {
+                    parts.push(format!("{key}:{serialized}"));
+                } else {
+                    parts.push(format!("{key}: {serialized}"));
+                }
             }
             ancestors.pop();
-            Some(format!("{{{}}}", parts.join(",")))
+            if indent.is_empty() {
+                Ok(Some(format!("{{{}}}", parts.join(","))))
+            } else if parts.is_empty() {
+                Ok(Some("{}".to_owned()))
+            } else {
+                let inner = indent.repeat(depth + 1);
+                let separator = format!(",\n{inner}");
+                Ok(Some(format!(
+                    "{{\n{inner}{}\n{}}}",
+                    parts.join(&separator),
+                    indent.repeat(depth)
+                )))
+            }
         }
     }
 }
@@ -6267,10 +6350,45 @@ mod tests {
             run_value("const b = []; b.push([b]); return b.join();"),
             string("")
         );
+        assert_eq!(
+            run_value("return [NaN].includes(NaN);"),
+            Value::Boolean(true)
+        );
+        assert_eq!(run_value("return [NaN].indexOf(NaN);"), number(-1.0));
+        assert_eq!(run_value("return [0].includes(-0);"), Value::Boolean(true));
+        assert_eq!(run_value("return [0].indexOf(-0);"), number(0.0));
         assert_eq!(run_value("return 'ab'.repeat(3);"), string("ababab"));
         assert_eq!(run_value("return 'x'.repeat(NaN);"), string(""));
         assert_eq!(run_value("return 'x'.padStart(5, 'ab');"), string("ababx"));
         assert_eq!(run_value("return 'x'.padEnd(0);"), string("x"));
+
+        assert_eq!(
+            run_value(r#"return JSON.stringify({ a: 1, b: [2, 3] }, null, 2);"#),
+            string("{\n  \"a\": 1,\n  \"b\": [\n    2,\n    3\n  ]\n}")
+        );
+        assert_eq!(
+            run_value(r#"return JSON.stringify({ a: {}, b: [] }, null, 2);"#),
+            string("{\n  \"a\": {},\n  \"b\": []\n}")
+        );
+        assert_eq!(
+            run_value(r#"return JSON.stringify({ a: 1 }, null, "ab");"#),
+            string("{\nab\"a\": 1\n}")
+        );
+        assert_eq!(
+            run_value(r#"return JSON.stringify({ a: 1 }, null, 20);"#),
+            string("{\n          \"a\": 1\n}")
+        );
+        assert_eq!(
+            run_value("return JSON.stringify({ a: 1 }, null, 0);"),
+            string(r#"{"a":1}"#)
+        );
+        let error = run(r#"return JSON.stringify({ a: 1 }, ["a"]);"#)
+            .expect_err("replacer arrays are unsupported");
+        assert_eq!(error.kind(), super::RuntimeErrorKind::UnsupportedSyntax);
+        let error = run("const a = []; a.push(a); return JSON.stringify(a);")
+            .expect_err("circular JSON should fail");
+        assert_eq!(error.kind(), super::RuntimeErrorKind::TypeError);
+        assert!(error.message().contains("circular"));
 
         for source in [
             "return 'x'.repeat(Infinity);",

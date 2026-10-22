@@ -135,7 +135,7 @@ impl Hash for CollectionKey {
     }
 }
 
-fn same_value_zero(left: &Value, right: &Value) -> bool {
+pub(crate) fn same_value_zero(left: &Value, right: &Value) -> bool {
     match (left, right) {
         (Value::Number(left), Value::Number(right)) => {
             left == right || (left.is_nan() && right.is_nan())

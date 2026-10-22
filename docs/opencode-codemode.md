@@ -125,8 +125,9 @@ shadowingできる。
   sign、log、log2、log10、exp、sin、cos、tan、PI、E、LN2、LN10、LOG2E、
   LOG10E、SQRT2、SQRT1_2。
 - `JSON`: parse、stringify。stringifyは挿入順を保持し、関数と `undefined` は
-  objectから省略、arrayでは `null` にする。循環参照と深い値は `null` に
-  落として停止する。
+  objectから省略、arrayでは `null` にする。第3引数のindent (数値0..10または
+  先頭10文字の文字列) を受け付ける。replacerの配列・関数は
+  `UnsupportedSyntax`、循環参照と深すぎる値は `TypeError` にする。
 - `Number` statics: `Number.isNaN`、`isFinite`、`isInteger`、`isSafeInteger`、
   `parseInt`、`parseFloat`、定数 (`MAX_SAFE_INTEGER` など)。
 - `String` statics: `String.fromCharCode`、`String.fromCodePoint`。
@@ -141,6 +142,8 @@ shadowingできる。
   unshift、reverse、concat、flat、flatMap、sort、toSorted、toReversed、
   with、at、splice、fill、copyWithin、keys、values、entries。
   `keys` / `values` / `entries` はiteratorではなく配列を返す。
+  `includes` はSameValueZero、`indexOf` / `lastIndexOf` はstrict equalityで
+  比較する。
 - `String` instance methods: split、slice、substring、substr、indexOf、lastIndexOf、
   includes、startsWith、endsWith、trim系 (trimLeft/trimRight含む)、
   case変換、charAt、charCodeAt、codePointAt、at、padStart、padEnd、repeat、
