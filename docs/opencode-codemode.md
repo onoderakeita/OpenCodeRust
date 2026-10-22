@@ -121,8 +121,9 @@ shadowingできる。
   循環は `[Circular]`、深さ超過は `...` になる。
 - `console.dir` は最初の引数のみを描画する。`console.table` はplain objectの
   配列を `(index)\t...` 形式に整形する。
-- `Math`: abs、ceil、floor、round、trunc、max、min、pow、sqrt、sign、
-  log、exp、sin、cos、tan、PI、E。
+- `Math`: abs、cbrt、ceil、floor、round、trunc、max、min、pow、sqrt、hypot、
+  sign、log、log2、log10、exp、sin、cos、tan、PI、E、LN2、LN10、LOG2E、
+  LOG10E、SQRT2、SQRT1_2。
 - `JSON`: parse、stringify。stringifyは挿入順を保持し、関数と `undefined` は
   objectから省略、arrayでは `null` にする。循環参照と深い値は `null` に
   落として停止する。
@@ -139,8 +140,10 @@ shadowingできる。
   `keys` / `values` / `entries` はiteratorではなく配列を返す。
 - `String` instance methods: split、slice、substring、substr、indexOf、lastIndexOf、
   includes、startsWith、endsWith、trim系 (trimLeft/trimRight含む)、
-  case変換、charAt、charCodeAt、at、padStart、padEnd、repeat、replace、
-  concat、localeCompare。`normalize` は未実装。
+  case変換、charAt、charCodeAt、codePointAt、at、padStart、padEnd、repeat、
+  replace、replaceAll、concat、toString、localeCompare。`replace` 系は
+  `$$` / `$&` / ``$` `` / `$'` のreplacement patternを展開する。
+  `normalize` とRegExp依存のmatch系は未実装。
 - `Number` instance methods: toFixed、toString (radix 2..36の整数)、valueOf。
 - `Map`: `new Map(entries | Map)`、get、set、has、delete、clear、forEach、
   keys、values、entries、size。keyはSameValueZeroで比較し、`NaN` は同一key、

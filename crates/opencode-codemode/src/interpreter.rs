@@ -355,6 +355,10 @@ impl<'a> Interpreter<'a> {
         ]);
         let math = Value::from_entries([
             ("abs", Value::Builtin("Math.abs")),
+            ("cbrt", Value::Builtin("Math.cbrt")),
+            ("hypot", Value::Builtin("Math.hypot")),
+            ("log2", Value::Builtin("Math.log2")),
+            ("log10", Value::Builtin("Math.log10")),
             ("ceil", Value::Builtin("Math.ceil")),
             ("floor", Value::Builtin("Math.floor")),
             ("round", Value::Builtin("Math.round")),
@@ -371,6 +375,12 @@ impl<'a> Interpreter<'a> {
             ("tan", Value::Builtin("Math.tan")),
             ("PI", Value::Number(std::f64::consts::PI)),
             ("E", Value::Number(std::f64::consts::E)),
+            ("LN2", Value::Number(std::f64::consts::LN_2)),
+            ("LN10", Value::Number(std::f64::consts::LN_10)),
+            ("LOG2E", Value::Number(std::f64::consts::LOG2_E)),
+            ("LOG10E", Value::Number(std::f64::consts::LOG10_E)),
+            ("SQRT2", Value::Number(std::f64::consts::SQRT_2)),
+            ("SQRT1_2", Value::Number(std::f64::consts::FRAC_1_SQRT_2)),
         ]);
         let json = Value::from_entries([
             ("parse", Value::Builtin("JSON.parse")),
@@ -1434,6 +1444,10 @@ impl<'a> Interpreter<'a> {
                 Ok(Value::String(text))
             }
             "Math.abs" => Ok(Value::Number(to_number(&argument(0)).abs())),
+            "Math.cbrt" => Ok(Value::Number(to_number(&argument(0)).cbrt())),
+            "Math.hypot" => Ok(Value::Number(math_hypot(arguments))),
+            "Math.log2" => Ok(Value::Number(to_number(&argument(0)).log2())),
+            "Math.log10" => Ok(Value::Number(to_number(&argument(0)).log10())),
             "Math.ceil" => Ok(Value::Number(to_number(&argument(0)).ceil())),
             "Math.floor" => Ok(Value::Number(to_number(&argument(0)).floor())),
             "Math.round" => Ok(Value::Number((to_number(&argument(0)) + 0.5).floor())),
@@ -2312,25 +2326,22 @@ impl<'a> Interpreter<'a> {
             }
             "String.charAt" => {
                 let text = as_string(receiver, span)?;
-                let index = to_number(&argument(0));
-                let character = if index.is_nan() || index < 0.0 {
-                    None
-                } else {
-                    text.chars().nth(index.trunc() as usize)
-                };
+                let character =
+                    string_index(&argument(0)).and_then(|index| text.chars().nth(index));
                 Ok(Value::String(
                     character.map_or_else(String::new, |character| character.to_string()),
                 ))
             }
-            "String.charCodeAt" => {
+            "String.charCodeAt" | "String.codePointAt" => {
                 let text = as_string(receiver, span)?;
-                let index = to_number(&argument(0));
-                let code = if index.is_nan() || index < 0.0 {
-                    None
-                } else {
-                    text.chars().nth(index.trunc() as usize).map(u32::from)
-                };
-                Ok(Value::Number(code.map_or(f64::NAN, f64::from)))
+                let code = string_index(&argument(0))
+                    .and_then(|index| text.chars().nth(index))
+                    .map(u32::from);
+                Ok(match (method, code) {
+                    ("String.charCodeAt", code) => Value::Number(code.map_or(f64::NAN, f64::from)),
+                    (_, Some(code)) => Value::Number(f64::from(code)),
+                    (_, None) => Value::Undefined,
+                })
             }
             "String.at" => {
                 let text = as_string(receiver, span)?;
@@ -2362,12 +2373,18 @@ impl<'a> Interpreter<'a> {
                 let count = to_number(&argument(0)).max(0.0) as usize;
                 Ok(Value::String(text.repeat(count)))
             }
-            "String.replace" => {
+            "String.replace" | "String.replaceAll" => {
                 let text = as_string(receiver, span)?;
                 let search = to_js_string(&argument(0));
                 let replacement = to_js_string(&argument(1));
-                Ok(Value::String(text.replacen(&search, &replacement, 1)))
+                Ok(Value::String(replace_string(
+                    &text,
+                    &search,
+                    &replacement,
+                    method == "String.replaceAll",
+                )))
             }
+            "String.toString" => Ok(Value::String(as_string(receiver, span)?)),
             "String.concat" => {
                 let mut text = as_string(receiver, span)?;
                 for argument in arguments {
@@ -3338,6 +3355,9 @@ fn string_method(name: &str) -> Option<&'static str> {
         "padEnd" => "String.padEnd",
         "repeat" => "String.repeat",
         "replace" => "String.replace",
+        "replaceAll" => "String.replaceAll",
+        "codePointAt" => "String.codePointAt",
+        "toString" => "String.toString",
         "concat" => "String.concat",
         _ => return None,
     })
@@ -3536,6 +3556,129 @@ fn math_sign(number: f64) -> f64 {
     } else {
         -1.0
     }
+}
+
+/// Converts a string method index argument, treating `undefined` and `NaN` as
+/// zero and rejecting negative or non-finite values.
+fn string_index(value: &Value) -> Option<usize> {
+    let number = to_number(value);
+    if number.is_nan() {
+        return Some(0);
+    }
+    let index = number.trunc();
+    if index < 0.0 || index > usize::MAX as f64 {
+        return None;
+    }
+    Some(index as usize)
+}
+
+/// Replaces `search` in `text`, expanding the JavaScript replacement patterns
+/// `$$`, `$&`, `` $` ``, and `$'`.
+fn replace_string(text: &str, search: &str, replacement: &str, all: bool) -> String {
+    let mut output = String::new();
+    if search.is_empty() {
+        let mut cursor = 0;
+        while cursor <= text.len() {
+            let Some(character) = text[cursor..].chars().next() else {
+                break;
+            };
+            let end = cursor + character.len_utf8();
+            output.push_str(&expand_replacement(
+                replacement,
+                "",
+                &text[..cursor],
+                &text[cursor..],
+            ));
+            output.push(character);
+            cursor = end;
+            if !all {
+                output.push_str(&text[cursor..]);
+                return output;
+            }
+        }
+        output.push_str(&expand_replacement(replacement, "", text, ""));
+        return output;
+    }
+
+    let mut cursor = 0;
+    while let Some(relative) = text[cursor..].find(search) {
+        let start = cursor + relative;
+        let end = start + search.len();
+        output.push_str(&text[cursor..start]);
+        output.push_str(&expand_replacement(
+            replacement,
+            search,
+            &text[..start],
+            &text[end..],
+        ));
+        cursor = end;
+        if !all {
+            break;
+        }
+    }
+    output.push_str(&text[cursor..]);
+    output
+}
+
+fn expand_replacement(replacement: &str, matched: &str, prefix: &str, suffix: &str) -> String {
+    let mut output = String::new();
+    let mut characters = replacement.chars().peekable();
+    while let Some(character) = characters.next() {
+        if character != '$' {
+            output.push(character);
+            continue;
+        }
+        match characters.peek() {
+            Some('$') => {
+                characters.next();
+                output.push('$');
+            }
+            Some('&') => {
+                characters.next();
+                output.push_str(matched);
+            }
+            Some('`') => {
+                characters.next();
+                output.push_str(prefix);
+            }
+            Some('\'') => {
+                characters.next();
+                output.push_str(suffix);
+            }
+            _ => output.push('$'),
+        }
+    }
+    output
+}
+
+fn math_hypot(arguments: &[Value]) -> f64 {
+    let values = arguments.iter().map(to_number).collect::<Vec<_>>();
+    let mut maximum = 0.0f64;
+    let mut any_nan = false;
+    for value in &values {
+        if value.is_infinite() {
+            return f64::INFINITY;
+        }
+        if value.is_nan() {
+            any_nan = true;
+        }
+        let absolute = value.abs();
+        if absolute > maximum {
+            maximum = absolute;
+        }
+    }
+    if any_nan {
+        return f64::NAN;
+    }
+    if maximum == 0.0 {
+        return 0.0;
+    }
+    maximum
+        * values
+            .iter()
+            .map(|value| (value / maximum).powi(2))
+            .sum::<f64>()
+            .sqrt()
 }
 
 fn math_extreme(arguments: &[Value], maximum: bool) -> f64 {
@@ -5427,6 +5570,65 @@ mod tests {
         let error = run(r#"return Array.from({ length: 1000001 });"#)
             .expect_err("oversized array-like should fail");
         assert_eq!(error.kind(), super::RuntimeErrorKind::TypeError);
+    }
+
+    #[test]
+    fn supports_additional_string_and_math_methods() {
+        assert_eq!(
+            run_value(r#"return "a-b-a".replaceAll("a", "x");"#),
+            string("x-b-x")
+        );
+        assert_eq!(
+            run_value(r#"return "abc".replace("b", "[$&]");"#),
+            string("a[b]c")
+        );
+        assert_eq!(
+            run_value(r#"return "abc".replace("b", "$`");"#),
+            string("aac")
+        );
+        assert_eq!(
+            run_value(r#"return "abc".replace("b", "$'");"#),
+            string("acc")
+        );
+        assert_eq!(
+            run_value(r#"return "abc".replace("b", "$$");"#),
+            string("a$c")
+        );
+        assert_eq!(
+            run_value(r#"return "abc".replaceAll("", "-");"#),
+            string("-a-b-c-")
+        );
+        assert_eq!(
+            run_value(r#"return "😀".codePointAt(0);"#),
+            number(128_512.0)
+        );
+        assert_eq!(
+            run_value(r#"return "ab".codePointAt(5) === undefined;"#),
+            Value::Boolean(true)
+        );
+        assert_eq!(
+            run_value(r#"return ["ab".charAt(), "ab".charAt(NaN), "ab".charCodeAt()].join(",");"#),
+            string("a,a,97")
+        );
+        assert_eq!(run_value(r#"return "abc".toString();"#), string("abc"));
+
+        assert_eq!(run_value("return Math.cbrt(27);"), number(3.0));
+        assert_eq!(run_value("return Math.log2(8);"), number(3.0));
+        assert_eq!(run_value("return Math.log10(1000);"), number(3.0));
+        assert_eq!(run_value("return Math.hypot(3, 4);"), number(5.0));
+        assert_eq!(run_value("return Math.hypot();"), number(0.0));
+        assert_eq!(
+            run_value("return Math.hypot(Infinity, NaN);"),
+            number(f64::INFINITY)
+        );
+        assert_eq!(
+            run_value("return Math.SQRT2 === Math.sqrt(2);"),
+            Value::Boolean(true)
+        );
+        assert_eq!(
+            run_value("return Math.LN2 === Math.log(2);"),
+            Value::Boolean(true)
+        );
     }
 
     #[test]
