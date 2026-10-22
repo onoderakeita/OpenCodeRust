@@ -51,6 +51,70 @@ pub type ObjectRef = Rc<RefCell<IndexMap<String, Value>>>;
 /// Shared storage for a JavaScript array.
 pub type ArrayRef = Rc<RefCell<Vec<Value>>>;
 
+/// Brand carried by an `Error` value.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ErrorKind {
+    /// Generic `Error`.
+    Error,
+    /// `TypeError`.
+    TypeError,
+    /// `RangeError`.
+    RangeError,
+    /// `SyntaxError`.
+    SyntaxError,
+    /// `ReferenceError`.
+    ReferenceError,
+}
+
+impl ErrorKind {
+    /// Constructor name exposed as `error.name`.
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Error => "Error",
+            Self::TypeError => "TypeError",
+            Self::RangeError => "RangeError",
+            Self::SyntaxError => "SyntaxError",
+            Self::ReferenceError => "ReferenceError",
+        }
+    }
+
+    /// Resolves a constructor name to its brand.
+    pub fn from_name(name: &str) -> Option<Self> {
+        match name {
+            "Error" => Some(Self::Error),
+            "TypeError" => Some(Self::TypeError),
+            "RangeError" => Some(Self::RangeError),
+            "SyntaxError" => Some(Self::SyntaxError),
+            "ReferenceError" => Some(Self::ReferenceError),
+            _ => None,
+        }
+    }
+}
+
+/// Shared error data.
+#[derive(Debug)]
+pub struct ErrorValue {
+    /// Error brand used by `instanceof`.
+    pub kind: ErrorKind,
+    /// Human-readable message.
+    pub message: String,
+}
+
+/// Shared reference to an error value.
+pub type ErrorRef = Rc<ErrorValue>;
+
+/// Settled state of a promise in the synchronous model.
+#[derive(Debug)]
+pub enum PromiseState {
+    /// Promise completed with a value.
+    Fulfilled(Value),
+    /// Promise failed with a reason.
+    Rejected(Value),
+}
+
+/// Shared reference to a settled promise.
+pub type PromiseRef = Rc<PromiseState>;
+
 /// A value inside the confined interpreter.
 ///
 /// Objects preserve insertion order, mirroring JavaScript own-key order for
@@ -78,6 +142,10 @@ pub enum Value {
     Builtin(&'static str),
     /// Reference into the host tool tree, such as `tools.math.add`.
     ToolRef(Rc<Vec<String>>),
+    /// JavaScript error value carrying a brand for `instanceof`.
+    Error(ErrorRef),
+    /// Settled promise value in the synchronous model.
+    Promise(PromiseRef),
     /// Native method bound to a receiver, such as `array.map`.
     BoundMethod {
         /// Receiver value the method operates on.
@@ -109,6 +177,24 @@ impl Value {
     /// Creates an array from values.
     pub fn array(values: Vec<Value>) -> Self {
         Self::Array(Rc::new(RefCell::new(values)))
+    }
+
+    /// Creates an error value with a brand.
+    pub fn error(kind: ErrorKind, message: impl Into<String>) -> Self {
+        Self::Error(Rc::new(ErrorValue {
+            kind,
+            message: message.into(),
+        }))
+    }
+
+    /// Creates a fulfilled promise.
+    pub fn promise_fulfilled(value: Value) -> Self {
+        Self::Promise(Rc::new(PromiseState::Fulfilled(value)))
+    }
+
+    /// Creates a rejected promise.
+    pub fn promise_rejected(reason: Value) -> Self {
+        Self::Promise(Rc::new(PromiseState::Rejected(reason)))
     }
 
     /// Creates a reference into the host tool tree.
@@ -162,6 +248,8 @@ impl Value {
                 left == right
             }
             (Self::ToolRef(left), Self::ToolRef(right)) => left == right,
+            (Self::Error(left), Self::Error(right)) => Rc::ptr_eq(left, right),
+            (Self::Promise(left), Self::Promise(right)) => Rc::ptr_eq(left, right),
             _ => false,
         }
     }
@@ -213,6 +301,19 @@ impl Value {
                 ancestors.pop();
                 JsonValue::Object(map)
             }
+            Self::Error(error) => {
+                let mut map = JsonMap::new();
+                map.insert(
+                    "name".to_owned(),
+                    JsonValue::String(error.kind.name().to_owned()),
+                );
+                map.insert(
+                    "message".to_owned(),
+                    JsonValue::String(error.message.clone()),
+                );
+                JsonValue::Object(map)
+            }
+            Self::Promise(_) => JsonValue::Null,
             Self::Function(_) | Self::Builtin(_) | Self::BoundMethod { .. } | Self::ToolRef(_) => {
                 JsonValue::Null
             }
@@ -234,7 +335,9 @@ impl PartialEq for Value {
             | (Self::Function(_), Self::Function(_))
             | (Self::Builtin(_), Self::Builtin(_))
             | (Self::BoundMethod { .. }, Self::BoundMethod { .. })
-            | (Self::ToolRef(_), Self::ToolRef(_)) => self.same_reference(other),
+            | (Self::ToolRef(_), Self::ToolRef(_))
+            | (Self::Error(_), Self::Error(_))
+            | (Self::Promise(_), Self::Promise(_)) => self.same_reference(other),
             _ => false,
         }
     }
@@ -286,6 +389,14 @@ impl Display for Value {
             Self::Function(_) | Self::Builtin(_) | Self::BoundMethod { .. } => {
                 formatter.write_str("[Function]")
             }
+            Self::Error(error) => {
+                if error.message.is_empty() {
+                    formatter.write_str(error.kind.name())
+                } else {
+                    write!(formatter, "{}: {}", error.kind.name(), error.message)
+                }
+            }
+            Self::Promise(_) => formatter.write_str("[Promise]"),
             Self::ToolRef(path) => {
                 if path.is_empty() {
                     formatter.write_str("[tools]")
@@ -322,12 +433,15 @@ fn check_data_at(
         | Value::Null
         | Value::Boolean(_)
         | Value::Number(_)
-        | Value::String(_) => Ok(()),
-        Value::Function(_) | Value::Builtin(_) | Value::BoundMethod { .. } | Value::ToolRef(_) => {
-            Err(DataError::NonData {
-                label: label.to_owned(),
-            })
-        }
+        | Value::String(_)
+        | Value::Error(_) => Ok(()),
+        Value::Function(_)
+        | Value::Builtin(_)
+        | Value::BoundMethod { .. }
+        | Value::ToolRef(_)
+        | Value::Promise(_) => Err(DataError::NonData {
+            label: label.to_owned(),
+        }),
         Value::Array(array) => {
             let pointer = Rc::as_ptr(array).cast::<()>();
             if seen.contains(&pointer) {

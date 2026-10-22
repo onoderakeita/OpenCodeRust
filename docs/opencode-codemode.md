@@ -86,12 +86,20 @@ upstreamは未対応構文を評価到達時に拒否する。`inspect_support` 
 - 返り値はデータ境界で検証し、関数・tool参照・循環・深さ超過を
   `InvalidDataValue` として拒否する。
 - `typeof` は未宣言識別子に `"undefined"` を返す。
-- `await` は値をそのまま返す。tool呼び出しは同期hostで即時に解決する。
+- `await` はfulfilled値を取り出し、rejected理由をthrowする。tool呼び出しは
+  同期hostで即時に解決する。
 - 配列・文字列・数値のmethodは値として取り出せる (`const map = [].map`)。
 - 関数呼び出しの深さと文・式の評価深さは、それぞれ64で `RangeError` にする。
   Rustの評価frameがJavaScriptより大きいための固定上限である。
-- 未対応: tool呼び出し、promise、`new`、regexp/bigint literal、
-  `void`/`delete`/`instanceof`。
+- `new` は `Error`、`TypeError`、`RangeError`、`SyntaxError`、
+  `ReferenceError` のconstructorのみを許可する。`Error(...)` は `new` なしでも
+  同じ値を作る。
+- `instanceof` はこれらのError brandを判定する。Error以外のobject namespaceは
+  `false`、非callableな右辺は `TypeError` にする。
+- Error値は `name` と `message` を持ち、`{ name, message }` として直列化する。
+  `Object.keys` は `["name", "message"]` を返し、spreadするとbrandを失う。
+- 捕捉された実行時失敗は対応するbrandのError値になる。
+- 未対応: regexp/bigint literal、`void`/`delete`、Error以外の `new`。
 - 緩い等価 (`==`) は基本型のcoercionのみで、objectのToPrimitiveは未実装。
 
 ## Stdlib baseline
@@ -138,9 +146,10 @@ upstreamは未対応構文を評価到達時に拒否する。`inspect_support` 
 - `maxToolCalls` は `set_limits` / `set_tool_call_limit` で適用し、超過は
   `ToolCallLimitExceeded` を返す。
 - `Promise.resolve`、`Promise.reject`、`Promise.all`、`Promise.allSettled`、
-  `Promise.race` は同期的に評価する。`await` は値を通す。
+  `Promise.race` は同期的に評価する。`await` はfulfilled値を取り出し、
+  rejected理由をthrowする。
 - 真の非同期実行、tool呼び出しの同時実行制御、未await rejectionの診断は
-  未実装。
+  未実装。境界に到達した未解決のPromiseは `InvalidDataValue` になる。
 
 ## 未実装
 

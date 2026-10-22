@@ -24,7 +24,7 @@ use oxc_syntax::operator::BinaryOperator;
 
 use crate::limits::ToolCallBudget;
 use crate::tools::{ToolError, ToolHost};
-use crate::value::{check_data, is_blocked_member, FunctionId, Value};
+use crate::value::{check_data, is_blocked_member, ErrorKind, FunctionId, PromiseState, Value};
 
 /// Maximum nested user-function calls before the interpreter raises a
 /// `RangeError`. The ceiling is conservative because Rust evaluation frames are
@@ -45,6 +45,8 @@ pub enum RuntimeErrorKind {
     TypeError,
     /// Invalid numeric or structural operation.
     RangeError,
+    /// Invalid JSON or other syntax failure.
+    SyntaxError,
     /// A host value that is not plain data.
     InvalidDataValue,
     /// Syntax accepted by the parser but outside the interpreter subset.
@@ -65,6 +67,7 @@ impl Display for RuntimeErrorKind {
             Self::ReferenceError => "ReferenceError",
             Self::TypeError => "TypeError",
             Self::RangeError => "RangeError",
+            Self::SyntaxError => "SyntaxError",
             Self::InvalidDataValue => "InvalidDataValue",
             Self::UnsupportedSyntax => "UnsupportedSyntax",
             Self::Timeout => "Timeout",
@@ -150,7 +153,14 @@ impl RuntimeError {
 
     fn caught_value(&self) -> Value {
         self.thrown.clone().unwrap_or_else(|| {
-            Value::from_entries([("message", Value::String(self.message.clone()))])
+            let kind = match self.kind {
+                RuntimeErrorKind::ReferenceError => ErrorKind::ReferenceError,
+                RuntimeErrorKind::TypeError => ErrorKind::TypeError,
+                RuntimeErrorKind::RangeError => ErrorKind::RangeError,
+                RuntimeErrorKind::SyntaxError => ErrorKind::SyntaxError,
+                _ => ErrorKind::Error,
+            };
+            Value::error(kind, self.message.clone())
         })
     }
 }
@@ -377,6 +387,11 @@ impl<'a> Interpreter<'a> {
             ("Array", array),
             ("Promise", promise),
             ("tools", Value::tool_ref(Vec::new())),
+            ("Error", Value::Builtin("Error")),
+            ("TypeError", Value::Builtin("TypeError")),
+            ("RangeError", Value::Builtin("RangeError")),
+            ("SyntaxError", Value::Builtin("SyntaxError")),
+            ("ReferenceError", Value::Builtin("ReferenceError")),
             ("undefined", Value::Undefined),
             ("NaN", Value::Number(f64::NAN)),
             ("Infinity", Value::Number(f64::INFINITY)),
@@ -864,6 +879,17 @@ impl<'a> Interpreter<'a> {
                                         values.insert(key.clone(), value.clone());
                                     }
                                 }
+                                Value::Error(error) => {
+                                    values.insert(
+                                        "name".to_owned(),
+                                        Value::String(error.kind.name().to_owned()),
+                                    );
+                                    values.insert(
+                                        "message".to_owned(),
+                                        Value::String(error.message.clone()),
+                                    );
+                                }
+                                Value::Promise(_) => {}
                                 _ => {
                                     return Err(RuntimeError::new(
                                         RuntimeErrorKind::InvalidDataValue,
@@ -919,7 +945,18 @@ impl<'a> Interpreter<'a> {
             Expression::ChainExpression(chain) => Ok(self
                 .eval_chain(&chain.expression)?
                 .unwrap_or(Value::Undefined)),
-            Expression::AwaitExpression(expression) => self.eval_expression(&expression.argument),
+            Expression::AwaitExpression(expression) => {
+                let value = self.eval_expression(&expression.argument)?;
+                match value {
+                    Value::Promise(promise) => match &*promise {
+                        PromiseState::Fulfilled(value) => Ok(value.clone()),
+                        PromiseState::Rejected(reason) => {
+                            Err(RuntimeError::thrown(reason.clone(), expression.span))
+                        }
+                    },
+                    other => Ok(other),
+                }
+            }
             Expression::UnaryExpression(expression) => {
                 self.eval_unary(expression.operator, &expression.argument, expression.span)
             }
@@ -961,6 +998,16 @@ impl<'a> Interpreter<'a> {
             Expression::TSTypeAssertion(expression) => self.eval_expression(&expression.expression),
             Expression::TSInstantiationExpression(expression) => {
                 self.eval_expression(&expression.expression)
+            }
+            Expression::NewExpression(expression) => {
+                let callee = self.eval_expression(&expression.callee)?;
+                let arguments = self.eval_arguments(&expression.arguments)?;
+                match callee {
+                    Value::Builtin(name) if ErrorKind::from_name(name).is_some() => {
+                        Ok(make_error(name, &arguments))
+                    }
+                    _ => Err(RuntimeError::unsupported("new", expression.span)),
+                }
             }
             _ => match expression.as_member_expression() {
                 Some(member) => self.eval_member(member),
@@ -1088,7 +1135,7 @@ impl<'a> Interpreter<'a> {
                 let key = to_property_key(left, span)?;
                 Ok(Value::Boolean(has_property(right, &key)))
             }
-            BinaryOperator::Instanceof => Err(RuntimeError::unsupported("instanceof", span)),
+            BinaryOperator::Instanceof => Ok(Value::Boolean(instance_of(left, right, span)?)),
         }
     }
 
@@ -1290,6 +1337,9 @@ impl<'a> Interpreter<'a> {
             "parseFloat" => Ok(Value::Number(parse_float(&to_js_string(&argument(0))))),
             "isNaN" => Ok(Value::Boolean(to_number(&argument(0)).is_nan())),
             "isFinite" => Ok(Value::Boolean(to_number(&argument(0)).is_finite())),
+            "Error" | "TypeError" | "RangeError" | "SyntaxError" | "ReferenceError" => {
+                Ok(make_error(name, arguments))
+            }
             "Number.isNaN" => Ok(Value::Boolean(to_number(&argument(0)).is_nan())),
             "Number.isFinite" => Ok(Value::Boolean(to_number(&argument(0)).is_finite())),
             "Number.isInteger" => {
@@ -1363,10 +1413,16 @@ impl<'a> Interpreter<'a> {
             "Math.max" => Ok(Value::Number(math_extreme(arguments, true))),
             "Math.min" => Ok(Value::Number(math_extreme(arguments, false))),
             "JSON.parse" => {
-                let text = to_js_string(&argument(0));
+                let Value::String(text) = argument(0) else {
+                    return Err(RuntimeError::new(
+                        RuntimeErrorKind::ExecutionFailure,
+                        "JSON.parse expects a string.",
+                        _span,
+                    ));
+                };
                 let json: serde_json::Value = serde_json::from_str(&text).map_err(|error| {
                     RuntimeError::new(
-                        RuntimeErrorKind::ExecutionFailure,
+                        RuntimeErrorKind::SyntaxError,
                         format!("JSON.parse failed: {error}"),
                         _span,
                     )
@@ -1376,8 +1432,14 @@ impl<'a> Interpreter<'a> {
             "JSON.stringify" => {
                 Ok(stringify_json(&argument(0)).map_or(Value::Undefined, Value::String))
             }
-            "Promise.resolve" => Ok(argument(0)),
-            "Promise.reject" => Err(RuntimeError::thrown(argument(0), _span)),
+            "Promise.resolve" => {
+                let value = argument(0);
+                Ok(match value {
+                    Value::Promise(_) => value,
+                    _ => Value::promise_fulfilled(value),
+                })
+            }
+            "Promise.reject" => Ok(Value::promise_rejected(argument(0))),
             "Promise.all" | "Promise.allSettled" | "Promise.race" => {
                 let source = argument(0);
                 let items = match &source {
@@ -1390,19 +1452,40 @@ impl<'a> Interpreter<'a> {
                     }
                 };
                 match name {
-                    "Promise.race" => Ok(items.into_iter().next().unwrap_or(Value::Undefined)),
-                    "Promise.allSettled" => Ok(Value::array(
-                        items
-                            .into_iter()
-                            .map(|value| {
-                                Value::from_entries([
+                    "Promise.race" => Ok(items.into_iter().next().map_or_else(
+                        || Value::promise_fulfilled(Value::Undefined),
+                        |item| match item {
+                            Value::Promise(_) => item,
+                            _ => Value::promise_fulfilled(item),
+                        },
+                    )),
+                    "Promise.all" => {
+                        let mut values = Vec::new();
+                        for item in &items {
+                            match settle_promise(item) {
+                                Ok(value) => values.push(value),
+                                Err(reason) => return Ok(Value::promise_rejected(reason)),
+                            }
+                        }
+                        Ok(Value::promise_fulfilled(Value::array(values)))
+                    }
+                    _ => {
+                        let mut settled = Vec::new();
+                        for item in &items {
+                            let entry = match settle_promise(item) {
+                                Ok(value) => Value::from_entries([
                                     ("status", Value::String("fulfilled".to_owned())),
                                     ("value", value),
-                                ])
-                            })
-                            .collect(),
-                    )),
-                    _ => Ok(Value::array(items)),
+                                ]),
+                                Err(reason) => Value::from_entries([
+                                    ("status", Value::String("rejected".to_owned())),
+                                    ("reason", reason),
+                                ]),
+                            };
+                            settled.push(entry);
+                        }
+                        Ok(Value::promise_fulfilled(Value::array(settled)))
+                    }
                 }
             }
             "Object.keys" => {
@@ -2636,6 +2719,12 @@ impl<'a> Interpreter<'a> {
                 }
             }
             Value::Builtin(name) => Ok(builtin_property(name, key)),
+            Value::Error(error) => Ok(match key {
+                "name" => Value::String(error.kind.name().to_owned()),
+                "message" => Value::String(error.message.clone()),
+                _ => Value::Undefined,
+            }),
+            Value::Promise(_) => Ok(Value::Undefined),
             Value::Number(_) => Ok(bound_method(object, number_method(key))),
             Value::ToolRef(path) => {
                 let mut next = path.as_ref().clone();
@@ -2688,6 +2777,44 @@ impl<'a> Interpreter<'a> {
             )),
         }
     }
+}
+
+fn settle_promise(value: &Value) -> Result<Value, Value> {
+    match value {
+        Value::Promise(promise) => match &**promise {
+            PromiseState::Fulfilled(value) => Ok(value.clone()),
+            PromiseState::Rejected(reason) => Err(reason.clone()),
+        },
+        other => Ok(other.clone()),
+    }
+}
+
+fn make_error(name: &str, arguments: &[Value]) -> Value {
+    let kind = ErrorKind::from_name(name).unwrap_or(ErrorKind::Error);
+    let message = match arguments.first() {
+        None | Some(Value::Undefined) => String::new(),
+        Some(value) => to_js_string(value),
+    };
+    Value::error(kind, message)
+}
+
+fn instance_of(left: &Value, right: &Value, span: Span) -> Result<bool, RuntimeError> {
+    let Value::Builtin(name) = right else {
+        return match right {
+            Value::Object(_) => Ok(false),
+            _ => Err(RuntimeError::type_error(
+                "The right-hand side of 'instanceof' is not callable.",
+                span,
+            )),
+        };
+    };
+    let Some(kind) = ErrorKind::from_name(name) else {
+        return Ok(false);
+    };
+    Ok(match left {
+        Value::Error(error) => kind == ErrorKind::Error || error.kind == kind,
+        _ => false,
+    })
 }
 
 fn builtin_property(name: &str, key: &str) -> Value {
@@ -2999,6 +3126,7 @@ fn own_keys(value: &Value) -> Vec<String> {
         Value::String(value) => (0..value.chars().count())
             .map(|index| index.to_string())
             .collect(),
+        Value::Error(_) => vec!["name".to_owned(), "message".to_owned()],
         _ => Vec::new(),
     }
 }
@@ -3054,6 +3182,12 @@ fn stringify_json_inner(value: &Value, ancestors: &mut Vec<usize>) -> Option<Str
         | Value::Builtin(_)
         | Value::BoundMethod { .. }
         | Value::ToolRef(_) => None,
+        Value::Error(error) => {
+            let name = serde_json::to_string(error.kind.name()).ok()?;
+            let message = serde_json::to_string(&error.message).ok()?;
+            Some(format!("{{\"name\":{name},\"message\":{message}}}"))
+        }
+        Value::Promise(_) => Some("{}".to_owned()),
         Value::Null => Some("null".to_owned()),
         Value::Boolean(value) => Some(value.to_string()),
         Value::Number(value) => Some(if value.is_finite() {
@@ -3207,6 +3341,7 @@ fn has_property(value: &Value, key: &str) -> bool {
                     .parse::<usize>()
                     .is_ok_and(|index| index < value.chars().count())
         }
+        Value::Error(_) => key == "name" || key == "message",
         _ => false,
     }
 }
@@ -3222,7 +3357,9 @@ fn is_truthy(value: &Value) -> bool {
         | Value::Function(_)
         | Value::Builtin(_)
         | Value::BoundMethod { .. }
-        | Value::ToolRef(_) => true,
+        | Value::ToolRef(_)
+        | Value::Error(_)
+        | Value::Promise(_) => true,
     }
 }
 
@@ -3298,9 +3435,12 @@ fn to_number(value: &Value) -> f64 {
                 .collect::<Vec<_>>()
                 .join(","),
         )),
-        Value::Object(_) | Value::Function(_) | Value::Builtin(_) | Value::BoundMethod { .. } => {
-            f64::NAN
-        }
+        Value::Object(_)
+        | Value::Function(_)
+        | Value::Builtin(_)
+        | Value::BoundMethod { .. }
+        | Value::Error(_)
+        | Value::Promise(_) => f64::NAN,
         Value::ToolRef(_) => f64::NAN,
     }
 }
@@ -3392,6 +3532,14 @@ fn to_js_string(value: &Value) -> String {
         Value::Function(_) | Value::Builtin(_) | Value::BoundMethod { .. } => {
             "[Function]".to_owned()
         }
+        Value::Error(error) => {
+            if error.message.is_empty() {
+                error.kind.name().to_owned()
+            } else {
+                format!("{}: {}", error.kind.name(), error.message)
+            }
+        }
+        Value::Promise(_) => "[object Promise]".to_owned(),
         Value::ToolRef(_) => value.to_string(),
     }
 }
@@ -3428,7 +3576,7 @@ fn type_of(value: &Value) -> &'static str {
         Value::Boolean(_) => "boolean",
         Value::Number(_) => "number",
         Value::String(_) => "string",
-        Value::Array(_) | Value::Object(_) => "object",
+        Value::Array(_) | Value::Object(_) | Value::Error(_) | Value::Promise(_) => "object",
         Value::ToolRef(path) if path.is_empty() => "object",
         Value::Function(_) | Value::Builtin(_) | Value::BoundMethod { .. } | Value::ToolRef(_) => {
             "function"
@@ -3646,7 +3794,7 @@ mod tests {
 
     #[test]
     fn rejects_unsupported_new_expressions() {
-        let error = run("return new Date();").expect_err("should fail");
+        let error = run("const Date = 1; return new Date();").expect_err("should fail");
         assert_eq!(error.kind(), super::RuntimeErrorKind::UnsupportedSyntax);
     }
 
@@ -3989,6 +4137,135 @@ mod tests {
     }
 
     #[test]
+    fn constructs_and_brands_errors() {
+        let source = r#"
+            const generic = new Error("boom");
+            const type = new TypeError("t");
+            return [
+                generic instanceof Error,
+                type instanceof Error,
+                type instanceof TypeError,
+                type instanceof RangeError,
+                generic instanceof TypeError,
+                generic.name,
+                generic.message,
+                typeof Error,
+            ];
+        "#;
+        let value = run_value(source);
+        let array = value.as_array().expect("array result");
+        assert_eq!(array[0], Value::Boolean(true));
+        assert_eq!(array[1], Value::Boolean(true));
+        assert_eq!(array[2], Value::Boolean(true));
+        assert_eq!(array[3], Value::Boolean(false));
+        assert_eq!(array[4], Value::Boolean(false));
+        assert_eq!(array[5], string("Error"));
+        assert_eq!(array[6], string("boom"));
+        assert_eq!(array[7], string("function"));
+    }
+
+    #[test]
+    fn errors_constructed_without_new_and_empty_messages() {
+        let source = r#"
+            const called = Error("plain");
+            const empty = new Error();
+            return [called instanceof Error, called.name, called.message, empty.name, empty.message];
+        "#;
+        let value = run_value(source);
+        let array = value.as_array().expect("array result");
+        assert_eq!(array[0], Value::Boolean(true));
+        assert_eq!(array[1], string("Error"));
+        assert_eq!(array[2], string("plain"));
+        assert_eq!(array[3], string("Error"));
+        assert_eq!(array[4], string(""));
+    }
+
+    #[test]
+    fn brands_runtime_failures_as_caught_errors() {
+        let syntax = run_value(
+            r#"try { JSON.parse("nope") } catch (e) { return [e.name, e instanceof SyntaxError, e instanceof Error, e.message.includes("JSON")] }"#,
+        );
+        let syntax = syntax.as_array().expect("array result");
+        assert_eq!(syntax[0], string("SyntaxError"));
+        assert_eq!(syntax[1], Value::Boolean(true));
+        assert_eq!(syntax[2], Value::Boolean(true));
+        assert_eq!(syntax[3], Value::Boolean(true));
+
+        let reference = run_value(
+            r#"try { undeclared() } catch (e) { return [e.name, e instanceof ReferenceError] }"#,
+        );
+        let reference = reference.as_array().expect("array result");
+        assert_eq!(reference[0], string("ReferenceError"));
+        assert_eq!(reference[1], Value::Boolean(true));
+
+        let type_error = run_value(
+            r#"try { const c = 1; c = 2 } catch (e) { return [e.name, e instanceof TypeError] }"#,
+        );
+        let type_error = type_error.as_array().expect("array result");
+        assert_eq!(type_error[0], string("TypeError"));
+        assert_eq!(type_error[1], Value::Boolean(true));
+
+        let plain =
+            run_value(r#"try { JSON.parse(5) } catch (e) { return [e.name, e instanceof Error] }"#);
+        let plain = plain.as_array().expect("array result");
+        assert_eq!(plain[0], string("Error"));
+        assert_eq!(plain[1], Value::Boolean(true));
+    }
+
+    #[test]
+    fn errors_serialize_as_plain_data_and_lose_the_brand() {
+        assert_eq!(
+            run_value(r#"return JSON.stringify(new Error("m"));"#),
+            string(r#"{"name":"Error","message":"m"}"#)
+        );
+        assert_eq!(
+            run_value(r#"return Object.keys(new Error("m")).join(",");"#),
+            string("name,message")
+        );
+        assert_eq!(
+            run_value(r#"return ({ ...new Error("m") }) instanceof Error;"#),
+            Value::Boolean(false)
+        );
+        assert_eq!(
+            run_value(r#"return JSON.stringify({ ...new Error("m") });"#),
+            string(r#"{"name":"Error","message":"m"}"#)
+        );
+    }
+
+    #[test]
+    fn thrown_errors_keep_their_brand() {
+        let value = run_value(
+            r#"try { throw new Error("x") } catch (e) { return [e instanceof Error, e.message] }"#,
+        );
+        let array = value.as_array().expect("array result");
+        assert_eq!(array[0], Value::Boolean(true));
+        assert_eq!(array[1], string("x"));
+    }
+
+    #[test]
+    fn rejects_invalid_instanceof_right_hand_sides() {
+        let error = run("return 1 instanceof 5;").expect_err("should reject the operand");
+        assert!(error.message().contains("right-hand side of 'instanceof'"));
+    }
+
+    #[test]
+    fn promise_all_settled_keeps_rejection_reasons() {
+        let source = r#"
+            const settled = await Promise.allSettled([Promise.reject(new Error("b"))]);
+            return [
+                settled[0].status,
+                settled[0].reason instanceof Error,
+                settled[0].reason.message,
+            ];
+        "#;
+        let value = run_value(source);
+        let array = value.as_array().expect("array result");
+        assert_eq!(array[0], string("rejected"));
+        assert_eq!(array[1], Value::Boolean(true));
+        assert_eq!(array[2], string("b"));
+    }
+
+    #[test]
     fn enforces_the_wall_clock_timeout() {
         let allocator = Allocator::default();
         let program = parse_program(&allocator, "while (true) {}").expect("fixture should parse");
@@ -4023,7 +4300,7 @@ mod tests {
         let source = r#"
             const values = await Promise.all([tools.echo(1), tools.echo(2)]);
             const settled = await Promise.allSettled([tools.echo(3)]);
-            return [values.join(","), settled[0].status, settled[0].value, Promise.race([7, 8])];
+            return [values.join(","), settled[0].status, settled[0].value, await Promise.race([7, 8])];
         "#;
         let value = run_with_host(source).expect("program should run");
         let array = value.as_array().expect("array result");
