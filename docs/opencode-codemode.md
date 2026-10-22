@@ -47,12 +47,33 @@ upstreamは未対応構文を評価到達時に拒否する。`inspect_support` 
 静的に報告する補助であり、実行可否を保証しない。値のcoercion、禁止メンバー
 (`__proto__` など)、tool権限は別の実行時境界で扱う。
 
+## Value boundary
+
+`value::Value` はデータ専用の値モデルである。
+
+- `undefined`、`null`、boolean、number、string、array、null-prototype object。
+- objectは挿入順を保持する。`__proto__`、`constructor`、`prototype` は
+  境界で拒否する。
+- 深さ上限は upstream と同じ32で、超過は `DataError` として返す。
+- 境界通過時、`undefined` と非有限数は `null` になる。
+- 関数、promise、tool参照、sandbox classはデータ値ではない。評価器側の
+  実行時値として扱い、この境界を通さない。
+
+## Execution limits
+
+`limits` は upstream の3つの任意制限を実装する。
+
+- `timeoutMs`: 1以上。未指定なら無制限。
+- `maxToolCalls`: 0以上。超過は `ToolCallLimitExceeded`。
+- `maxOutputBytes`: 0以上。値 → logの順に予算を消費し、UTF-8境界を
+  壊さず切り詰める。切り詰めは実行失敗にしない。
+
 ## 未実装
 
 - TypeScriptの型消去・transpile parity
 - AST評価器
-- 値モデル、stdlib、tool runtime
-- timeout、tool-call数、出力byte数の制限
+- stdlib、tool runtime
+- 実時間timeoutの強制
 - upstream parity test suite
 
 ## Validation
