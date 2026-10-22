@@ -161,7 +161,9 @@ shadowingできる。
   `keys` / `values` / `entries` はiteratorではなく配列を返す。
   `includes` はSameValueZero、`indexOf` / `lastIndexOf` はstrict equalityで
   比較する。`sort` / `toSorted` の既定比較は `String(...)` のUTF-16 code
-  unit順で、`undefined` は末尾に置く。
+  unit順で、`undefined` は末尾に置く。`reverse` と `sort` はupstreamと同じく
+  receiverを変更せずコピーを返す (`toReversed` / `toSorted` と同じ)。
+  push/pop/shift/unshift/splice/fill/copyWithinはin-placeで変更する。
 - `String` instance methods: split、slice、substring、substr、indexOf、lastIndexOf、
   includes、startsWith、endsWith、trim系 (trimLeft/trimRight含む)、
   case変換、charAt、charCodeAt、codePointAt、at、padStart、padEnd、repeat、

@@ -2067,9 +2067,12 @@ impl<'a> Interpreter<'a> {
                 Ok(Value::Number(array.len() as f64))
             }
             "Array.reverse" => {
+                // Upstream returns a reversed copy: `reverse` and `toReversed` are
+                // aliases so a bare `list.reverse()` never surprises later reads.
                 let array = as_array_ref(receiver, span)?;
-                array.borrow_mut().reverse();
-                Ok(receiver.clone())
+                let mut items = array.borrow().clone();
+                items.reverse();
+                Ok(Value::array(items))
             }
             "Array.map" => {
                 let array = as_array_ref(receiver, span)?;
@@ -2343,11 +2346,12 @@ impl<'a> Interpreter<'a> {
                 Ok(Value::array(flattened))
             }
             "Array.sort" => {
+                // Like upstream, `sort` is non-mutating and equivalent to
+                // `toSorted`; the receiver keeps its original order.
                 let array = as_array_ref(receiver, span)?;
                 let mut items = array.borrow().clone();
                 self.sort_items(&mut items, arguments.first(), span)?;
-                *array.borrow_mut() = items;
-                Ok(receiver.clone())
+                Ok(Value::array(items))
             }
             "Array.toSorted" => {
                 let array = as_array_ref(receiver, span)?;
@@ -5721,10 +5725,10 @@ mod tests {
     #[test]
     fn evaluates_array_mutation_methods() {
         let source = r#"
-            const values = [3, 1, 2];
+            let values = [3, 1, 2];
             values.push(4);
             const last = values.pop();
-            values.sort((a, b) => a - b);
+            values = values.sort((a, b) => a - b);
             const removed = values.shift();
             values.unshift(9);
             return [values.join(","), last, removed, values.length];
@@ -6069,6 +6073,38 @@ mod tests {
         );
         let error = run("return [1,2,3].map(42);").expect_err("non-callable callback");
         assert_eq!(error.kind(), super::RuntimeErrorKind::TypeError);
+    }
+
+    #[test]
+    fn array_reverse_and_sort_do_not_mutate_like_upstream() {
+        assert_eq!(
+            run_value(
+                "const a = [1, 2, 3]; const r = a.reverse(); \
+                 return [a.join(','), r.join(',')].join('|');"
+            ),
+            string("1,2,3|3,2,1")
+        );
+        assert_eq!(
+            run_value(
+                "const a = [3, 1, 2]; const r = a.sort(); \
+                 return [a.join(','), r.join(',')].join('|');"
+            ),
+            string("3,1,2|1,2,3")
+        );
+        assert_eq!(
+            run_value(
+                "const a = [3, 1, 2]; const r = a.sort((x, y) => x - y); \
+                 return [a.join(','), r.join(',')].join('|');"
+            ),
+            string("3,1,2|1,2,3")
+        );
+        assert_eq!(
+            run_value(
+                "const a = [1, 2]; const r = a.toSorted(); \
+                 return [a.join(','), r.join(',')].join('|');"
+            ),
+            string("1,2|1,2")
+        );
     }
 
     #[test]
