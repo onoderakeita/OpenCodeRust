@@ -349,6 +349,9 @@ impl<'a> Interpreter<'a> {
             ("info", Value::Builtin("console.info")),
             ("warn", Value::Builtin("console.warn")),
             ("error", Value::Builtin("console.error")),
+            ("debug", Value::Builtin("console.debug")),
+            ("dir", Value::Builtin("console.dir")),
+            ("table", Value::Builtin("console.table")),
         ]);
         let math = Value::from_entries([
             ("abs", Value::Builtin("Math.abs")),
@@ -1655,18 +1658,68 @@ impl<'a> Interpreter<'a> {
                 };
                 Ok(Value::array(items))
             }
-            "console.log" | "console.info" | "console.warn" | "console.error" => {
-                self.logs.push(
-                    arguments
-                        .iter()
-                        .map(format_display)
-                        .collect::<Vec<_>>()
-                        .join(" "),
-                );
+            "console.log" | "console.info" | "console.warn" | "console.error" | "console.debug" => {
+                let prefix = match name {
+                    "console.warn" => "[warn] ",
+                    "console.error" => "[error] ",
+                    "console.debug" => "[debug] ",
+                    _ => "",
+                };
+                let message = arguments
+                    .iter()
+                    .map(format_console_argument)
+                    .collect::<Vec<_>>()
+                    .join(" ");
+                self.logs.push(format!("{prefix}{message}"));
+                Ok(Value::Undefined)
+            }
+            "console.dir" => {
+                self.logs.push(match arguments.first() {
+                    Some(value) => format_console_argument(value),
+                    None => "undefined".to_owned(),
+                });
+                Ok(Value::Undefined)
+            }
+            "console.table" => {
+                self.logs
+                    .push(format_console_table(arguments.first(), arguments.get(1)));
                 Ok(Value::Undefined)
             }
             _ => Err(RuntimeError::unsupported(name, _span)),
         }
+    }
+
+    fn sort_items(
+        &mut self,
+        items: &mut [Value],
+        comparator: Option<&Value>,
+        span: Span,
+    ) -> Result<(), RuntimeError> {
+        match comparator {
+            Some(comparator) if !comparator.is_undefined() => {
+                let mut index = 1;
+                while index < items.len() {
+                    let mut cursor = index;
+                    while cursor > 0 {
+                        let order = self.invoke_value(
+                            comparator,
+                            vec![items[cursor - 1].clone(), items[cursor].clone()],
+                            span,
+                        )?;
+                        let order = to_number(&order);
+                        if order > 0.0 || order.is_nan() {
+                            items.swap(cursor - 1, cursor);
+                            cursor -= 1;
+                        } else {
+                            break;
+                        }
+                    }
+                    index += 1;
+                }
+            }
+            _ => items.sort_by_cached_key(to_js_string),
+        }
+        Ok(())
     }
 
     fn call_method(
@@ -1787,12 +1840,22 @@ impl<'a> Interpreter<'a> {
                 }
                 Ok(accumulator)
             }
-            "Array.find" | "Array.findIndex" | "Array.some" | "Array.every" => {
+            "Array.find"
+            | "Array.findIndex"
+            | "Array.findLast"
+            | "Array.findLastIndex"
+            | "Array.some"
+            | "Array.every" => {
                 let array = as_array_ref(receiver, span)?;
                 let items = array.borrow().clone();
                 let predicate = argument(0);
+                let reverse = matches!(method, "Array.findLast" | "Array.findLastIndex");
+                let mut indexed = items.into_iter().enumerate().collect::<Vec<_>>();
+                if reverse {
+                    indexed.reverse();
+                }
                 let mut found = method == "Array.every";
-                for (index, item) in items.into_iter().enumerate() {
+                for (index, item) in indexed {
                     let result = self.invoke_value(
                         &predicate,
                         vec![item.clone(), Value::Number(index as f64), receiver.clone()],
@@ -1800,8 +1863,10 @@ impl<'a> Interpreter<'a> {
                     )?;
                     let truthy = is_truthy(&result);
                     match method {
-                        "Array.find" if truthy => return Ok(item),
-                        "Array.findIndex" if truthy => return Ok(Value::Number(index as f64)),
+                        "Array.find" | "Array.findLast" if truthy => return Ok(item),
+                        "Array.findIndex" | "Array.findLastIndex" if truthy => {
+                            return Ok(Value::Number(index as f64));
+                        }
                         "Array.some" if truthy => return Ok(Value::Boolean(true)),
                         "Array.every" if !truthy => {
                             found = false;
@@ -1811,8 +1876,8 @@ impl<'a> Interpreter<'a> {
                     }
                 }
                 Ok(match method {
-                    "Array.find" => Value::Undefined,
-                    "Array.findIndex" => Value::Number(-1.0),
+                    "Array.find" | "Array.findLast" => Value::Undefined,
+                    "Array.findIndex" | "Array.findLastIndex" => Value::Number(-1.0),
                     "Array.some" => Value::Boolean(false),
                     _ => Value::Boolean(found),
                 })
@@ -1869,6 +1934,38 @@ impl<'a> Interpreter<'a> {
                     Ok(Value::Number(position.map_or(-1.0, |index| index as f64)))
                 }
             }
+            "Array.lastIndexOf" => {
+                let array = as_array_ref(receiver, span)?;
+                let items = array.borrow().clone();
+                let needle = argument(0);
+                let length = items.len() as i64;
+                let from = if arguments.len() > 1 {
+                    let number = to_number(&argument(1));
+                    if number.is_nan() {
+                        0
+                    } else {
+                        let mut index = number.trunc() as i64;
+                        if index < 0 {
+                            index += length;
+                        }
+                        index
+                    }
+                } else {
+                    length - 1
+                };
+                if from < 0 {
+                    return Ok(Value::Number(-1.0));
+                }
+                let start = from.min(length - 1) as usize;
+                let position = items
+                    .iter()
+                    .enumerate()
+                    .take(start + 1)
+                    .rev()
+                    .find(|(_, item)| strict_equals(item, &needle))
+                    .map(|(index, _)| index);
+                Ok(Value::Number(position.map_or(-1.0, |index| index as f64)))
+            }
             "Array.concat" => {
                 let array = as_array_ref(receiver, span)?;
                 let mut values = array.borrow().clone();
@@ -1890,35 +1987,56 @@ impl<'a> Interpreter<'a> {
                 flatten_into(&array.borrow(), depth, &mut flattened);
                 Ok(Value::array(flattened))
             }
+            "Array.flatMap" => {
+                let array = as_array_ref(receiver, span)?;
+                let items = array.borrow().clone();
+                let mapper = argument(0);
+                let mut mapped = Vec::with_capacity(items.len());
+                for (index, item) in items.into_iter().enumerate() {
+                    mapped.push(self.invoke_value(
+                        &mapper,
+                        vec![item, Value::Number(index as f64), receiver.clone()],
+                        span,
+                    )?);
+                }
+                let mut flattened = Vec::new();
+                flatten_into(&mapped, 1, &mut flattened);
+                Ok(Value::array(flattened))
+            }
             "Array.sort" => {
                 let array = as_array_ref(receiver, span)?;
                 let mut items = array.borrow().clone();
-                match arguments.first() {
-                    Some(comparator) if !comparator.is_undefined() => {
-                        let mut index = 1;
-                        while index < items.len() {
-                            let mut cursor = index;
-                            while cursor > 0 {
-                                let order = self.invoke_value(
-                                    comparator,
-                                    vec![items[cursor - 1].clone(), items[cursor].clone()],
-                                    span,
-                                )?;
-                                let order = to_number(&order);
-                                if order > 0.0 || order.is_nan() {
-                                    items.swap(cursor - 1, cursor);
-                                    cursor -= 1;
-                                } else {
-                                    break;
-                                }
-                            }
-                            index += 1;
-                        }
-                    }
-                    _ => items.sort_by_cached_key(to_js_string),
-                }
+                self.sort_items(&mut items, arguments.first(), span)?;
                 *array.borrow_mut() = items;
                 Ok(receiver.clone())
+            }
+            "Array.toSorted" => {
+                let array = as_array_ref(receiver, span)?;
+                let mut items = array.borrow().clone();
+                self.sort_items(&mut items, arguments.first(), span)?;
+                Ok(Value::array(items))
+            }
+            "Array.toReversed" => {
+                let array = as_array_ref(receiver, span)?;
+                let mut items = array.borrow().clone();
+                items.reverse();
+                Ok(Value::array(items))
+            }
+            "Array.with" => {
+                let array = as_array_ref(receiver, span)?;
+                let items = array.borrow().clone();
+                let length = items.len() as i64;
+                let index = normalize_index(&argument(0), length, 0);
+                if index < 0 || index >= length {
+                    return Err(RuntimeError::new(
+                        RuntimeErrorKind::RangeError,
+                        "Invalid index.",
+                        span,
+                    ));
+                }
+                let mut replaced = items;
+                replaced[index as usize] = argument(1);
+                Ok(Value::array(replaced))
             }
             "Array.at" => {
                 let array = as_array_ref(receiver, span)?;
@@ -3126,12 +3244,15 @@ fn array_method(name: &str) -> Option<&'static str> {
         "reduceRight" => "Array.reduceRight",
         "find" => "Array.find",
         "findIndex" => "Array.findIndex",
+        "findLast" => "Array.findLast",
+        "findLastIndex" => "Array.findLastIndex",
         "some" => "Array.some",
         "every" => "Array.every",
         "join" => "Array.join",
         "slice" => "Array.slice",
         "includes" => "Array.includes",
         "indexOf" => "Array.indexOf",
+        "lastIndexOf" => "Array.lastIndexOf",
         "push" => "Array.push",
         "pop" => "Array.pop",
         "shift" => "Array.shift",
@@ -3139,7 +3260,11 @@ fn array_method(name: &str) -> Option<&'static str> {
         "reverse" => "Array.reverse",
         "concat" => "Array.concat",
         "flat" => "Array.flat",
+        "flatMap" => "Array.flatMap",
         "sort" => "Array.sort",
+        "toSorted" => "Array.toSorted",
+        "toReversed" => "Array.toReversed",
+        "with" => "Array.with",
         "at" => "Array.at",
         "splice" => "Array.splice",
         "fill" => "Array.fill",
@@ -3863,33 +3988,169 @@ fn contains_identity(value: &Value, target: usize, visited: &mut Vec<usize>) -> 
     }
 }
 
-fn format_display(value: &Value) -> String {
+/// Maximum console nesting before values render as `"..."`.
+const MAX_CONSOLE_DEPTH: usize = 32;
+
+/// Formats one console argument. Top-level strings print bare, matching the
+/// upstream console formatter.
+fn format_console_argument(value: &Value) -> String {
     match value {
-        Value::Array(_) | Value::Object(_) => {
-            stringify_json(value).unwrap_or_else(|| to_js_string(value))
+        Value::Undefined => "undefined".to_owned(),
+        Value::String(text) => text.clone(),
+        _ => format_console_value(value, &mut Vec::new(), 0),
+    }
+}
+
+/// Formats a value the way a debugger would: sandbox values keep their
+/// friendly forms at any depth, cycles render `"[Circular]"`, and runtime
+/// references render `"[CodeMode reference]"`.
+fn format_console_value(value: &Value, seen: &mut Vec<usize>, depth: usize) -> String {
+    if depth > MAX_CONSOLE_DEPTH {
+        return "...".to_owned();
+    }
+    match value {
+        Value::Undefined | Value::Null => "null".to_owned(),
+        Value::Boolean(value) => value.to_string(),
+        Value::Number(value) => format_number(*value),
+        Value::String(value) => serde_json::to_string(value).unwrap_or_else(|_| "\"\"".to_owned()),
+        Value::Function(_) | Value::Builtin(_) | Value::BoundMethod { .. } | Value::ToolRef(_) => {
+            "[CodeMode reference]".to_owned()
+        }
+        Value::Promise(_) => "[Promise (await it to get its value)]".to_owned(),
+        Value::Date(date) => {
+            crate::date::iso_string(date.time_ms).unwrap_or_else(|| "Invalid Date".to_owned())
+        }
+        Value::Error(error) => {
+            let name = serde_json::to_string(error.kind.name()).unwrap_or_default();
+            let message = serde_json::to_string(&error.message).unwrap_or_default();
+            format!("{{\"name\":{name},\"message\":{message}}}")
+        }
+        Value::Array(array) => {
+            let pointer = Rc::as_ptr(array) as *const () as usize;
+            if seen.contains(&pointer) {
+                return "[Circular]".to_owned();
+            }
+            seen.push(pointer);
+            let items = array
+                .borrow()
+                .iter()
+                .map(|item| format_console_value(item, seen, depth + 1))
+                .collect::<Vec<_>>()
+                .join(",");
+            seen.pop();
+            format!("[{items}]")
+        }
+        Value::Object(object) => {
+            let pointer = Rc::as_ptr(object) as *const () as usize;
+            if seen.contains(&pointer) {
+                return "[Circular]".to_owned();
+            }
+            seen.push(pointer);
+            let entries = object
+                .borrow()
+                .iter()
+                .map(|(key, value)| {
+                    let key = serde_json::to_string(key).unwrap_or_default();
+                    format!("{key}:{}", format_console_value(value, seen, depth + 1))
+                })
+                .collect::<Vec<_>>()
+                .join(",");
+            seen.pop();
+            format!("{{{entries}}}")
         }
         Value::Map(map) => {
+            let pointer = Rc::as_ptr(map) as *const () as usize;
+            if seen.contains(&pointer) {
+                return "[Circular]".to_owned();
+            }
+            seen.push(pointer);
             let entries = map
                 .entries()
                 .into_iter()
                 .map(|(key, value)| {
-                    format!("[{},{}]", format_display(&key), format_display(&value))
+                    format!(
+                        "[{},{}]",
+                        format_console_value(&key, seen, depth + 1),
+                        format_console_value(&value, seen, depth + 1)
+                    )
                 })
                 .collect::<Vec<_>>()
                 .join(",");
+            seen.pop();
             format!("Map({}) [{}]", map.len(), entries)
         }
         Value::Set(set) => {
+            let pointer = Rc::as_ptr(set) as *const () as usize;
+            if seen.contains(&pointer) {
+                return "[Circular]".to_owned();
+            }
+            seen.push(pointer);
             let values = set
                 .values()
                 .into_iter()
-                .map(|value| format_display(&value))
+                .map(|value| format_console_value(&value, seen, depth + 1))
                 .collect::<Vec<_>>()
                 .join(",");
+            seen.pop();
             format!("Set({}) [{}]", set.len(), values)
         }
-        _ => to_js_string(value),
     }
+}
+
+/// Renders `console.table` for an array of plain objects.
+fn format_console_table(data: Option<&Value>, columns: Option<&Value>) -> String {
+    let Some(Value::Array(rows)) = data else {
+        return match data {
+            Some(value) => format_console_argument(value),
+            None => "undefined".to_owned(),
+        };
+    };
+    let rows = rows.borrow();
+
+    let mut names = Vec::new();
+    if let Some(Value::Array(columns)) = columns {
+        for column in columns.borrow().iter() {
+            if let Value::String(name) = column {
+                names.push(name.clone());
+            }
+        }
+    }
+    if names.is_empty() {
+        for row in rows.iter() {
+            if let Value::Object(object) = row {
+                for key in object.borrow().keys() {
+                    if !names.contains(key) {
+                        names.push(key.clone());
+                    }
+                }
+            }
+        }
+    }
+    if names.is_empty() {
+        return data.map_or_else(|| "undefined".to_owned(), format_console_argument);
+    }
+
+    let mut lines = Vec::with_capacity(rows.len() + 1);
+    lines.push(format!("(index)\t{}", names.join("\t")));
+    for (index, row) in rows.iter().enumerate() {
+        let cells = names
+            .iter()
+            .map(|name| {
+                let value = match row {
+                    Value::Object(object) => object
+                        .borrow()
+                        .get(name)
+                        .cloned()
+                        .unwrap_or(Value::Undefined),
+                    _ => Value::Undefined,
+                };
+                format_console_value(&value, &mut Vec::new(), 0)
+            })
+            .collect::<Vec<_>>()
+            .join("\t");
+        lines.push(format!("{index}\t{cells}"));
+    }
+    lines.join("\n")
 }
 
 fn to_int32(value: f64) -> i32 {
@@ -4330,7 +4591,7 @@ mod tests {
         let mut interpreter = Interpreter::new();
         let value = interpreter.run(&program).expect("program should run");
         assert_eq!(value, Value::Undefined);
-        assert_eq!(interpreter.logs(), ["count 2 true", "done"]);
+        assert_eq!(interpreter.logs(), ["count 2 true", "[warn] done"]);
     }
 
     struct TestHost;
@@ -4958,6 +5219,109 @@ mod tests {
     fn program_variables_shadow_installed_globals() {
         assert_eq!(run_value("const Date = 1; return Date;"), number(1.0));
         assert_eq!(run_value("let Map = 2; return Map;"), number(2.0));
+    }
+
+    #[test]
+    fn supports_extended_array_methods() {
+        assert_eq!(run_value("return [1,2,1].lastIndexOf(1);"), number(2.0));
+        assert_eq!(run_value("return [1,2,1].lastIndexOf(1, 1);"), number(0.0));
+        assert_eq!(
+            run_value("return [1,2,1].lastIndexOf(1, undefined);"),
+            number(0.0)
+        );
+        assert_eq!(run_value("return [1,2,1].lastIndexOf(1, -2);"), number(0.0));
+        assert_eq!(run_value("return [1,2,3].lastIndexOf(4);"), number(-1.0));
+
+        assert_eq!(
+            run_value("return [1,2,3,4].findLast((x) => x % 2 === 0);"),
+            number(4.0)
+        );
+        assert_eq!(
+            run_value("return [1,2,3,4].findLastIndex((x) => x % 2 === 0);"),
+            number(3.0)
+        );
+        assert_eq!(
+            run_value("return [1,3].findLast((x) => x % 2 === 0) === undefined;"),
+            Value::Boolean(true)
+        );
+        assert_eq!(
+            run_value("return [1,3].findLastIndex((x) => x % 2 === 0);"),
+            number(-1.0)
+        );
+
+        assert_eq!(
+            run_value("return [1,2].flatMap((x) => [x, x * 2]).join(',');"),
+            string("1,2,2,4")
+        );
+        assert_eq!(
+            run_value("return [1,2].flatMap((x) => x * 2).join(',');"),
+            string("2,4")
+        );
+
+        assert_eq!(
+            run_value(
+                "const a = [3,1,2]; const b = a.toSorted(); return [a.join(','), b.join(',')].join('|');"
+            ),
+            string("3,1,2|1,2,3")
+        );
+        assert_eq!(
+            run_value("return [3,1,2].toSorted((a, b) => b - a).join(',');"),
+            string("3,2,1")
+        );
+        assert_eq!(
+            run_value(
+                "const a = [1,2,3]; return [a.toReversed().join(','), a.join(',')].join('|');"
+            ),
+            string("3,2,1|1,2,3")
+        );
+        assert_eq!(
+            run_value("return [1,2,3].with(-1, 9).join(',');"),
+            string("1,2,9")
+        );
+        assert_eq!(
+            run_value(
+                "const a = [1,2,3]; const b = a.with(0, 9); return [a.join(','), b.join(',')].join('|');"
+            ),
+            string("1,2,3|9,2,3")
+        );
+        let error = run("return [1,2,3].with(3, 9);").expect_err("out of range");
+        assert_eq!(error.kind(), super::RuntimeErrorKind::RangeError);
+    }
+
+    #[test]
+    fn formats_console_values_like_a_debugger() {
+        let allocator = Allocator::default();
+        let program = parse_program(
+            &allocator,
+            r#"
+            console.log({ m: new Map([["a", 1]]), when: new Date(0), s: new Set([1, 2]) });
+            console.log([new Date(0)]);
+            const cyclic = new Map();
+            cyclic.set("self", cyclic);
+            console.log({ box: cyclic });
+            console.log({ fn: (x) => x, ok: 1 });
+            console.debug("d");
+            console.error("e");
+            console.dir({ nested: [1] });
+            console.table([{ when: new Date(0), n: NaN }]);
+        "#,
+        )
+        .expect("fixture should parse");
+        let mut interpreter = Interpreter::new();
+        interpreter.run(&program).expect("program should run");
+        assert_eq!(
+            interpreter.logs(),
+            [
+                r#"{"m":Map(1) [["a",1]],"when":1970-01-01T00:00:00.000Z,"s":Set(2) [1,2]}"#,
+                "[1970-01-01T00:00:00.000Z]",
+                r#"{"box":Map(1) [["self",[Circular]]]}"#,
+                r#"{"fn":[CodeMode reference],"ok":1}"#,
+                "[debug] d",
+                "[error] e",
+                r#"{"nested":[1]}"#,
+                "(index)\twhen\tn\n0\t1970-01-01T00:00:00.000Z\tNaN",
+            ]
+        );
     }
 
     #[test]

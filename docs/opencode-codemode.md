@@ -113,8 +113,14 @@ upstreamは未対応構文を評価到達時に拒否する。`inspect_support` 
 builtinsはプログラムの親scopeに置くため、`const Date = 1` のような同名宣言で
 shadowingできる。
 
-- `console.log/info/warn/error` は引数を空白で連結し、interpreterの
-  `logs()` に保存する。出力先は呼び出し側が決める。
+- `console.log/info/warn/error/debug` は引数を空白で連結し、interpreterの
+  `logs()` に保存する。`warn` / `error` / `debug` はそれぞれ `[warn]`、
+  `[error]`、`[debug]` と空白を前置する。
+- consoleは境界JSONではなくdebugger形式で値を描画する。DateはISO、Map/Setは
+  `Map(n) [...]` / `Set(n) [...]`、関数とtool参照は `[CodeMode reference]`、
+  循環は `[Circular]`、深さ超過は `...` になる。
+- `console.dir` は最初の引数のみを描画する。`console.table` はplain objectの
+  配列を `(index)\t...` 形式に整形する。
 - `Math`: abs、ceil、floor、round、trunc、max、min、pow、sqrt、sign、
   log、exp、sin、cos、tan、PI、E。
 - `JSON`: parse、stringify。stringifyは挿入順を保持し、関数と `undefined` は
@@ -125,9 +131,10 @@ shadowingできる。
 - `String` statics: `String.fromCharCode`、`String.fromCodePoint`。
 - `Object`: keys、values、entries、fromEntries、assign。
 - `Array`: isArray、from。インスタンスmethodは map、filter、forEach、
-  reduce、reduceRight、find、findIndex、some、every、join、slice、
-  includes、indexOf、push、pop、shift、unshift、reverse、concat、flat、
-  sort、at、splice、fill、copyWithin、keys、values、entries。
+  reduce、reduceRight、find、findIndex、findLast、findLastIndex、some、
+  every、join、slice、includes、indexOf、lastIndexOf、push、pop、shift、
+  unshift、reverse、concat、flat、flatMap、sort、toSorted、toReversed、
+  with、at、splice、fill、copyWithin、keys、values、entries。
   `keys` / `values` / `entries` はiteratorではなく配列を返す。
 - `String` instance methods: split、slice、substring、substr、indexOf、lastIndexOf、
   includes、startsWith、endsWith、trim系 (trimLeft/trimRight含む)、
