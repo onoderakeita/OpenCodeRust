@@ -1977,6 +1977,7 @@ impl<'a> Interpreter<'a> {
                     None | Some(Value::Undefined) => ",".to_owned(),
                     Some(value) => to_js_string(value),
                 };
+                let mut seen = vec![Rc::as_ptr(&array) as *const () as usize];
                 let text = array
                     .borrow()
                     .iter()
@@ -1984,7 +1985,7 @@ impl<'a> Interpreter<'a> {
                         if item.is_nullish() {
                             String::new()
                         } else {
-                            to_js_string(item)
+                            to_js_string_seen(item, &mut seen)
                         }
                     })
                     .collect::<Vec<_>>()
@@ -2395,7 +2396,19 @@ impl<'a> Interpreter<'a> {
             }
             "String.padStart" | "String.padEnd" => {
                 let text = as_string(receiver, span)?;
-                let target = to_number(&argument(0)).max(0.0) as usize;
+                let number = to_number(&argument(0));
+                if number == f64::INFINITY || number > MAX_STRING_LENGTH as f64 {
+                    return Err(RuntimeError::new(
+                        RuntimeErrorKind::RangeError,
+                        "Invalid string length.",
+                        span,
+                    ));
+                }
+                let target = if number.is_nan() {
+                    0
+                } else {
+                    number.max(0.0).trunc() as usize
+                };
                 let padding = match arguments.get(1) {
                     Some(Value::Undefined) | None => " ".to_owned(),
                     Some(value) => to_js_string(value),
@@ -2409,7 +2422,26 @@ impl<'a> Interpreter<'a> {
             }
             "String.repeat" => {
                 let text = as_string(receiver, span)?;
-                let count = to_number(&argument(0)).max(0.0) as usize;
+                let number = to_number(&argument(0));
+                if number < 0.0 || number == f64::INFINITY {
+                    return Err(RuntimeError::new(
+                        RuntimeErrorKind::RangeError,
+                        "Invalid count value.",
+                        span,
+                    ));
+                }
+                let count = if number.is_nan() {
+                    0
+                } else {
+                    number.trunc() as usize
+                };
+                if text.len().saturating_mul(count) > MAX_STRING_LENGTH {
+                    return Err(RuntimeError::new(
+                        RuntimeErrorKind::RangeError,
+                        "Invalid string length.",
+                        span,
+                    ));
+                }
                 Ok(Value::String(text.repeat(count)))
             }
             "String.replace" | "String.replaceAll" => {
@@ -4560,25 +4592,42 @@ fn to_uint32(value: f64) -> u32 {
     to_int32(value) as u32
 }
 
+/// Maximum string length accepted by allocation-heavy string methods, mirroring
+/// the engine string limit closely enough to reject runaway requests.
+const MAX_STRING_LENGTH: usize = 536_870_888;
+
 fn to_js_string(value: &Value) -> String {
+    to_js_string_seen(value, &mut Vec::new())
+}
+
+fn to_js_string_seen(value: &Value, seen: &mut Vec<usize>) -> String {
     match value {
         Value::Undefined => "undefined".to_owned(),
         Value::Null => "null".to_owned(),
         Value::Boolean(value) => value.to_string(),
         Value::Number(value) => format_number(*value),
         Value::String(value) => value.clone(),
-        Value::Array(array) => array
-            .borrow()
-            .iter()
-            .map(|item| {
-                if item.is_nullish() {
-                    String::new()
-                } else {
-                    to_js_string(item)
-                }
-            })
-            .collect::<Vec<_>>()
-            .join(","),
+        Value::Array(array) => {
+            let pointer = Rc::as_ptr(array) as *const () as usize;
+            if seen.contains(&pointer) {
+                return String::new();
+            }
+            seen.push(pointer);
+            let text = array
+                .borrow()
+                .iter()
+                .map(|item| {
+                    if item.is_nullish() {
+                        String::new()
+                    } else {
+                        to_js_string_seen(item, seen)
+                    }
+                })
+                .collect::<Vec<_>>()
+                .join(",");
+            seen.pop();
+            text
+        }
         Value::Object(_) => "[object Object]".to_owned(),
         Value::Function(_) | Value::Builtin(_) | Value::BoundMethod { .. } => {
             "[Function]".to_owned()
@@ -5961,6 +6010,297 @@ mod tests {
         assert_eq!(error.kind(), super::RuntimeErrorKind::TypeError);
         let error = run("return Object.assign({}, [1]);").expect_err("array source");
         assert_eq!(error.kind(), super::RuntimeErrorKind::TypeError);
+    }
+
+    #[test]
+    fn matches_upstream_date_map_set_examples() {
+        assert_eq!(run_value("return typeof Date.now();"), string("number"));
+        assert_eq!(
+            run_value("return new Date(0).toISOString();"),
+            string("1970-01-01T00:00:00.000Z")
+        );
+        assert_eq!(
+            run_value(r#"return new Date("2024-01-02T03:04:05.000Z").getTime();"#),
+            number(1_704_164_645_000.0)
+        );
+        assert_eq!(
+            run_value("const a = new Date(1000); const b = new Date(3000); return b - a;"),
+            number(2000.0)
+        );
+        assert_eq!(run_value("return +new Date(42);"), number(42.0));
+        assert_eq!(
+            run_value(
+                r#"const d = new Date("2024-03-05T06:07:08.009Z"); return [d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate(), d.getUTCHours(), d.getUTCMinutes(), d.getUTCSeconds(), d.getUTCMilliseconds()].join(",");"#
+            ),
+            string("2024,2,5,6,7,8,9")
+        );
+        assert_eq!(
+            run_value(r#"return Number.isNaN(new Date("garbage").getTime());"#),
+            Value::Boolean(true)
+        );
+        assert_eq!(
+            run_value(r#"return new Date("garbage").toJSON();"#),
+            Value::Null
+        );
+        assert_eq!(
+            run_value(
+                r#"try { new Date("garbage").toISOString(); return "no"; } catch { return "caught"; }"#
+            ),
+            string("caught")
+        );
+        assert_eq!(
+            run_value("return `at ${new Date(0)}`;"),
+            string("at 1970-01-01T00:00:00.000Z")
+        );
+        assert_eq!(
+            run_value("return JSON.stringify({ d: new Date(0) });"),
+            string(r#"{"d":"1970-01-01T00:00:00.000Z"}"#)
+        );
+        assert_eq!(run_value("return Number(new Date(5));"), number(5.0));
+        assert_eq!(
+            run_value("return String(new Date(0));"),
+            string("1970-01-01T00:00:00.000Z")
+        );
+        assert_eq!(
+            run_value("return Boolean(new Date(0));"),
+            Value::Boolean(true)
+        );
+        assert_eq!(
+            run_value(
+                "const dates = [new Date(3000), new Date(1000), new Date(2000)]; return dates.sort((a, b) => a - b).map((d) => d.getTime()).join(',');"
+            ),
+            string("1000,2000,3000")
+        );
+        assert_eq!(
+            run_value(
+                "const d = new Date(2024, 0, 2); return [d.getFullYear(), d.getMonth(), d.getDate()].join(',');"
+            ),
+            string("2024,0,2")
+        );
+        assert_eq!(run_value("return typeof new Date(0);"), string("object"));
+        assert_eq!(
+            run_value("return new Date(0).nope === undefined;"),
+            Value::Boolean(true)
+        );
+
+        assert_eq!(
+            run_value(
+                "const m = new Map(); m.set('a', 1).set('b', 2); return [m.get('a'), m.get('b'), m.has('a'), m.get('zz') === undefined, m.size].join(',');"
+            ),
+            string("1,2,true,true,2")
+        );
+        assert_eq!(
+            run_value(
+                "const key = { id: 1 }; const m = new Map(); m.set(key, 'hit'); return [m.get(key), m.get({ id: 1 }) === undefined].join(',');"
+            ),
+            string("hit,true")
+        );
+        assert_eq!(
+            run_value(
+                "const m = new Map([['a', 1]]); const n = new Map(m); n.set('b', 2); return [n.get('a'), n.get('b'), m.has('b')].join(',');"
+            ),
+            string("1,2,false")
+        );
+        assert_eq!(
+            run_value(
+                "const m = new Map([['a', 1], ['b', 2]]); return JSON.stringify([m.keys(), m.values(), m.entries()]);"
+            ),
+            string(r#"[["a","b"],[1,2],[["a",1],["b",2]]]"#)
+        );
+        assert_eq!(
+            run_value(
+                "const m = new Map([['a', 1], ['b', 2]]); let total = 0; let names = ''; for (const [key, count] of m) { names += key; total += count; } return names + total;"
+            ),
+            string("ab3")
+        );
+        assert_eq!(
+            run_value(
+                "const m = new Map([['a', 1], ['b', 2]]); const seen = []; m.forEach((count, key) => seen.push(key + count)); return seen.join(',');"
+            ),
+            string("a1,b2")
+        );
+        assert_eq!(
+            run_value(
+                "const words = ['a', 'b', 'a', 'c', 'a']; const counts = new Map(); for (const word of words) counts.set(word, (counts.get(word) ?? 0) + 1); return JSON.stringify(Object.fromEntries(counts));"
+            ),
+            string(r#"{"a":3,"b":1,"c":1}"#)
+        );
+
+        assert_eq!(
+            run_value(
+                "const s = new Set(); s.add(1).add(2).add(1); const removed = s.delete(2); return [s.size, s.has(1), s.has(2), removed].join(',');"
+            ),
+            string("1,true,false,true")
+        );
+        assert_eq!(
+            run_value("return [...new Set([1, 2, 2, 3, 1])].join(',');"),
+            string("1,2,3")
+        );
+        assert_eq!(
+            run_value("return [...new Set('aba')].join(',');"),
+            string("a,b")
+        );
+        assert_eq!(
+            run_value("return Array.from(new Set(new Set([1, 2]))).join(',');"),
+            string("1,2")
+        );
+        assert_eq!(
+            run_value("const s = new Set([NaN]); return s.has(NaN);"),
+            Value::Boolean(true)
+        );
+        assert_eq!(
+            run_value(
+                "let total = 0; for (const n of new Set([1, 2, 3])) total += n; return total;"
+            ),
+            number(6.0)
+        );
+    }
+
+    #[test]
+    fn matches_upstream_defensive_javascript_parity() {
+        assert_eq!(
+            run_value(r#"const s = "hi"; return s.login === undefined;"#),
+            Value::Boolean(true)
+        );
+        assert_eq!(
+            run_value(r#"const s = "hi"; return s?.login ?? "fallback";"#),
+            string("fallback")
+        );
+        assert_eq!(run_value("return (5).foo ?? 'n';"), string("n"));
+        assert_eq!(
+            run_value("return [1,2,3].toSpliced === undefined;"),
+            Value::Boolean(true)
+        );
+        assert_eq!(
+            run_value(r#"return typeof foo === "undefined" ? "safe" : "no";"#),
+            string("safe")
+        );
+        assert_eq!(
+            run_value("const o = null; return { ...o, a: 1 }.a;"),
+            number(1.0)
+        );
+        assert_eq!(
+            run_value("function f(opts) { return { ...opts, a: 1 } } return f(undefined).a;"),
+            number(1.0)
+        );
+        assert!(run("return { ...[1,2], a: 1 };").is_err());
+        assert_eq!(
+            run_value("const o = {}; o.count = (o.count || 0) + 1; return o.count;"),
+            number(1.0)
+        );
+        assert_eq!(
+            run_value("return [3,1,2].reduce((a, b) => Math.max(a, b), -Infinity);"),
+            number(3.0)
+        );
+        assert_eq!(
+            run_value("return JSON.stringify({ x: Number('z') });"),
+            string(r#"{"x":null}"#)
+        );
+
+        assert_eq!(
+            run_value(
+                r#"const e = new Error("boom"); return [e instanceof Error, e.name, e.message].join(",");"#
+            ),
+            string("true,Error,boom")
+        );
+        assert_eq!(
+            run_value(
+                r#"const e = Error("plain"); return [e instanceof Error, e.name, e.message].join(",");"#
+            ),
+            string("true,Error,plain")
+        );
+        assert_eq!(
+            run_value(
+                r#"const e = new TypeError("t"); return [e instanceof TypeError, e instanceof Error, e instanceof RangeError].join(",");"#
+            ),
+            string("true,true,false")
+        );
+        assert_eq!(
+            run_value(
+                r#"try { throw new Error("x"); } catch (e) { return e instanceof Error && e.message === "x"; }"#
+            ),
+            Value::Boolean(true)
+        );
+        assert_eq!(run_value("return typeof Error;"), string("function"));
+        assert_eq!(run_value("let x = 7; x **= 2; return x;"), number(49.0));
+        assert_eq!(run_value("let x = 7; x &= 3; return x;"), number(3.0));
+        assert_eq!(
+            run_value("let x = -7; x >>>= 1; return x;"),
+            number(2_147_483_644.0)
+        );
+        assert_eq!(
+            run_value(r#"return [0, 1, "", 2, null, 3].filter(Boolean).join(",");"#),
+            string("1,2,3")
+        );
+        assert_eq!(
+            run_value("return [1, 2, 3].map(String).join(',');"),
+            string("1,2,3")
+        );
+        let error = run("return [1, 2, 3].map(42);").expect_err("non-callable callback");
+        assert_eq!(error.kind(), super::RuntimeErrorKind::TypeError);
+
+        assert_eq!(run_value("return parseFloat('.5');"), number(0.5));
+        assert_eq!(run_value("return parseFloat('  1.5abc');"), number(1.5));
+        assert_eq!(run_value("return parseFloat('0x10');"), number(0.0));
+        assert_eq!(run_value("return parseInt('0x10');"), number(16.0));
+        assert_eq!(run_value("return parseInt('10', 8);"), number(8.0));
+        assert_eq!(
+            run_value("return Number.isNaN(parseInt('10', 1));"),
+            Value::Boolean(true)
+        );
+        assert_eq!(run_value("return parseInt('0x10', 8);"), number(0.0));
+        assert_eq!(
+            run_value("return 1 / parseInt('-0');"),
+            number(f64::NEG_INFINITY)
+        );
+        assert_eq!(run_value("return parseInt('08', 10);"), number(8.0));
+
+        assert_eq!(
+            run_value("const a = [1]; a.push(a); return a.join('-');"),
+            string("1-")
+        );
+        assert_eq!(
+            run_value("const a = [1]; a.push(a); return String(a);"),
+            string("1,")
+        );
+        assert_eq!(
+            run_value("const b = []; b.push([b]); return b.join();"),
+            string("")
+        );
+        assert_eq!(run_value("return 'ab'.repeat(3);"), string("ababab"));
+        assert_eq!(run_value("return 'x'.repeat(NaN);"), string(""));
+        assert_eq!(run_value("return 'x'.padStart(5, 'ab');"), string("ababx"));
+        assert_eq!(run_value("return 'x'.padEnd(0);"), string("x"));
+
+        for source in [
+            "return 'x'.repeat(Infinity);",
+            "return 'x'.repeat(-Infinity);",
+            "return 'x'.repeat(-1);",
+            "return 'x'.padStart(Infinity);",
+        ] {
+            let error = run(source).expect_err("range-checked string size");
+            assert_eq!(
+                error.kind(),
+                super::RuntimeErrorKind::RangeError,
+                "{source}"
+            );
+        }
+        assert_eq!(
+            run_value("let d = new Date(1000); d += 1; return d;"),
+            string("1970-01-01T00:00:01.000Z1")
+        );
+        assert_eq!(
+            run_value(
+                "const e = new Error('m'); const o = { ...e }; return [o.name, o.message, o instanceof Error].join(',');"
+            ),
+            string("Error,m,false")
+        );
+        assert_eq!(
+            run("return 1 instanceof 2;")
+                .expect_err("non-callable right-hand side")
+                .kind(),
+            super::RuntimeErrorKind::TypeError
+        );
     }
 
     #[test]
