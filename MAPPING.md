@@ -45,8 +45,8 @@ v1 `opencode/src` の subsystem (`agent`、`session`、`tool`、`permission`、
 
 未実装または対応層が未分化の主な領域 (重要性順):
 
-1. `codemode` — parser基盤、対応構文検査、値境界、実行制限、同期評価器の
-   初版 (`opencode-codemode`)。stdlib、tool runtime、promiseは未実装。
+1. `codemode` — parser基盤、対応構文検査、値境界、実行制限、同期評価器、
+   stdlibの一部 (`opencode-codemode`)。tool runtimeとpromiseは未実装。
 2. `protocol` / `client` / `httpapi-codegen` — 権威 HTTP 契約と生成
    client 層が未分化 (Rust は `opencode-server` の routes が唯一の面)。
 3. `sdk` / `sdk-next` — JS SDK がない。

@@ -198,6 +198,7 @@ struct FunctionDef<'a> {
 pub struct Interpreter<'a> {
     functions: Vec<FunctionDef<'a>>,
     scope: Rc<RefCell<Scope>>,
+    logs: Vec<String>,
 }
 
 impl<'a> Default for Interpreter<'a> {
@@ -207,11 +208,87 @@ impl<'a> Default for Interpreter<'a> {
 }
 
 impl<'a> Interpreter<'a> {
-    /// Creates an interpreter with a fresh global scope.
+    /// Creates an interpreter with a fresh global scope and the standard
+    /// globals installed.
     pub fn new() -> Self {
-        Self {
+        let mut interpreter = Self {
             functions: Vec::new(),
             scope: Rc::new(RefCell::new(Scope::global())),
+            logs: Vec::new(),
+        };
+        interpreter.install_globals();
+        interpreter
+    }
+
+    /// Log lines captured from `console` calls, in emission order.
+    pub fn logs(&self) -> &[String] {
+        &self.logs
+    }
+
+    fn install_globals(&mut self) {
+        let console = Value::from_entries([
+            ("log", Value::Builtin("console.log")),
+            ("info", Value::Builtin("console.info")),
+            ("warn", Value::Builtin("console.warn")),
+            ("error", Value::Builtin("console.error")),
+        ]);
+        let math = Value::from_entries([
+            ("abs", Value::Builtin("Math.abs")),
+            ("ceil", Value::Builtin("Math.ceil")),
+            ("floor", Value::Builtin("Math.floor")),
+            ("round", Value::Builtin("Math.round")),
+            ("trunc", Value::Builtin("Math.trunc")),
+            ("max", Value::Builtin("Math.max")),
+            ("min", Value::Builtin("Math.min")),
+            ("pow", Value::Builtin("Math.pow")),
+            ("sqrt", Value::Builtin("Math.sqrt")),
+            ("sign", Value::Builtin("Math.sign")),
+            ("log", Value::Builtin("Math.log")),
+            ("exp", Value::Builtin("Math.exp")),
+            ("sin", Value::Builtin("Math.sin")),
+            ("cos", Value::Builtin("Math.cos")),
+            ("tan", Value::Builtin("Math.tan")),
+            ("PI", Value::Number(std::f64::consts::PI)),
+            ("E", Value::Number(std::f64::consts::E)),
+        ]);
+        let json = Value::from_entries([
+            ("parse", Value::Builtin("JSON.parse")),
+            ("stringify", Value::Builtin("JSON.stringify")),
+        ]);
+        let object = Value::from_entries([
+            ("keys", Value::Builtin("Object.keys")),
+            ("values", Value::Builtin("Object.values")),
+            ("entries", Value::Builtin("Object.entries")),
+            ("fromEntries", Value::Builtin("Object.fromEntries")),
+            ("assign", Value::Builtin("Object.assign")),
+        ]);
+        let array = Value::from_entries([
+            ("isArray", Value::Builtin("Array.isArray")),
+            ("from", Value::Builtin("Array.from")),
+        ]);
+
+        let mut scope = self.scope.borrow_mut();
+        for (name, value) in [
+            ("console", console),
+            ("Math", math),
+            ("JSON", json),
+            ("Object", object),
+            ("Array", array),
+            ("String", Value::Builtin("String")),
+            ("Number", Value::Builtin("Number")),
+            ("Boolean", Value::Builtin("Boolean")),
+            ("parseInt", Value::Builtin("parseInt")),
+            ("parseFloat", Value::Builtin("parseFloat")),
+            ("isNaN", Value::Builtin("isNaN")),
+            ("isFinite", Value::Builtin("isFinite")),
+        ] {
+            scope.bindings.insert(
+                name.to_owned(),
+                Binding {
+                    value,
+                    mutable: false,
+                },
+            );
         }
     }
 
@@ -1045,10 +1122,654 @@ impl<'a> Interpreter<'a> {
     ) -> Result<Value, RuntimeError> {
         match callee {
             Value::Function(id) => self.invoke_function(*id, arguments, span),
+            Value::Builtin(name) => self.call_builtin(name, &arguments, span),
+            Value::BoundMethod { receiver, method } => {
+                self.call_method(method, receiver, &arguments, span)
+            }
             _ => Err(RuntimeError::type_error(
                 "Only functions are callable in CodeMode.",
                 span,
             )),
+        }
+    }
+
+    fn call_builtin(
+        &mut self,
+        name: &'static str,
+        arguments: &[Value],
+        _span: Span,
+    ) -> Result<Value, RuntimeError> {
+        let argument = |index: usize| arguments.get(index).cloned().unwrap_or(Value::Undefined);
+        match name {
+            "String" => Ok(Value::String(to_js_string(&argument(0)))),
+            "Number" => Ok(Value::Number(to_number(&argument(0)))),
+            "Boolean" => Ok(Value::Boolean(is_truthy(&argument(0)))),
+            "parseInt" => Ok(Value::Number(parse_int(
+                &to_js_string(&argument(0)),
+                to_number(&argument(1)),
+            ))),
+            "parseFloat" => Ok(Value::Number(parse_float(&to_js_string(&argument(0))))),
+            "isNaN" => Ok(Value::Boolean(to_number(&argument(0)).is_nan())),
+            "isFinite" => Ok(Value::Boolean(to_number(&argument(0)).is_finite())),
+            "Math.abs" => Ok(Value::Number(to_number(&argument(0)).abs())),
+            "Math.ceil" => Ok(Value::Number(to_number(&argument(0)).ceil())),
+            "Math.floor" => Ok(Value::Number(to_number(&argument(0)).floor())),
+            "Math.round" => Ok(Value::Number((to_number(&argument(0)) + 0.5).floor())),
+            "Math.trunc" => Ok(Value::Number(to_number(&argument(0)).trunc())),
+            "Math.sqrt" => Ok(Value::Number(to_number(&argument(0)).sqrt())),
+            "Math.sign" => Ok(Value::Number(math_sign(to_number(&argument(0))))),
+            "Math.log" => Ok(Value::Number(to_number(&argument(0)).ln())),
+            "Math.exp" => Ok(Value::Number(to_number(&argument(0)).exp())),
+            "Math.sin" => Ok(Value::Number(to_number(&argument(0)).sin())),
+            "Math.cos" => Ok(Value::Number(to_number(&argument(0)).cos())),
+            "Math.tan" => Ok(Value::Number(to_number(&argument(0)).tan())),
+            "Math.pow" => Ok(Value::Number(
+                to_number(&argument(0)).powf(to_number(&argument(1))),
+            )),
+            "Math.max" => Ok(Value::Number(math_extreme(arguments, true))),
+            "Math.min" => Ok(Value::Number(math_extreme(arguments, false))),
+            "JSON.parse" => {
+                let text = to_js_string(&argument(0));
+                let json: serde_json::Value = serde_json::from_str(&text).map_err(|error| {
+                    RuntimeError::new(
+                        RuntimeErrorKind::ExecutionFailure,
+                        format!("JSON.parse failed: {error}"),
+                        _span,
+                    )
+                })?;
+                json_to_value(&json, _span)
+            }
+            "JSON.stringify" => {
+                Ok(stringify_json(&argument(0)).map_or(Value::Undefined, Value::String))
+            }
+            "Object.keys" => Ok(Value::array(
+                own_keys(&argument(0))
+                    .into_iter()
+                    .map(Value::String)
+                    .collect(),
+            )),
+            "Object.values" => {
+                let source = argument(0);
+                let mut values = Vec::new();
+                for key in own_keys(&source) {
+                    values.push(self.get_property(&source, &key, _span)?);
+                }
+                Ok(Value::array(values))
+            }
+            "Object.entries" => {
+                let source = argument(0);
+                let mut entries = Vec::new();
+                for key in own_keys(&source) {
+                    let value = self.get_property(&source, &key, _span)?;
+                    entries.push(Value::array(vec![Value::String(key), value]));
+                }
+                Ok(Value::array(entries))
+            }
+            "Object.fromEntries" => {
+                let source = argument(0);
+                let items = match &source {
+                    Value::Array(array) => array.borrow().clone(),
+                    _ => {
+                        return Err(RuntimeError::type_error(
+                            "Object.fromEntries requires an iterable of entries.",
+                            _span,
+                        ));
+                    }
+                };
+                let mut object = IndexMap::new();
+                for item in items {
+                    let entry = match item {
+                        Value::Array(entry) => entry.borrow().clone(),
+                        _ => {
+                            return Err(RuntimeError::type_error(
+                                "Each Object.fromEntries item must be an entry array.",
+                                _span,
+                            ));
+                        }
+                    };
+                    let key = entry.first().cloned().unwrap_or(Value::Undefined);
+                    let key = to_property_key(&key, _span)?;
+                    if is_blocked_member(&key) {
+                        return Err(RuntimeError::type_error(
+                            format!("Property '{key}' is not available in CodeMode."),
+                            _span,
+                        ));
+                    }
+                    object.insert(key, entry.get(1).cloned().unwrap_or(Value::Undefined));
+                }
+                Ok(Value::Object(Rc::new(RefCell::new(object))))
+            }
+            "Object.assign" => {
+                let target = argument(0);
+                let Value::Object(target_object) = &target else {
+                    return Err(RuntimeError::type_error(
+                        "Object.assign target must be a data object.",
+                        _span,
+                    ));
+                };
+                for source in arguments.iter().skip(1) {
+                    if let Value::Object(source) = source {
+                        let entries = source
+                            .borrow()
+                            .iter()
+                            .map(|(key, value)| (key.clone(), value.clone()))
+                            .collect::<Vec<_>>();
+                        for (key, value) in entries {
+                            if is_blocked_member(&key) {
+                                return Err(RuntimeError::type_error(
+                                    format!("Property '{key}' is not available in CodeMode."),
+                                    _span,
+                                ));
+                            }
+                            target_object.borrow_mut().insert(key, value);
+                        }
+                    }
+                }
+                Ok(target)
+            }
+            "Array.isArray" => Ok(Value::Boolean(matches!(argument(0), Value::Array(_)))),
+            "Array.from" => {
+                let source = argument(0);
+                let items = spread_items(&source).ok_or_else(|| {
+                    RuntimeError::type_error("Array.from requires an array or string.", _span)
+                })?;
+                let mapper = arguments.get(1).cloned();
+                let items = match mapper {
+                    Some(mapper) if !mapper.is_undefined() => {
+                        let mut mapped = Vec::with_capacity(items.len());
+                        for (index, item) in items.into_iter().enumerate() {
+                            mapped.push(self.invoke_value(
+                                &mapper,
+                                vec![item, Value::Number(index as f64)],
+                                _span,
+                            )?);
+                        }
+                        mapped
+                    }
+                    _ => items,
+                };
+                Ok(Value::array(items))
+            }
+            "console.log" | "console.info" | "console.warn" | "console.error" => {
+                self.logs.push(
+                    arguments
+                        .iter()
+                        .map(to_js_string)
+                        .collect::<Vec<_>>()
+                        .join(" "),
+                );
+                Ok(Value::Undefined)
+            }
+            _ => Err(RuntimeError::unsupported(name, _span)),
+        }
+    }
+
+    fn call_method(
+        &mut self,
+        method: &'static str,
+        receiver: &Value,
+        arguments: &[Value],
+        span: Span,
+    ) -> Result<Value, RuntimeError> {
+        let argument = |index: usize| arguments.get(index).cloned().unwrap_or(Value::Undefined);
+        match method {
+            "Array.push" => {
+                let array = as_array_ref(receiver, span)?;
+                let mut array = array.borrow_mut();
+                array.extend(arguments.iter().cloned());
+                Ok(Value::Number(array.len() as f64))
+            }
+            "Array.pop" => {
+                let array = as_array_ref(receiver, span)?;
+                let value = array.borrow_mut().pop();
+                Ok(value.unwrap_or(Value::Undefined))
+            }
+            "Array.shift" => {
+                let array = as_array_ref(receiver, span)?;
+                let mut array = array.borrow_mut();
+                if array.is_empty() {
+                    Ok(Value::Undefined)
+                } else {
+                    Ok(array.remove(0))
+                }
+            }
+            "Array.unshift" => {
+                let array = as_array_ref(receiver, span)?;
+                let mut array = array.borrow_mut();
+                for (index, value) in arguments.iter().cloned().enumerate() {
+                    array.insert(index, value);
+                }
+                Ok(Value::Number(array.len() as f64))
+            }
+            "Array.reverse" => {
+                let array = as_array_ref(receiver, span)?;
+                array.borrow_mut().reverse();
+                Ok(receiver.clone())
+            }
+            "Array.map" => {
+                let array = as_array_ref(receiver, span)?;
+                let items = array.borrow().clone();
+                let mapper = argument(0);
+                let mut mapped = Vec::with_capacity(items.len());
+                for (index, item) in items.into_iter().enumerate() {
+                    mapped.push(self.invoke_value(
+                        &mapper,
+                        vec![item, Value::Number(index as f64), receiver.clone()],
+                        span,
+                    )?);
+                }
+                Ok(Value::array(mapped))
+            }
+            "Array.filter" => {
+                let array = as_array_ref(receiver, span)?;
+                let items = array.borrow().clone();
+                let predicate = argument(0);
+                let mut kept = Vec::new();
+                for (index, item) in items.into_iter().enumerate() {
+                    let result = self.invoke_value(
+                        &predicate,
+                        vec![item.clone(), Value::Number(index as f64), receiver.clone()],
+                        span,
+                    )?;
+                    if is_truthy(&result) {
+                        kept.push(item);
+                    }
+                }
+                Ok(Value::array(kept))
+            }
+            "Array.forEach" => {
+                let array = as_array_ref(receiver, span)?;
+                let items = array.borrow().clone();
+                let callback = argument(0);
+                for (index, item) in items.into_iter().enumerate() {
+                    self.invoke_value(
+                        &callback,
+                        vec![item, Value::Number(index as f64), receiver.clone()],
+                        span,
+                    )?;
+                }
+                Ok(Value::Undefined)
+            }
+            "Array.reduce" | "Array.reduceRight" => {
+                let array = as_array_ref(receiver, span)?;
+                let mut items = array.borrow().clone();
+                if method == "Array.reduceRight" {
+                    items.reverse();
+                }
+                let reducer = argument(0);
+                let (mut accumulator, start) = if arguments.len() > 1 {
+                    (argument(1), 0)
+                } else {
+                    let Some(first) = items.first().cloned() else {
+                        return Err(RuntimeError::type_error(
+                            "Reduce of empty array with no initial value.",
+                            span,
+                        ));
+                    };
+                    (first, 1)
+                };
+                for (index, item) in items.into_iter().enumerate().skip(start) {
+                    accumulator = self.invoke_value(
+                        &reducer,
+                        vec![
+                            accumulator,
+                            item,
+                            Value::Number(index as f64),
+                            receiver.clone(),
+                        ],
+                        span,
+                    )?;
+                }
+                Ok(accumulator)
+            }
+            "Array.find" | "Array.findIndex" | "Array.some" | "Array.every" => {
+                let array = as_array_ref(receiver, span)?;
+                let items = array.borrow().clone();
+                let predicate = argument(0);
+                let mut found = method == "Array.every";
+                for (index, item) in items.into_iter().enumerate() {
+                    let result = self.invoke_value(
+                        &predicate,
+                        vec![item.clone(), Value::Number(index as f64), receiver.clone()],
+                        span,
+                    )?;
+                    let truthy = is_truthy(&result);
+                    match method {
+                        "Array.find" if truthy => return Ok(item),
+                        "Array.findIndex" if truthy => return Ok(Value::Number(index as f64)),
+                        "Array.some" if truthy => return Ok(Value::Boolean(true)),
+                        "Array.every" if !truthy => {
+                            found = false;
+                            break;
+                        }
+                        _ => {}
+                    }
+                }
+                Ok(match method {
+                    "Array.find" => Value::Undefined,
+                    "Array.findIndex" => Value::Number(-1.0),
+                    "Array.some" => Value::Boolean(false),
+                    _ => Value::Boolean(found),
+                })
+            }
+            "Array.join" => {
+                let array = as_array_ref(receiver, span)?;
+                let separator = match arguments.first() {
+                    None | Some(Value::Undefined) => ",".to_owned(),
+                    Some(value) => to_js_string(value),
+                };
+                let text = array
+                    .borrow()
+                    .iter()
+                    .map(|item| {
+                        if item.is_nullish() {
+                            String::new()
+                        } else {
+                            to_js_string(item)
+                        }
+                    })
+                    .collect::<Vec<_>>()
+                    .join(&separator);
+                Ok(Value::String(text))
+            }
+            "Array.slice" => {
+                let array = as_array_ref(receiver, span)?;
+                let items = array.borrow().clone();
+                let length = items.len() as i64;
+                let start = normalize_index(&argument(0), length, 0);
+                let end = normalize_index(&argument(1), length, length);
+                let start = start.max(0) as usize;
+                let end = end.max(0) as usize;
+                let slice = if end > start && start < items.len() {
+                    items[start..end.min(items.len())].to_vec()
+                } else {
+                    Vec::new()
+                };
+                Ok(Value::array(slice))
+            }
+            "Array.includes" | "Array.indexOf" => {
+                let array = as_array_ref(receiver, span)?;
+                let items = array.borrow().clone();
+                let needle = argument(0);
+                let from = normalize_index(&argument(1), items.len() as i64, 0).max(0) as usize;
+                let position = items
+                    .iter()
+                    .enumerate()
+                    .skip(from)
+                    .find(|(_, item)| strict_equals(item, &needle))
+                    .map(|(index, _)| index);
+                if method == "Array.includes" {
+                    Ok(Value::Boolean(position.is_some()))
+                } else {
+                    Ok(Value::Number(position.map_or(-1.0, |index| index as f64)))
+                }
+            }
+            "Array.concat" => {
+                let array = as_array_ref(receiver, span)?;
+                let mut values = array.borrow().clone();
+                for argument in arguments {
+                    match argument {
+                        Value::Array(other) => values.extend(other.borrow().iter().cloned()),
+                        value => values.push(value.clone()),
+                    }
+                }
+                Ok(Value::array(values))
+            }
+            "Array.flat" => {
+                let array = as_array_ref(receiver, span)?;
+                let depth = match arguments.first() {
+                    Some(Value::Undefined) | None => 1,
+                    Some(value) => to_number(value).clamp(0.0, 64.0) as usize,
+                };
+                let mut flattened = Vec::new();
+                flatten_into(&array.borrow(), depth, &mut flattened);
+                Ok(Value::array(flattened))
+            }
+            "Array.sort" => {
+                let array = as_array_ref(receiver, span)?;
+                let mut items = array.borrow().clone();
+                match arguments.first() {
+                    Some(comparator) if !comparator.is_undefined() => {
+                        let mut index = 1;
+                        while index < items.len() {
+                            let mut cursor = index;
+                            while cursor > 0 {
+                                let order = self.invoke_value(
+                                    comparator,
+                                    vec![items[cursor - 1].clone(), items[cursor].clone()],
+                                    span,
+                                )?;
+                                let order = to_number(&order);
+                                if order > 0.0 || order.is_nan() {
+                                    items.swap(cursor - 1, cursor);
+                                    cursor -= 1;
+                                } else {
+                                    break;
+                                }
+                            }
+                            index += 1;
+                        }
+                    }
+                    _ => items.sort_by_cached_key(to_js_string),
+                }
+                *array.borrow_mut() = items;
+                Ok(receiver.clone())
+            }
+            "Array.at" => {
+                let array = as_array_ref(receiver, span)?;
+                let items = array.borrow();
+                let length = items.len() as i64;
+                let index = normalize_index(&argument(0), length, 0);
+                Ok(if index < 0 || index >= length {
+                    Value::Undefined
+                } else {
+                    items[index as usize].clone()
+                })
+            }
+            "String.split" => {
+                let text = as_string(receiver, span)?;
+                let limit = match arguments.get(1) {
+                    Some(Value::Undefined) | None => usize::MAX,
+                    Some(value) => to_number(value).max(0.0) as usize,
+                };
+                let pieces: Vec<String> = match arguments.first() {
+                    None | Some(Value::Undefined) => vec![text],
+                    Some(Value::String(separator)) if separator.is_empty() => text
+                        .chars()
+                        .map(|character| character.to_string())
+                        .collect(),
+                    Some(separator) => {
+                        let separator = to_js_string(separator);
+                        text.split(&separator).map(str::to_owned).collect()
+                    }
+                };
+                Ok(Value::array(
+                    pieces.into_iter().take(limit).map(Value::String).collect(),
+                ))
+            }
+            "String.slice" | "String.substring" | "String.substr" => {
+                let text = as_string(receiver, span)?;
+                let characters: Vec<char> = text.chars().collect();
+                let length = characters.len() as i64;
+                let start_argument = argument(0);
+                let end_argument = argument(1);
+                let (start, end) = match method {
+                    "String.substring" => {
+                        let start = clamp_index(to_number(&start_argument), length);
+                        let end = if end_argument.is_undefined() {
+                            length
+                        } else {
+                            clamp_index(to_number(&end_argument), length)
+                        };
+                        if start <= end {
+                            (start, end)
+                        } else {
+                            (end, start)
+                        }
+                    }
+                    "String.substr" => {
+                        let start = normalize_index(&start_argument, length, 0).max(0);
+                        let count = if end_argument.is_undefined() {
+                            length
+                        } else {
+                            to_number(&end_argument).max(0.0) as i64
+                        };
+                        (start, start.saturating_add(count))
+                    }
+                    _ => (
+                        normalize_index(&start_argument, length, 0),
+                        normalize_index(&end_argument, length, length),
+                    ),
+                };
+                let start = start.max(0).min(length) as usize;
+                let end = end.max(0).min(length) as usize;
+                let slice = if end > start {
+                    characters[start..end].iter().collect()
+                } else {
+                    String::new()
+                };
+                Ok(Value::String(slice))
+            }
+            "String.indexOf" | "String.lastIndexOf" => {
+                let text = as_string(receiver, span)?;
+                let needle: Vec<char> = to_js_string(&argument(0)).chars().collect();
+                let characters: Vec<char> = text.chars().collect();
+                let length = characters.len() as i64;
+                let default = if method == "String.indexOf" {
+                    0
+                } else {
+                    length
+                };
+                let from = normalize_index(&argument(1), length, default).clamp(0, length) as usize;
+                let matches = (0..=characters.len().saturating_sub(needle.len()))
+                    .filter(|index| characters[*index..].starts_with(&needle))
+                    .collect::<Vec<_>>();
+                let position = if method == "String.indexOf" {
+                    matches.into_iter().find(|index| *index >= from)
+                } else {
+                    matches.into_iter().rfind(|index| *index <= from)
+                };
+                Ok(Value::Number(position.map_or(-1.0, |index| index as f64)))
+            }
+            "String.includes" | "String.startsWith" | "String.endsWith" => {
+                let text = as_string(receiver, span)?;
+                let needle: Vec<char> = to_js_string(&argument(0)).chars().collect();
+                let characters: Vec<char> = text.chars().collect();
+                let length = characters.len();
+                let default = if method == "String.endsWith" {
+                    length as i64
+                } else {
+                    0
+                };
+                let position = normalize_index(&argument(1), length as i64, default)
+                    .clamp(0, length as i64) as usize;
+                let result = match method {
+                    "String.endsWith" => {
+                        position >= needle.len()
+                            && characters[position - needle.len()..position] == needle[..]
+                    }
+                    "String.startsWith" => {
+                        position + needle.len() <= length
+                            && characters[position..position + needle.len()] == needle[..]
+                    }
+                    _ => {
+                        needle.is_empty()
+                            || (position <= length
+                                && (position..=length.saturating_sub(needle.len()))
+                                    .any(|index| characters[index..].starts_with(&needle)))
+                    }
+                };
+                Ok(Value::Boolean(result))
+            }
+            "String.trim" => Ok(Value::String(as_string(receiver, span)?.trim().to_owned())),
+            "String.trimStart" => Ok(Value::String(
+                as_string(receiver, span)?.trim_start().to_owned(),
+            )),
+            "String.trimEnd" => Ok(Value::String(
+                as_string(receiver, span)?.trim_end().to_owned(),
+            )),
+            "String.toUpperCase" => Ok(Value::String(as_string(receiver, span)?.to_uppercase())),
+            "String.toLowerCase" => Ok(Value::String(as_string(receiver, span)?.to_lowercase())),
+            "String.charAt" => {
+                let text = as_string(receiver, span)?;
+                let index = to_number(&argument(0));
+                let character = if index.is_nan() || index < 0.0 {
+                    None
+                } else {
+                    text.chars().nth(index.trunc() as usize)
+                };
+                Ok(Value::String(
+                    character.map_or_else(String::new, |character| character.to_string()),
+                ))
+            }
+            "String.charCodeAt" => {
+                let text = as_string(receiver, span)?;
+                let index = to_number(&argument(0));
+                let code = if index.is_nan() || index < 0.0 {
+                    None
+                } else {
+                    text.chars().nth(index.trunc() as usize).map(u32::from)
+                };
+                Ok(Value::Number(code.map_or(f64::NAN, f64::from)))
+            }
+            "String.at" => {
+                let text = as_string(receiver, span)?;
+                let characters: Vec<char> = text.chars().collect();
+                let length = characters.len() as i64;
+                let index = normalize_index(&argument(0), length, 0);
+                Ok(if index < 0 || index >= length {
+                    Value::Undefined
+                } else {
+                    Value::String(characters[index as usize].to_string())
+                })
+            }
+            "String.padStart" | "String.padEnd" => {
+                let text = as_string(receiver, span)?;
+                let target = to_number(&argument(0)).max(0.0) as usize;
+                let padding = match arguments.get(1) {
+                    Some(Value::Undefined) | None => " ".to_owned(),
+                    Some(value) => to_js_string(value),
+                };
+                Ok(Value::String(pad_string(
+                    &text,
+                    target,
+                    &padding,
+                    method == "String.padStart",
+                )))
+            }
+            "String.repeat" => {
+                let text = as_string(receiver, span)?;
+                let count = to_number(&argument(0)).max(0.0) as usize;
+                Ok(Value::String(text.repeat(count)))
+            }
+            "String.replace" => {
+                let text = as_string(receiver, span)?;
+                let search = to_js_string(&argument(0));
+                let replacement = to_js_string(&argument(1));
+                Ok(Value::String(text.replacen(&search, &replacement, 1)))
+            }
+            "String.concat" => {
+                let mut text = as_string(receiver, span)?;
+                for argument in arguments {
+                    text.push_str(&to_js_string(argument));
+                }
+                Ok(Value::String(text))
+            }
+            "Number.toFixed" => {
+                let number = as_number(receiver, span)?;
+                let digits = to_number(&argument(0)).clamp(0.0, 100.0) as usize;
+                Ok(Value::String(format!("{number:.digits$}")))
+            }
+            "Number.toString" => {
+                let number = as_number(receiver, span)?;
+                let radix = match arguments.first() {
+                    None | Some(Value::Undefined) => 10,
+                    Some(value) => to_number(value) as u32,
+                };
+                Ok(Value::String(number_to_string(number, radix)))
+            }
+            "Number.valueOf" => Ok(Value::Number(as_number(receiver, span)?)),
+            _ => Err(RuntimeError::unsupported(method, span)),
         }
     }
 
@@ -1481,7 +2202,7 @@ impl<'a> Interpreter<'a> {
                         .get(index)
                         .cloned()
                         .unwrap_or(Value::Undefined)),
-                    Err(_) => Ok(Value::Undefined),
+                    Err(_) => Ok(bound_method(object, array_method(key))),
                 }
             }
             Value::String(value) => {
@@ -1495,9 +2216,10 @@ impl<'a> Interpreter<'a> {
                         .map_or(Value::Undefined, |character| {
                             Value::String(character.to_string())
                         })),
-                    Err(_) => Ok(Value::Undefined),
+                    Err(_) => Ok(bound_method(object, string_method(key))),
                 }
             }
+            Value::Number(_) => Ok(bound_method(object, number_method(key))),
             Value::Null | Value::Undefined => Err(RuntimeError::type_error(
                 "Cannot read a property of null or undefined.",
                 span,
@@ -1544,6 +2266,394 @@ impl<'a> Interpreter<'a> {
             )),
         }
     }
+}
+
+fn bound_method(receiver: &Value, method: Option<&'static str>) -> Value {
+    match method {
+        Some(method) => Value::BoundMethod {
+            receiver: Box::new(receiver.clone()),
+            method,
+        },
+        None => Value::Undefined,
+    }
+}
+
+fn array_method(name: &str) -> Option<&'static str> {
+    Some(match name {
+        "map" => "Array.map",
+        "filter" => "Array.filter",
+        "forEach" => "Array.forEach",
+        "reduce" => "Array.reduce",
+        "reduceRight" => "Array.reduceRight",
+        "find" => "Array.find",
+        "findIndex" => "Array.findIndex",
+        "some" => "Array.some",
+        "every" => "Array.every",
+        "join" => "Array.join",
+        "slice" => "Array.slice",
+        "includes" => "Array.includes",
+        "indexOf" => "Array.indexOf",
+        "push" => "Array.push",
+        "pop" => "Array.pop",
+        "shift" => "Array.shift",
+        "unshift" => "Array.unshift",
+        "reverse" => "Array.reverse",
+        "concat" => "Array.concat",
+        "flat" => "Array.flat",
+        "sort" => "Array.sort",
+        "at" => "Array.at",
+        _ => return None,
+    })
+}
+
+fn string_method(name: &str) -> Option<&'static str> {
+    Some(match name {
+        "split" => "String.split",
+        "slice" => "String.slice",
+        "substring" => "String.substring",
+        "substr" => "String.substr",
+        "indexOf" => "String.indexOf",
+        "lastIndexOf" => "String.lastIndexOf",
+        "includes" => "String.includes",
+        "startsWith" => "String.startsWith",
+        "endsWith" => "String.endsWith",
+        "trim" => "String.trim",
+        "trimStart" => "String.trimStart",
+        "trimEnd" => "String.trimEnd",
+        "toUpperCase" => "String.toUpperCase",
+        "toLowerCase" => "String.toLowerCase",
+        "charAt" => "String.charAt",
+        "charCodeAt" => "String.charCodeAt",
+        "at" => "String.at",
+        "padStart" => "String.padStart",
+        "padEnd" => "String.padEnd",
+        "repeat" => "String.repeat",
+        "replace" => "String.replace",
+        "concat" => "String.concat",
+        _ => return None,
+    })
+}
+
+fn number_method(name: &str) -> Option<&'static str> {
+    Some(match name {
+        "toFixed" => "Number.toFixed",
+        "toString" => "Number.toString",
+        "valueOf" => "Number.valueOf",
+        _ => return None,
+    })
+}
+
+fn as_array_ref(value: &Value, span: Span) -> Result<crate::value::ArrayRef, RuntimeError> {
+    match value {
+        Value::Array(array) => Ok(Rc::clone(array)),
+        _ => Err(RuntimeError::type_error(
+            "Array method requires an array receiver.",
+            span,
+        )),
+    }
+}
+
+fn as_string(value: &Value, span: Span) -> Result<String, RuntimeError> {
+    match value {
+        Value::String(value) => Ok(value.clone()),
+        _ => Err(RuntimeError::type_error(
+            "String method requires a string receiver.",
+            span,
+        )),
+    }
+}
+
+fn as_number(value: &Value, span: Span) -> Result<f64, RuntimeError> {
+    match value {
+        Value::Number(value) => Ok(*value),
+        _ => Err(RuntimeError::type_error(
+            "Number method requires a number receiver.",
+            span,
+        )),
+    }
+}
+
+fn normalize_index(value: &Value, length: i64, fallback: i64) -> i64 {
+    match value {
+        Value::Undefined => fallback,
+        _ => {
+            let number = to_number(value);
+            if number.is_nan() {
+                0
+            } else {
+                let mut index = number.trunc() as i64;
+                if index < 0 {
+                    index += length;
+                }
+                index
+            }
+        }
+    }
+}
+
+fn clamp_index(number: f64, length: i64) -> i64 {
+    if number.is_nan() {
+        0
+    } else {
+        (number.trunc() as i64).clamp(0, length)
+    }
+}
+
+fn flatten_into(items: &[Value], depth: usize, output: &mut Vec<Value>) {
+    for item in items {
+        match item {
+            Value::Array(inner) if depth > 0 => {
+                flatten_into(&inner.borrow(), depth - 1, output);
+            }
+            _ => output.push(item.clone()),
+        }
+    }
+}
+
+fn pad_string(text: &str, target: usize, padding: &str, start: bool) -> String {
+    let length = text.chars().count();
+    if length >= target || padding.is_empty() {
+        return text.to_owned();
+    }
+    let needed = target - length;
+    let mut pad = String::new();
+    while pad.chars().count() < needed {
+        pad.push_str(padding);
+    }
+    let pad: String = pad.chars().take(needed).collect();
+    if start {
+        format!("{pad}{text}")
+    } else {
+        format!("{text}{pad}")
+    }
+}
+
+fn math_sign(number: f64) -> f64 {
+    if number.is_nan() || number == 0.0 {
+        number
+    } else if number > 0.0 {
+        1.0
+    } else {
+        -1.0
+    }
+}
+
+fn math_extreme(arguments: &[Value], maximum: bool) -> f64 {
+    let mut result = if maximum {
+        f64::NEG_INFINITY
+    } else {
+        f64::INFINITY
+    };
+    for value in arguments {
+        let number = to_number(value);
+        if number.is_nan() {
+            return f64::NAN;
+        }
+        if (maximum && number > result) || (!maximum && number < result) {
+            result = number;
+        }
+    }
+    result
+}
+
+fn parse_int(text: &str, radix: f64) -> f64 {
+    let text = text.trim_start();
+    let (sign, rest) = match text.strip_prefix('-') {
+        Some(rest) => (-1.0, rest),
+        None => match text.strip_prefix('+') {
+            Some(rest) => (1.0, rest),
+            None => (1.0, text),
+        },
+    };
+    let automatic = radix.is_nan() || radix == 0.0;
+    let requested = if automatic { 10 } else { radix.trunc() as u32 };
+    if !(2..=36).contains(&requested) {
+        return f64::NAN;
+    }
+    let hexadecimal = rest.starts_with("0x") || rest.starts_with("0X");
+    let (base, digits) = if (automatic || requested == 16) && hexadecimal {
+        (16, &rest[2..])
+    } else {
+        (requested, rest)
+    };
+    let mut value: u128 = 0;
+    let mut any = false;
+    for character in digits.chars() {
+        let Some(digit) = character.to_digit(base) else {
+            break;
+        };
+        any = true;
+        value = value
+            .saturating_mul(u128::from(base))
+            .saturating_add(u128::from(digit));
+    }
+    if any {
+        sign * value as f64
+    } else {
+        f64::NAN
+    }
+}
+
+fn parse_float(text: &str) -> f64 {
+    let text = text.trim_start();
+    if text.is_empty() {
+        return f64::NAN;
+    }
+    let mut best = None;
+    for (index, _) in text.char_indices().skip(1) {
+        if let Ok(value) = text[..index].parse::<f64>() {
+            best = Some(value);
+        }
+    }
+    match text.parse::<f64>() {
+        Ok(value) => value,
+        Err(_) => best.unwrap_or(f64::NAN),
+    }
+}
+
+fn string_to_number(text: &str) -> f64 {
+    let text = text.trim();
+    if text.is_empty() {
+        return 0.0;
+    }
+    for (prefix, radix) in [
+        ("0x", 16),
+        ("0X", 16),
+        ("0b", 2),
+        ("0B", 2),
+        ("0o", 8),
+        ("0O", 8),
+    ] {
+        if let Some(digits) = text.strip_prefix(prefix) {
+            if digits.is_empty() {
+                return f64::NAN;
+            }
+            return match u128::from_str_radix(digits, radix) {
+                Ok(value) => value as f64,
+                Err(_) => f64::NAN,
+            };
+        }
+    }
+    text.parse::<f64>().unwrap_or(f64::NAN)
+}
+
+fn own_keys(value: &Value) -> Vec<String> {
+    match value {
+        Value::Object(object) => object.borrow().keys().cloned().collect(),
+        Value::Array(array) => (0..array.borrow().len())
+            .map(|index| index.to_string())
+            .collect(),
+        Value::String(value) => (0..value.chars().count())
+            .map(|index| index.to_string())
+            .collect(),
+        _ => Vec::new(),
+    }
+}
+
+fn json_to_value(json: &serde_json::Value, span: Span) -> Result<Value, RuntimeError> {
+    use serde_json::Value as Json;
+    Ok(match json {
+        Json::Null => Value::Null,
+        Json::Bool(value) => Value::Boolean(*value),
+        Json::Number(value) => Value::Number(value.as_f64().unwrap_or(f64::NAN)),
+        Json::String(value) => Value::String(value.clone()),
+        Json::Array(items) => Value::array(
+            items
+                .iter()
+                .map(|item| json_to_value(item, span))
+                .collect::<Result<Vec<_>, _>>()?,
+        ),
+        Json::Object(map) => {
+            let mut object = IndexMap::new();
+            for (key, value) in map {
+                if is_blocked_member(key) {
+                    return Err(RuntimeError::type_error(
+                        format!("Property '{key}' is not available in CodeMode."),
+                        span,
+                    ));
+                }
+                object.insert(key.clone(), json_to_value(value, span)?);
+            }
+            Value::Object(Rc::new(RefCell::new(object)))
+        }
+    })
+}
+
+fn stringify_json(value: &Value) -> Option<String> {
+    stringify_json_inner(value, &mut Vec::new())
+}
+
+fn stringify_json_inner(value: &Value, ancestors: &mut Vec<usize>) -> Option<String> {
+    match value {
+        Value::Undefined | Value::Function(_) | Value::Builtin(_) | Value::BoundMethod { .. } => {
+            None
+        }
+        Value::Null => Some("null".to_owned()),
+        Value::Boolean(value) => Some(value.to_string()),
+        Value::Number(value) => Some(if value.is_finite() {
+            format_number(*value)
+        } else {
+            "null".to_owned()
+        }),
+        Value::String(value) => serde_json::to_string(value).ok(),
+        Value::Array(items) => {
+            let identity = Rc::as_ptr(items) as *const () as usize;
+            if ancestors.contains(&identity) || ancestors.len() >= crate::value::MAX_VALUE_DEPTH * 2
+            {
+                return None;
+            }
+            ancestors.push(identity);
+            let parts = items
+                .borrow()
+                .iter()
+                .map(|item| {
+                    stringify_json_inner(item, ancestors).unwrap_or_else(|| "null".to_owned())
+                })
+                .collect::<Vec<_>>();
+            ancestors.pop();
+            Some(format!("[{}]", parts.join(",")))
+        }
+        Value::Object(object) => {
+            let identity = Rc::as_ptr(object) as *const () as usize;
+            if ancestors.contains(&identity) || ancestors.len() >= crate::value::MAX_VALUE_DEPTH * 2
+            {
+                return None;
+            }
+            ancestors.push(identity);
+            let mut parts = Vec::new();
+            for (key, value) in object.borrow().iter() {
+                let Some(serialized) = stringify_json_inner(value, ancestors) else {
+                    continue;
+                };
+                let key = serde_json::to_string(key).ok()?;
+                parts.push(format!("{key}:{serialized}"));
+            }
+            ancestors.pop();
+            Some(format!("{{{}}}", parts.join(",")))
+        }
+    }
+}
+
+fn number_to_string(number: f64, radix: u32) -> String {
+    if radix == 10 || !(2..=36).contains(&radix) || !number.is_finite() || number.fract() != 0.0 {
+        return format_number(number);
+    }
+    let negative = number < 0.0;
+    let mut value = number.abs() as u128;
+    if value == 0 {
+        return "0".to_owned();
+    }
+    let digits = b"0123456789abcdefghijklmnopqrstuvwxyz";
+    let mut output = Vec::new();
+    while value > 0 {
+        output.push(digits[(value % u128::from(radix)) as usize]);
+        value /= u128::from(radix);
+    }
+    if negative {
+        output.push(b'-');
+    }
+    output.reverse();
+    String::from_utf8(output).unwrap_or_default()
 }
 
 /// Parses and evaluates a program.
@@ -1631,7 +2741,11 @@ fn is_truthy(value: &Value) -> bool {
         Value::Boolean(value) => *value,
         Value::Number(value) => *value != 0.0 && !value.is_nan(),
         Value::String(value) => !value.is_empty(),
-        Value::Array(_) | Value::Object(_) | Value::Function(_) => true,
+        Value::Array(_)
+        | Value::Object(_)
+        | Value::Function(_)
+        | Value::Builtin(_)
+        | Value::BoundMethod { .. } => true,
     }
 }
 
@@ -1692,14 +2806,7 @@ fn to_number(value: &Value) -> f64 {
             }
         }
         Value::Number(value) => *value,
-        Value::String(value) => {
-            let trimmed = value.trim();
-            if trimmed.is_empty() {
-                0.0
-            } else {
-                trimmed.parse::<f64>().unwrap_or(f64::NAN)
-            }
-        }
+        Value::String(value) => string_to_number(value),
         Value::Array(array) => to_number(&Value::String(
             array
                 .borrow()
@@ -1714,7 +2821,9 @@ fn to_number(value: &Value) -> f64 {
                 .collect::<Vec<_>>()
                 .join(","),
         )),
-        Value::Object(_) | Value::Function(_) => f64::NAN,
+        Value::Object(_) | Value::Function(_) | Value::Builtin(_) | Value::BoundMethod { .. } => {
+            f64::NAN
+        }
     }
 }
 
@@ -1755,7 +2864,9 @@ fn to_js_string(value: &Value) -> String {
             .collect::<Vec<_>>()
             .join(","),
         Value::Object(_) => value.to_json().to_string(),
-        Value::Function(_) => "[Function]".to_owned(),
+        Value::Function(_) | Value::Builtin(_) | Value::BoundMethod { .. } => {
+            "[Function]".to_owned()
+        }
     }
 }
 
@@ -1792,7 +2903,7 @@ fn type_of(value: &Value) -> &'static str {
         Value::Number(_) => "number",
         Value::String(_) => "string",
         Value::Array(_) | Value::Object(_) => "object",
-        Value::Function(_) => "function",
+        Value::Function(_) | Value::Builtin(_) | Value::BoundMethod { .. } => "function",
     }
 }
 
@@ -1829,7 +2940,7 @@ fn expression_kind(expression: &Expression<'_>) -> &'static str {
 mod tests {
     use oxc_allocator::Allocator;
 
-    use super::{execute, RuntimeError};
+    use super::{execute, Interpreter, RuntimeError};
     use crate::{parse_program, Value};
 
     fn run(source: &str) -> Result<Value, RuntimeError> {
@@ -2012,5 +3123,123 @@ mod tests {
     fn rejects_unsupported_unary_operators() {
         let error = run("return void 0;").expect_err("should fail");
         assert_eq!(error.kind(), super::RuntimeErrorKind::UnsupportedSyntax);
+    }
+
+    #[test]
+    fn evaluates_stdlib_json_and_array_methods() {
+        let source = r#"
+            const data = JSON.parse('{"a":[1,2,3]}');
+            const doubled = data.a.map((value) => value * 2);
+            const summary = {
+                total: doubled.reduce((sum, value) => sum + value, 0),
+                max: Math.max(...doubled),
+                keys: Object.keys(data),
+            };
+            return JSON.stringify(summary);
+        "#;
+        assert_eq!(
+            run_value(source),
+            string(r#"{"total":12,"max":6,"keys":["a"]}"#)
+        );
+    }
+
+    #[test]
+    fn evaluates_object_entries_and_string_methods() {
+        let source = r#"
+            const entries = Object.entries({ b: 2, a: 1 });
+            const labels = entries.map(([key, value]) => `${key}=${value}`);
+            const merged = Object.assign({}, { x: 1 }, { y: 2 });
+            return {
+                labels: labels.join("&"),
+                keys: Object.keys(merged).join(","),
+                split: "a,b,c".split(",").slice(1).join("-"),
+                padded: "7".padStart(3, "0"),
+                upper: " mixed Case ".trim().toUpperCase(),
+                found: "banana".indexOf("na", 3),
+                last: "banana".lastIndexOf("na"),
+            };
+        "#;
+        let value = run_value(source);
+        let object = value.as_object().expect("object result");
+        assert_eq!(object.get("labels"), Some(&string("b=2&a=1")));
+        assert_eq!(object.get("keys"), Some(&string("x,y")));
+        assert_eq!(object.get("split"), Some(&string("b-c")));
+        assert_eq!(object.get("padded"), Some(&string("007")));
+        assert_eq!(object.get("upper"), Some(&string("MIXED CASE")));
+        assert_eq!(object.get("found"), Some(&number(4.0)));
+        assert_eq!(object.get("last"), Some(&number(4.0)));
+    }
+
+    #[test]
+    fn evaluates_coercion_globals() {
+        let source = r#"
+            return [
+                Number("0x10"),
+                parseInt("  -42px", 10),
+                parseFloat("3.5abc"),
+                String(12),
+                Boolean(""),
+                isNaN("nope"),
+                (255).toString(16),
+                (1.005).toFixed(2),
+            ];
+        "#;
+        let value = run_value(source);
+        let array = value.as_array().expect("array result");
+        assert_eq!(array[0], number(16.0));
+        assert_eq!(array[1], number(-42.0));
+        assert_eq!(array[2], number(3.5));
+        assert_eq!(array[3], string("12"));
+        assert_eq!(array[4], Value::Boolean(false));
+        assert_eq!(array[5], Value::Boolean(true));
+        assert_eq!(array[6], string("ff"));
+        assert_eq!(array[7], string("1.00"));
+    }
+
+    #[test]
+    fn evaluates_array_mutation_methods() {
+        let source = r#"
+            const values = [3, 1, 2];
+            values.push(4);
+            const last = values.pop();
+            values.sort((a, b) => a - b);
+            const removed = values.shift();
+            values.unshift(9);
+            return [values.join(","), last, removed, values.length];
+        "#;
+        let value = run_value(source);
+        let array = value.as_array().expect("array result");
+        assert_eq!(array[0], string("9,2,3"));
+        assert_eq!(array[1], number(4.0));
+        assert_eq!(array[2], number(1.0));
+        assert_eq!(array[3], number(3.0));
+    }
+
+    #[test]
+    fn binds_stdlib_methods_as_values() {
+        let source = r#"
+            const map = [1, 2].map;
+            const keys = Object.keys;
+            return [typeof map, typeof keys, map.length];
+        "#;
+        let value = run_value(source);
+        let array = value.as_array().expect("array result");
+        assert_eq!(array[0], string("function"));
+        assert_eq!(array[1], string("function"));
+        assert_eq!(array[2], Value::Undefined);
+    }
+
+    #[test]
+    fn captures_console_output() {
+        let allocator = Allocator::default();
+        let program = parse_program(
+            &allocator,
+            r#"console.log("count", 2, true); console.warn("done");"#,
+        )
+        .expect("fixture should parse");
+        let mut interpreter = Interpreter::new();
+        let value = interpreter.run(&program).expect("program should run");
+        assert_eq!(value, Value::Undefined);
+        assert_eq!(interpreter.logs(), ["count 2 true", "done"]);
     }
 }

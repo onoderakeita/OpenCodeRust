@@ -15,8 +15,9 @@ verified:
 ## opencode-codemode
 
 `opencode-codemode` は upstream CodeMode の制限付きinterpreterを移植する
-ためのcrateである。現段階では Oxc parser による構文解析、構文診断、および
-対応構文の静的検査を提供し、コード評価やtool呼び出しは行わない。
+ためのcrateである。Oxc parser による構文解析と構文診断、対応構文の静的検査、
+データ値境界、実行制限、同期評価器、stdlibの一部を提供する。tool呼び出しと
+promiseは未実装である。
 
 ## Parser boundary
 
@@ -70,7 +71,7 @@ upstreamは未対応構文を評価到達時に拒否する。`inspect_support` 
 
 ## Interpreter baseline
 
-`interpreter::execute` は対応構文のうち、tool呼び出しとstdlibを除く範囲を
+`interpreter::execute` は対応構文のうち、tool呼び出しとpromiseを除く範囲を
 同期評価する。
 
 - 文: 変数宣言、式、block、if、while/do-while/for/for-in/for-of、
@@ -82,14 +83,41 @@ upstreamは未対応構文を評価到達時に拒否する。`inspect_support` 
 - 配列とobjectは共有参照で、代入はaliasし、`===` は参照同一性で比較する。
 - `typeof` は未宣言識別子に `"undefined"` を返す。
 - `await` は値をそのまま返す。promise導入時に解決器へ置き換える。
-- 未対応: tool呼び出し、promise、stdlib、`new`、regexp/bigint literal、
-  `void`/`delete`/`instanceof`、methodの値としての抽出。
+- 配列・文字列・数値のmethodは値として取り出せる (`const map = [].map`)。
+- 未対応: tool呼び出し、promise、`new`、regexp/bigint literal、
+  `void`/`delete`/`instanceof`。
 - 緩い等価 (`==`) は基本型のcoercionのみで、objectのToPrimitiveは未実装。
+
+## Stdlib baseline
+
+`install_globals` は `console`、`Math`、`JSON`、`Object`、`Array`、`String`、
+`Number`、`Boolean`、`parseInt`、`parseFloat`、`isNaN`、`isFinite` を登録する。
+
+- `console.log/info/warn/error` は引数を空白で連結し、interpreterの
+  `logs()` に保存する。出力先は呼び出し側が決める。
+- `Math`: abs、ceil、floor、round、trunc、max、min、pow、sqrt、sign、
+  log、exp、sin、cos、tan、PI、E。
+- `JSON`: parse、stringify。stringifyは挿入順を保持し、関数と `undefined` は
+  objectから省略、arrayでは `null` にする。循環参照と深い値は `null` に
+  落として停止する。
+- `Object`: keys、values、entries、fromEntries、assign。
+- `Array`: isArray、from。インスタンスmethodは map、filter、forEach、
+  reduce、reduceRight、find、findIndex、some、every、join、slice、
+  includes、indexOf、push、pop、shift、unshift、reverse、concat、flat、
+  sort、at。
+- `String`: split、slice、substring、substr、indexOf、lastIndexOf、
+  includes、startsWith、endsWith、trim系、case変換、charAt、charCodeAt、
+  at、padStart、padEnd、repeat、replace、concat。
+- `Number`: toFixed、toString (radix 2..36の整数)、valueOf。
+
+文字列のindexはUTF-16 code unitではなくUnicode scalar値で数える。
+`toUpperCase` / `toLowerCase` はRustのUnicode変換を使う。callbackを取る
+配列methodは反復開始時に要素をsnapshotする。
 
 ## 未実装
 
 - TypeScriptの型消去・transpile parity
-- stdlib、tool runtime、promise
+- tool runtime、promise、`Promise.all`
 - 実時間timeoutの強制
 - upstream parity test suite
 

@@ -24,6 +24,12 @@ use serde_json::Value as JsonValue;
 /// upstream `MAX_VALUE_DEPTH`.
 pub const MAX_VALUE_DEPTH: usize = 32;
 
+/// Maximum depth used when rendering a value as JSON.
+///
+/// Rendering never fails, so deeply nested or circular values are collapsed to
+/// `null` instead of overflowing the stack.
+const MAX_JSON_DEPTH: usize = 64;
+
 /// Member names that must never be readable or writable in CodeMode.
 pub const BLOCKED_MEMBERS: [&str; 3] = ["__proto__", "constructor", "prototype"];
 
@@ -68,6 +74,15 @@ pub enum Value {
     Object(ObjectRef),
     /// Interpreter-defined function.
     Function(FunctionId),
+    /// Native global or namespace function, identified by its full path.
+    Builtin(&'static str),
+    /// Native method bound to a receiver, such as `array.map`.
+    BoundMethod {
+        /// Receiver value the method operates on.
+        receiver: Box<Value>,
+        /// Full method path, such as `Array.map`.
+        method: &'static str,
+    },
 }
 
 impl Value {
@@ -127,6 +142,10 @@ impl Value {
             (Self::Array(left), Self::Array(right)) => Rc::ptr_eq(left, right),
             (Self::Object(left), Self::Object(right)) => Rc::ptr_eq(left, right),
             (Self::Function(left), Self::Function(right)) => left == right,
+            (Self::Builtin(left), Self::Builtin(right)) => left == right,
+            (Self::BoundMethod { method: left, .. }, Self::BoundMethod { method: right, .. }) => {
+                left == right
+            }
             _ => false,
         }
     }
@@ -139,6 +158,10 @@ impl Value {
     /// key order follows `serde_json`'s map implementation; [`Value::Object`]
     /// itself preserves insertion order.
     pub fn to_json(&self) -> JsonValue {
+        self.to_json_inner(&mut Vec::new())
+    }
+
+    fn to_json_inner(&self, ancestors: &mut Vec<usize>) -> JsonValue {
         match self {
             Self::Undefined | Self::Null => JsonValue::Null,
             Self::Boolean(value) => JsonValue::Bool(*value),
@@ -148,17 +171,33 @@ impl Value {
             Self::Number(_) => JsonValue::Null,
             Self::String(value) => JsonValue::String(value.clone()),
             Self::Array(array) => {
-                JsonValue::Array(array.borrow().iter().map(Self::to_json).collect())
+                let identity = Rc::as_ptr(array) as *const () as usize;
+                if ancestors.contains(&identity) || ancestors.len() >= MAX_JSON_DEPTH {
+                    return JsonValue::Null;
+                }
+                ancestors.push(identity);
+                let values = array
+                    .borrow()
+                    .iter()
+                    .map(|value| value.to_json_inner(ancestors))
+                    .collect();
+                ancestors.pop();
+                JsonValue::Array(values)
             }
             Self::Object(object) => {
-                let object = object.borrow();
-                let mut map = JsonMap::with_capacity(object.len());
-                for (key, value) in object.iter() {
-                    map.insert(key.clone(), value.to_json());
+                let identity = Rc::as_ptr(object) as *const () as usize;
+                if ancestors.contains(&identity) || ancestors.len() >= MAX_JSON_DEPTH {
+                    return JsonValue::Null;
                 }
+                ancestors.push(identity);
+                let mut map = JsonMap::with_capacity(object.borrow().len());
+                for (key, value) in object.borrow().iter() {
+                    map.insert(key.clone(), value.to_json_inner(ancestors));
+                }
+                ancestors.pop();
                 JsonValue::Object(map)
             }
-            Self::Function(_) => JsonValue::Null,
+            Self::Function(_) | Self::Builtin(_) | Self::BoundMethod { .. } => JsonValue::Null,
         }
     }
 }
@@ -174,7 +213,9 @@ impl PartialEq for Value {
             (Self::String(left), Self::String(right)) => left == right,
             (Self::Array(_), Self::Array(_))
             | (Self::Object(_), Self::Object(_))
-            | (Self::Function(_), Self::Function(_)) => self.same_reference(other),
+            | (Self::Function(_), Self::Function(_))
+            | (Self::Builtin(_), Self::Builtin(_))
+            | (Self::BoundMethod { .. }, Self::BoundMethod { .. }) => self.same_reference(other),
             _ => false,
         }
     }
@@ -223,7 +264,9 @@ impl Display for Value {
             Self::Number(value) => write!(formatter, "{value}"),
             Self::String(value) => write!(formatter, "{value:?}"),
             Self::Array(_) | Self::Object(_) => write!(formatter, "{}", self.to_json()),
-            Self::Function(_) => formatter.write_str("[Function]"),
+            Self::Function(_) | Self::Builtin(_) | Self::BoundMethod { .. } => {
+                formatter.write_str("[Function]")
+            }
         }
     }
 }
@@ -254,9 +297,11 @@ fn check_data_at(
         | Value::Boolean(_)
         | Value::Number(_)
         | Value::String(_) => Ok(()),
-        Value::Function(_) => Err(DataError::NonData {
-            label: label.to_owned(),
-        }),
+        Value::Function(_) | Value::Builtin(_) | Value::BoundMethod { .. } => {
+            Err(DataError::NonData {
+                label: label.to_owned(),
+            })
+        }
         Value::Array(array) => {
             let pointer = Rc::as_ptr(array).cast::<()>();
             if seen.contains(&pointer) {
