@@ -95,7 +95,8 @@ upstreamは未対応構文を評価到達時に拒否する。`inspect_support` 
 - 関数呼び出しの深さと文・式の評価深さは、それぞれ64で `RangeError` にする。
   Rustの評価frameがJavaScriptより大きいための固定上限である。
 - `new` は `Error`、`TypeError`、`RangeError`、`SyntaxError`、
-  `ReferenceError` のconstructorと `Map` / `Set` / `Date` を許可する。
+  `ReferenceError`、`EvalError`、`URIError` のconstructorと
+  `Map` / `Set` / `Date` を許可する。
   `Error(...)` は `new` なしでも同じ値を作り、`Map` / `Set` / `Date` は
   `new` なしでは `TypeError` にする。
 - `instanceof` はError brandと `Map` / `Set` / `Date` / `Array` / `Object` /
@@ -114,7 +115,8 @@ upstreamは未対応構文を評価到達時に拒否する。`inspect_support` 
 
 `install_globals` は `console`、`Math`、`JSON`、`Object`、`Array`、`String`、
 `Number`、`Boolean`、`Promise`、`Map`、`Set`、`Date`、`parseInt`、
-`parseFloat`、`isNaN`、`isFinite`、`undefined`、`NaN`、`Infinity` を登録する。
+`parseFloat`、`isNaN`、`isFinite`、`encodeURI`、`encodeURIComponent`、
+`decodeURI`、`decodeURIComponent`、`undefined`、`NaN`、`Infinity` を登録する。
 builtinsはプログラムの親scopeに置くため、`const Date = 1` のような同名宣言で
 shadowingできる。
 
@@ -138,6 +140,11 @@ shadowingできる。
 - `Number` statics: `Number.isNaN`、`isFinite`、`isInteger`、`isSafeInteger`、
   `parseInt`、`parseFloat`、定数 (`MAX_SAFE_INTEGER` など)。
 - `String` statics: `String.fromCharCode`、`String.fromCodePoint`。
+- URI helpers: `encodeURI` / `encodeURIComponent` はUTF-8をpercent-encodeし、
+  `decodeURI` / `decodeURIComponent` は厳密なUTF-8として復号する。
+  `decodeURI` はreserved文字のescapeを元の表記のまま残す。壊れた `%XX` と
+  不正なUTF-8は `URIError` をthrowする。入力はdata境界を通すため、
+  callableと未await Promiseは `InvalidDataValue` になる。
 - グローバルな `String` / `Number` / `Boolean` / `parseInt` / `parseFloat` は、
   callableと未await Promiseをdata境界で `InvalidDataValue` にする。
   Date/Map/Set/Errorはdataとしてcoercionする。

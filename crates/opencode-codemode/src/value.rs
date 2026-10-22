@@ -65,6 +65,10 @@ pub enum ErrorKind {
     SyntaxError,
     /// `ReferenceError`.
     ReferenceError,
+    /// `EvalError`.
+    EvalError,
+    /// `URIError`.
+    URIError,
 }
 
 impl ErrorKind {
@@ -76,6 +80,8 @@ impl ErrorKind {
             Self::RangeError => "RangeError",
             Self::SyntaxError => "SyntaxError",
             Self::ReferenceError => "ReferenceError",
+            Self::EvalError => "EvalError",
+            Self::URIError => "URIError",
         }
     }
 
@@ -87,6 +93,8 @@ impl ErrorKind {
             "RangeError" => Some(Self::RangeError),
             "SyntaxError" => Some(Self::SyntaxError),
             "ReferenceError" => Some(Self::ReferenceError),
+            "EvalError" => Some(Self::EvalError),
+            "URIError" => Some(Self::URIError),
             _ => None,
         }
     }

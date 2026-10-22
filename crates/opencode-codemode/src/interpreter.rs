@@ -50,6 +50,8 @@ pub enum RuntimeErrorKind {
     RangeError,
     /// Invalid JSON or other syntax failure.
     SyntaxError,
+    /// Malformed percent-encoded URI data.
+    URIError,
     /// A host value that is not plain data.
     InvalidDataValue,
     /// Syntax accepted by the parser but outside the interpreter subset.
@@ -71,6 +73,7 @@ impl Display for RuntimeErrorKind {
             Self::TypeError => "TypeError",
             Self::RangeError => "RangeError",
             Self::SyntaxError => "SyntaxError",
+            Self::URIError => "URIError",
             Self::InvalidDataValue => "InvalidDataValue",
             Self::UnsupportedSyntax => "UnsupportedSyntax",
             Self::Timeout => "Timeout",
@@ -161,6 +164,7 @@ impl RuntimeError {
                 RuntimeErrorKind::TypeError => ErrorKind::TypeError,
                 RuntimeErrorKind::RangeError => ErrorKind::RangeError,
                 RuntimeErrorKind::SyntaxError => ErrorKind::SyntaxError,
+                RuntimeErrorKind::URIError => ErrorKind::URIError,
                 _ => ErrorKind::Error,
             };
             Value::error(kind, self.message.clone())
@@ -401,6 +405,8 @@ impl<'a> Interpreter<'a> {
             ("RangeError", Value::Builtin("RangeError")),
             ("SyntaxError", Value::Builtin("SyntaxError")),
             ("ReferenceError", Value::Builtin("ReferenceError")),
+            ("EvalError", Value::Builtin("EvalError")),
+            ("URIError", Value::Builtin("URIError")),
             ("Map", Value::Builtin("Map")),
             ("Set", Value::Builtin("Set")),
             ("Date", Value::Builtin("Date")),
@@ -414,6 +420,10 @@ impl<'a> Interpreter<'a> {
             ("parseFloat", Value::Builtin("parseFloat")),
             ("isNaN", Value::Builtin("isNaN")),
             ("isFinite", Value::Builtin("isFinite")),
+            ("encodeURI", Value::Builtin("encodeURI")),
+            ("encodeURIComponent", Value::Builtin("encodeURIComponent")),
+            ("decodeURI", Value::Builtin("decodeURI")),
+            ("decodeURIComponent", Value::Builtin("decodeURIComponent")),
         ] {
             scope.bindings.insert(
                 name.to_owned(),
@@ -1394,7 +1404,15 @@ impl<'a> Interpreter<'a> {
         // instead of stringifying to "[Function]" or "[object Promise]".
         if matches!(
             name,
-            "String" | "Number" | "Boolean" | "parseInt" | "parseFloat"
+            "String"
+                | "Number"
+                | "Boolean"
+                | "parseInt"
+                | "parseFloat"
+                | "encodeURI"
+                | "encodeURIComponent"
+                | "decodeURI"
+                | "decodeURIComponent"
         ) {
             match coercion_issue(&argument(0), &mut Vec::new()) {
                 Some(CoercionIssue::Promise) => {
@@ -1425,9 +1443,24 @@ impl<'a> Interpreter<'a> {
             "parseFloat" => Ok(Value::Number(parse_float(&to_js_string(&argument(0))))),
             "isNaN" => Ok(Value::Boolean(to_number(&argument(0)).is_nan())),
             "isFinite" => Ok(Value::Boolean(to_number(&argument(0)).is_finite())),
-            "Error" | "TypeError" | "RangeError" | "SyntaxError" | "ReferenceError" => {
-                Ok(make_error(name, arguments))
+            "encodeURI" | "encodeURIComponent" | "decodeURI" | "decodeURIComponent" => {
+                let text = to_js_string(&argument(0));
+                let result = match name {
+                    "encodeURI" => Ok(crate::uri::encode(&text, true)),
+                    "encodeURIComponent" => Ok(crate::uri::encode(&text, false)),
+                    "decodeURI" => crate::uri::decode(&text, true),
+                    _ => crate::uri::decode(&text, false),
+                };
+                result.map(Value::String).map_err(|()| {
+                    RuntimeError::new(
+                        RuntimeErrorKind::URIError,
+                        format!("{name} received malformed URI data: URI malformed"),
+                        _span,
+                    )
+                })
             }
+            "Error" | "TypeError" | "RangeError" | "SyntaxError" | "ReferenceError"
+            | "EvalError" | "URIError" => Ok(make_error(name, arguments)),
             "Map" | "Set" | "Date" => Err(RuntimeError::type_error(
                 format!("Constructor {name} requires 'new'."),
                 _span,
@@ -6073,6 +6106,62 @@ mod tests {
         );
         let error = run("return [1,2,3].map(42);").expect_err("non-callable callback");
         assert_eq!(error.kind(), super::RuntimeErrorKind::TypeError);
+    }
+
+    #[test]
+    fn supports_uri_encoding_helpers() {
+        assert_eq!(
+            run_value("return encodeURIComponent('a b&c');"),
+            string("a%20b%26c")
+        );
+        assert_eq!(
+            run_value("return encodeURI('http://a/b?c=d&e#f');"),
+            string("http://a/b?c=d&e#f")
+        );
+        assert_eq!(
+            run_value("return encodeURIComponent('é😀');"),
+            string("%C3%A9%F0%9F%98%80")
+        );
+        assert_eq!(
+            run_value("return decodeURIComponent('%C3%A9%F0%9F%98%80');"),
+            string("é😀")
+        );
+        assert_eq!(run_value("return decodeURI('%3F%23');"), string("%3F%23"));
+        assert_eq!(
+            run_value("return decodeURIComponent('%3F%23');"),
+            string("?#")
+        );
+        assert_eq!(
+            run_value(
+                "return [typeof encodeURIComponent, encodeURIComponent(undefined), \
+                 encodeURIComponent(null)].join(',');"
+            ),
+            string("function,undefined,null")
+        );
+        assert_eq!(
+            run_value("return ['a b'].map(encodeURIComponent).join(',');"),
+            string("a%20b")
+        );
+        assert_eq!(
+            run_value(
+                "try { decodeURIComponent('%'); } catch (error) { \
+                 return [error.name, error.message].join('|'); }"
+            ),
+            string("URIError|decodeURIComponent received malformed URI data: URI malformed")
+        );
+        assert_eq!(
+            run_value("return [new URIError('x') instanceof URIError, new EvalError('y') instanceof EvalError].join(',');"),
+            string("true,true")
+        );
+
+        let error = run("return encodeURIComponent(() => 1);").expect_err("callable URI input");
+        assert_eq!(error.kind(), super::RuntimeErrorKind::InvalidDataValue);
+        assert!(error
+            .message()
+            .contains("encodeURIComponent input must contain data only"));
+        let error = run("return decodeURI(Promise.resolve(1));").expect_err("promise URI input");
+        assert_eq!(error.kind(), super::RuntimeErrorKind::InvalidDataValue);
+        assert!(error.message().contains("un-awaited Promise"));
     }
 
     #[test]

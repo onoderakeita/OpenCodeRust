@@ -8,6 +8,7 @@ pub mod interpreter;
 pub mod limits;
 pub mod support;
 pub mod tools;
+mod uri;
 pub mod value;
 
 use std::fmt::{self, Display, Formatter};

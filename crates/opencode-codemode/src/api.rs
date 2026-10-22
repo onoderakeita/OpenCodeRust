@@ -241,6 +241,7 @@ fn map_runtime_kind(kind: RuntimeErrorKind) -> DiagnosticKind {
         | RuntimeErrorKind::TypeError
         | RuntimeErrorKind::RangeError
         | RuntimeErrorKind::SyntaxError
+        | RuntimeErrorKind::URIError
         | RuntimeErrorKind::ExecutionFailure => DiagnosticKind::ExecutionFailure,
     }
 }
