@@ -1,8 +1,11 @@
-//! Parser foundation for the upstream-compatible confined CodeMode interpreter.
+//! Confined CodeMode interpreter foundation: parser, syntax inspection, data
+//! boundary, execution limits, synchronous evaluator, standard library, and
+//! host tool references.
 
 pub mod interpreter;
 pub mod limits;
 pub mod support;
+pub mod tools;
 pub mod value;
 
 use std::fmt::{self, Display, Formatter};
@@ -12,12 +15,13 @@ use oxc_ast::ast::Program;
 use oxc_parser::{ParseOptions, Parser};
 use oxc_span::SourceType;
 
-pub use interpreter::{execute, Interpreter, RuntimeError, RuntimeErrorKind};
+pub use interpreter::{execute, execute_with_host, Interpreter, RuntimeError, RuntimeErrorKind};
 pub use limits::{
     bound_logs, bound_output, bound_serialized_value, truncate_utf8, BoundedLogs, BoundedOutput,
     ExecutionLimits, LimitError, ToolCallBudget,
 };
 pub use support::{inspect_support, SupportReport, UnsupportedSyntax};
+pub use tools::{ToolError, ToolHost};
 pub use value::{check_data, is_blocked_member, DataError, FunctionId, Value, MAX_VALUE_DEPTH};
 
 /// Parse a CodeMode program with TypeScript-capable module grammar and

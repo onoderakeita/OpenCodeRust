@@ -21,7 +21,9 @@ use oxc_ast::ast::{
 use oxc_span::{GetSpan, Span};
 use oxc_syntax::operator::BinaryOperator;
 
-use crate::value::{is_blocked_member, FunctionId, Value};
+use crate::limits::ToolCallBudget;
+use crate::tools::{ToolError, ToolHost};
+use crate::value::{check_data, is_blocked_member, FunctionId, Value};
 
 /// Classification of an interpreter runtime error, mirroring the upstream
 /// diagnostic kinds.
@@ -37,6 +39,10 @@ pub enum RuntimeErrorKind {
     InvalidDataValue,
     /// Syntax accepted by the parser but outside the interpreter subset.
     UnsupportedSyntax,
+    /// The configured tool-call budget was exhausted.
+    ToolCallLimitExceeded,
+    /// A host tool failed.
+    ToolFailure,
     /// Any other execution failure.
     ExecutionFailure,
 }
@@ -49,6 +55,8 @@ impl Display for RuntimeErrorKind {
             Self::RangeError => "RangeError",
             Self::InvalidDataValue => "InvalidDataValue",
             Self::UnsupportedSyntax => "UnsupportedSyntax",
+            Self::ToolCallLimitExceeded => "ToolCallLimitExceeded",
+            Self::ToolFailure => "ToolFailure",
             Self::ExecutionFailure => "ExecutionFailure",
         })
     }
@@ -93,6 +101,15 @@ impl RuntimeError {
         Self {
             kind: RuntimeErrorKind::ExecutionFailure,
             message: to_js_string(&value),
+            span,
+            thrown: Some(value),
+        }
+    }
+
+    fn tool_failure(message: impl Into<String>, value: Value, span: Span) -> Self {
+        Self {
+            kind: RuntimeErrorKind::ToolFailure,
+            message: message.into(),
             span,
             thrown: Some(value),
         }
@@ -199,6 +216,8 @@ pub struct Interpreter<'a> {
     functions: Vec<FunctionDef<'a>>,
     scope: Rc<RefCell<Scope>>,
     logs: Vec<String>,
+    tool_host: Option<Box<dyn ToolHost>>,
+    tool_budget: Option<ToolCallBudget>,
 }
 
 impl<'a> Default for Interpreter<'a> {
@@ -215,6 +234,8 @@ impl<'a> Interpreter<'a> {
             functions: Vec::new(),
             scope: Rc::new(RefCell::new(Scope::global())),
             logs: Vec::new(),
+            tool_host: None,
+            tool_budget: None,
         };
         interpreter.install_globals();
         interpreter
@@ -223,6 +244,28 @@ impl<'a> Interpreter<'a> {
     /// Log lines captured from `console` calls, in emission order.
     pub fn logs(&self) -> &[String] {
         &self.logs
+    }
+
+    /// Installs the host consulted for `tools.*` references.
+    pub fn set_tool_host(&mut self, host: Box<dyn ToolHost>) {
+        self.tool_host = Some(host);
+    }
+
+    /// Applies an optional tool-call budget to this interpreter.
+    pub fn set_tool_call_limit(&mut self, limit: Option<usize>) {
+        self.tool_budget = limit.map(|limit| ToolCallBudget::new(Some(limit)));
+    }
+
+    /// Applies the tool-call portion of an execution limit set.
+    pub fn set_limits(&mut self, limits: &crate::limits::ExecutionLimits) {
+        self.tool_budget = limits
+            .max_tool_calls
+            .map(|limit| ToolCallBudget::new(Some(limit)));
+    }
+
+    /// Admitted tool calls in invocation order.
+    pub fn tool_calls(&self) -> &[String] {
+        self.tool_budget.as_ref().map_or(&[], ToolCallBudget::calls)
     }
 
     fn install_globals(&mut self) {
@@ -266,6 +309,13 @@ impl<'a> Interpreter<'a> {
             ("isArray", Value::Builtin("Array.isArray")),
             ("from", Value::Builtin("Array.from")),
         ]);
+        let promise = Value::from_entries([
+            ("resolve", Value::Builtin("Promise.resolve")),
+            ("reject", Value::Builtin("Promise.reject")),
+            ("all", Value::Builtin("Promise.all")),
+            ("allSettled", Value::Builtin("Promise.allSettled")),
+            ("race", Value::Builtin("Promise.race")),
+        ]);
 
         let mut scope = self.scope.borrow_mut();
         for (name, value) in [
@@ -274,6 +324,8 @@ impl<'a> Interpreter<'a> {
             ("JSON", json),
             ("Object", object),
             ("Array", array),
+            ("Promise", promise),
+            ("tools", Value::tool_ref(Vec::new())),
             ("String", Value::Builtin("String")),
             ("Number", Value::Builtin("Number")),
             ("Boolean", Value::Builtin("Boolean")),
@@ -1126,6 +1178,7 @@ impl<'a> Interpreter<'a> {
             Value::BoundMethod { receiver, method } => {
                 self.call_method(method, receiver, &arguments, span)
             }
+            Value::ToolRef(path) => self.invoke_tool(path, arguments, span),
             _ => Err(RuntimeError::type_error(
                 "Only functions are callable in CodeMode.",
                 span,
@@ -1182,14 +1235,57 @@ impl<'a> Interpreter<'a> {
             "JSON.stringify" => {
                 Ok(stringify_json(&argument(0)).map_or(Value::Undefined, Value::String))
             }
-            "Object.keys" => Ok(Value::array(
-                own_keys(&argument(0))
-                    .into_iter()
-                    .map(Value::String)
-                    .collect(),
-            )),
+            "Promise.resolve" => Ok(argument(0)),
+            "Promise.reject" => Err(RuntimeError::thrown(argument(0), _span)),
+            "Promise.all" | "Promise.allSettled" | "Promise.race" => {
+                let source = argument(0);
+                let items = match &source {
+                    Value::Array(items) => items.borrow().clone(),
+                    _ => {
+                        return Err(RuntimeError::type_error(
+                            "Promise combinators require an array of values in CodeMode.",
+                            _span,
+                        ));
+                    }
+                };
+                match name {
+                    "Promise.race" => Ok(items.into_iter().next().unwrap_or(Value::Undefined)),
+                    "Promise.allSettled" => Ok(Value::array(
+                        items
+                            .into_iter()
+                            .map(|value| {
+                                Value::from_entries([
+                                    ("status", Value::String("fulfilled".to_owned())),
+                                    ("value", value),
+                                ])
+                            })
+                            .collect(),
+                    )),
+                    _ => Ok(Value::array(items)),
+                }
+            }
+            "Object.keys" => {
+                let source = argument(0);
+                if let Some(path) = source.tool_path() {
+                    let keys = self
+                        .tool_host
+                        .as_ref()
+                        .map(|host| host.keys(path))
+                        .unwrap_or_default();
+                    return Ok(Value::array(keys.into_iter().map(Value::String).collect()));
+                }
+                Ok(Value::array(
+                    own_keys(&source).into_iter().map(Value::String).collect(),
+                ))
+            }
             "Object.values" => {
                 let source = argument(0);
+                if source.tool_path().is_some() {
+                    return Err(RuntimeError::type_error(
+                        "Object.values cannot read tool references. Use Object.keys(tools) to discover names.",
+                        _span,
+                    ));
+                }
                 let mut values = Vec::new();
                 for key in own_keys(&source) {
                     values.push(self.get_property(&source, &key, _span)?);
@@ -1198,6 +1294,12 @@ impl<'a> Interpreter<'a> {
             }
             "Object.entries" => {
                 let source = argument(0);
+                if source.tool_path().is_some() {
+                    return Err(RuntimeError::type_error(
+                        "Object.entries cannot read tool references. Use Object.keys(tools) to discover names.",
+                        _span,
+                    ));
+                }
                 let mut entries = Vec::new();
                 for key in own_keys(&source) {
                     let value = self.get_property(&source, &key, _span)?;
@@ -1773,6 +1875,59 @@ impl<'a> Interpreter<'a> {
         }
     }
 
+    fn invoke_tool(
+        &mut self,
+        path: &Rc<Vec<String>>,
+        arguments: Vec<Value>,
+        span: Span,
+    ) -> Result<Value, RuntimeError> {
+        if path.is_empty() {
+            return Err(RuntimeError::type_error(
+                "The tools root is not callable.",
+                span,
+            ));
+        }
+        let name = path.join(".");
+        if let Some(budget) = self.tool_budget.as_mut() {
+            budget.admit(name.clone()).map_err(|error| {
+                RuntimeError::new(
+                    RuntimeErrorKind::ToolCallLimitExceeded,
+                    error.to_string(),
+                    span,
+                )
+            })?;
+        }
+        for (index, argument) in arguments.iter().enumerate() {
+            check_data(argument, &format!("tool argument {}", index + 1)).map_err(|error| {
+                RuntimeError::new(RuntimeErrorKind::InvalidDataValue, error.to_string(), span)
+            })?;
+        }
+        let Some(host) = self.tool_host.as_mut() else {
+            let message = format!("Tool '{name}' is not available in this execution.");
+            let error = ToolError::new(message.clone());
+            return Err(RuntimeError::tool_failure(
+                message,
+                tool_error_value(&error, span),
+                span,
+            ));
+        };
+        let arguments = arguments.iter().map(Value::to_json).collect();
+        match host.invoke(path.as_slice(), arguments) {
+            Ok(json) => {
+                let value = json_to_value(&json, span)?;
+                check_data(&value, &format!("tool '{name}' result")).map_err(|error| {
+                    RuntimeError::new(RuntimeErrorKind::InvalidDataValue, error.to_string(), span)
+                })?;
+                Ok(value)
+            }
+            Err(error) => Err(RuntimeError::tool_failure(
+                error.message().to_owned(),
+                tool_error_value(&error, span),
+                span,
+            )),
+        }
+    }
+
     fn invoke_function(
         &mut self,
         id: FunctionId,
@@ -2220,6 +2375,11 @@ impl<'a> Interpreter<'a> {
                 }
             }
             Value::Number(_) => Ok(bound_method(object, number_method(key))),
+            Value::ToolRef(path) => {
+                let mut next = path.as_ref().clone();
+                next.push(key.to_owned());
+                Ok(Value::tool_ref(next))
+            }
             Value::Null | Value::Undefined => Err(RuntimeError::type_error(
                 "Cannot read a property of null or undefined.",
                 span,
@@ -2567,7 +2727,8 @@ fn json_to_value(json: &serde_json::Value, span: Span) -> Result<Value, RuntimeE
             let mut object = IndexMap::new();
             for (key, value) in map {
                 if is_blocked_member(key) {
-                    return Err(RuntimeError::type_error(
+                    return Err(RuntimeError::new(
+                        RuntimeErrorKind::InvalidDataValue,
                         format!("Property '{key}' is not available in CodeMode."),
                         span,
                     ));
@@ -2579,15 +2740,27 @@ fn json_to_value(json: &serde_json::Value, span: Span) -> Result<Value, RuntimeE
     })
 }
 
+fn tool_error_value(error: &ToolError, span: Span) -> Value {
+    let mut entries = vec![("message", Value::String(error.message().to_owned()))];
+    if let Some(data) = error.data() {
+        if let Ok(value) = json_to_value(data, span) {
+            entries.push(("data", value));
+        }
+    }
+    Value::from_entries(entries)
+}
+
 fn stringify_json(value: &Value) -> Option<String> {
     stringify_json_inner(value, &mut Vec::new())
 }
 
 fn stringify_json_inner(value: &Value, ancestors: &mut Vec<usize>) -> Option<String> {
     match value {
-        Value::Undefined | Value::Function(_) | Value::Builtin(_) | Value::BoundMethod { .. } => {
-            None
-        }
+        Value::Undefined
+        | Value::Function(_)
+        | Value::Builtin(_)
+        | Value::BoundMethod { .. }
+        | Value::ToolRef(_) => None,
         Value::Null => Some("null".to_owned()),
         Value::Boolean(value) => Some(value.to_string()),
         Value::Number(value) => Some(if value.is_finite() {
@@ -2659,6 +2832,16 @@ fn number_to_string(number: f64, radix: u32) -> String {
 /// Parses and evaluates a program.
 pub fn execute<'a>(program: &'a Program<'a>) -> Result<Value, RuntimeError> {
     let mut interpreter = Interpreter::<'a>::new();
+    interpreter.run(program)
+}
+
+/// Parses and evaluates a program with a host for `tools.*` references.
+pub fn execute_with_host<'a>(
+    program: &'a Program<'a>,
+    host: Box<dyn ToolHost>,
+) -> Result<Value, RuntimeError> {
+    let mut interpreter = Interpreter::<'a>::new();
+    interpreter.set_tool_host(host);
     interpreter.run(program)
 }
 
@@ -2745,7 +2928,8 @@ fn is_truthy(value: &Value) -> bool {
         | Value::Object(_)
         | Value::Function(_)
         | Value::Builtin(_)
-        | Value::BoundMethod { .. } => true,
+        | Value::BoundMethod { .. }
+        | Value::ToolRef(_) => true,
     }
 }
 
@@ -2824,6 +3008,7 @@ fn to_number(value: &Value) -> f64 {
         Value::Object(_) | Value::Function(_) | Value::Builtin(_) | Value::BoundMethod { .. } => {
             f64::NAN
         }
+        Value::ToolRef(_) => f64::NAN,
     }
 }
 
@@ -2867,6 +3052,7 @@ fn to_js_string(value: &Value) -> String {
         Value::Function(_) | Value::Builtin(_) | Value::BoundMethod { .. } => {
             "[Function]".to_owned()
         }
+        Value::ToolRef(_) => value.to_string(),
     }
 }
 
@@ -2903,7 +3089,10 @@ fn type_of(value: &Value) -> &'static str {
         Value::Number(_) => "number",
         Value::String(_) => "string",
         Value::Array(_) | Value::Object(_) => "object",
-        Value::Function(_) | Value::Builtin(_) | Value::BoundMethod { .. } => "function",
+        Value::ToolRef(path) if path.is_empty() => "object",
+        Value::Function(_) | Value::Builtin(_) | Value::BoundMethod { .. } | Value::ToolRef(_) => {
+            "function"
+        }
     }
 }
 
@@ -2941,6 +3130,7 @@ mod tests {
     use oxc_allocator::Allocator;
 
     use super::{execute, Interpreter, RuntimeError};
+    use crate::tools::{ToolError, ToolHost};
     use crate::{parse_program, Value};
 
     fn run(source: &str) -> Result<Value, RuntimeError> {
@@ -3241,5 +3431,142 @@ mod tests {
         let value = interpreter.run(&program).expect("program should run");
         assert_eq!(value, Value::Undefined);
         assert_eq!(interpreter.logs(), ["count 2 true", "done"]);
+    }
+
+    struct TestHost;
+
+    impl ToolHost for TestHost {
+        fn keys(&self, path: &[String]) -> Vec<String> {
+            match path.join(".").as_str() {
+                "" => vec![
+                    "echo".to_owned(),
+                    "fail".to_owned(),
+                    "math".to_owned(),
+                    "unsafe".to_owned(),
+                ],
+                "math" => vec!["add".to_owned()],
+                _ => Vec::new(),
+            }
+        }
+
+        fn invoke(
+            &mut self,
+            path: &[String],
+            arguments: Vec<serde_json::Value>,
+        ) -> Result<serde_json::Value, ToolError> {
+            match path.join(".").as_str() {
+                "math.add" => {
+                    let left = arguments.first().and_then(serde_json::Value::as_f64);
+                    let right = arguments.get(1).and_then(serde_json::Value::as_f64);
+                    Ok(serde_json::json!(
+                        left.unwrap_or(0.0) + right.unwrap_or(0.0)
+                    ))
+                }
+                "echo" => Ok(arguments
+                    .first()
+                    .cloned()
+                    .unwrap_or(serde_json::Value::Null)),
+                "fail" => Err(ToolError::with_data(
+                    "boom",
+                    serde_json::json!({ "code": 42 }),
+                )),
+                "unsafe" => Ok(serde_json::json!({ "__proto__": { "polluted": true } })),
+                _ => Err(ToolError::new(format!(
+                    "Unknown tool '{}'.",
+                    path.join(".")
+                ))),
+            }
+        }
+    }
+
+    fn run_with_host(source: &str) -> Result<Value, RuntimeError> {
+        let allocator = Allocator::default();
+        let program = parse_program(&allocator, source).expect("fixture should parse");
+        let mut interpreter = Interpreter::new();
+        interpreter.set_tool_host(Box::new(TestHost));
+        interpreter.run(&program)
+    }
+
+    #[test]
+    fn invokes_tools_and_awaits_results() {
+        assert_eq!(
+            run_with_host("return await tools.math.add(2, 3);").expect("program should run"),
+            number(5.0)
+        );
+    }
+
+    #[test]
+    fn exposes_tool_namespaces() {
+        let source = r#"
+            return [typeof tools, typeof tools.math, Object.keys(tools).join(","), Object.keys(tools.math).join(",")];
+        "#;
+        let value = run_with_host(source).expect("program should run");
+        let array = value.as_array().expect("array result");
+        assert_eq!(array[0], string("object"));
+        assert_eq!(array[1], string("function"));
+        assert_eq!(array[2], string("echo,fail,math,unsafe"));
+        assert_eq!(array[3], string("add"));
+    }
+
+    #[test]
+    fn catches_tool_failures_with_structured_data() {
+        let source = r#"
+            try {
+                await tools.fail();
+            } catch (error) {
+                return [error.message, error.data.code];
+            }
+            return ["no error", 0];
+        "#;
+        let value = run_with_host(source).expect("program should run");
+        let array = value.as_array().expect("array result");
+        assert_eq!(array[0], string("boom"));
+        assert_eq!(array[1], number(42.0));
+    }
+
+    #[test]
+    fn rejects_non_data_tool_arguments() {
+        let error = run_with_host("return tools.echo(() => 1);").expect_err("should fail");
+        assert_eq!(error.kind(), super::RuntimeErrorKind::InvalidDataValue);
+    }
+
+    #[test]
+    fn rejects_blocked_tool_results() {
+        let error = run_with_host("return tools.unsafe();").expect_err("should fail");
+        assert_eq!(error.kind(), super::RuntimeErrorKind::InvalidDataValue);
+    }
+
+    #[test]
+    fn rejects_calling_the_tools_root() {
+        let error = run_with_host("return tools();").expect_err("should fail");
+        assert_eq!(error.kind(), super::RuntimeErrorKind::TypeError);
+    }
+
+    #[test]
+    fn enforces_the_tool_call_budget() {
+        let allocator = Allocator::default();
+        let program = parse_program(&allocator, "tools.echo(1); return tools.echo(2);")
+            .expect("fixture should parse");
+        let mut interpreter = Interpreter::new();
+        interpreter.set_tool_host(Box::new(TestHost));
+        interpreter.set_tool_call_limit(Some(1));
+        let error = interpreter.run(&program).expect_err("should fail");
+        assert_eq!(error.kind(), super::RuntimeErrorKind::ToolCallLimitExceeded);
+        assert_eq!(interpreter.tool_calls(), ["echo"]);
+    }
+
+    #[test]
+    fn resolves_promise_combinators_synchronously() {
+        let source = r#"
+            const values = await Promise.all([tools.echo(1), tools.echo(2)]);
+            const settled = await Promise.allSettled([tools.echo(3)]);
+            return [values.join(","), settled[0].status, settled[0].value, Promise.race([7, 8])];
+        "#;
+        let value = run_with_host(source).expect("program should run");
+        let array = value.as_array().expect("array result");
+        assert_eq!(array[0], string("1,2"));
+        assert_eq!(array[1], string("fulfilled"));
+        assert_eq!(array[2], number(3.0));
+        assert_eq!(array[3], number(7.0));
     }
 }

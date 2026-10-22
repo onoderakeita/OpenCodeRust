@@ -76,6 +76,8 @@ pub enum Value {
     Function(FunctionId),
     /// Native global or namespace function, identified by its full path.
     Builtin(&'static str),
+    /// Reference into the host tool tree, such as `tools.math.add`.
+    ToolRef(Rc<Vec<String>>),
     /// Native method bound to a receiver, such as `array.map`.
     BoundMethod {
         /// Receiver value the method operates on.
@@ -107,6 +109,19 @@ impl Value {
     /// Creates an array from values.
     pub fn array(values: Vec<Value>) -> Self {
         Self::Array(Rc::new(RefCell::new(values)))
+    }
+
+    /// Creates a reference into the host tool tree.
+    pub fn tool_ref(path: Vec<String>) -> Self {
+        Self::ToolRef(Rc::new(path))
+    }
+
+    /// Returns the tool path for a tool reference.
+    pub fn tool_path(&self) -> Option<&[String]> {
+        match self {
+            Self::ToolRef(path) => Some(path.as_slice()),
+            _ => None,
+        }
     }
 
     /// Returns `true` for `undefined`.
@@ -146,6 +161,7 @@ impl Value {
             (Self::BoundMethod { method: left, .. }, Self::BoundMethod { method: right, .. }) => {
                 left == right
             }
+            (Self::ToolRef(left), Self::ToolRef(right)) => left == right,
             _ => false,
         }
     }
@@ -197,7 +213,9 @@ impl Value {
                 ancestors.pop();
                 JsonValue::Object(map)
             }
-            Self::Function(_) | Self::Builtin(_) | Self::BoundMethod { .. } => JsonValue::Null,
+            Self::Function(_) | Self::Builtin(_) | Self::BoundMethod { .. } | Self::ToolRef(_) => {
+                JsonValue::Null
+            }
         }
     }
 }
@@ -215,7 +233,8 @@ impl PartialEq for Value {
             | (Self::Object(_), Self::Object(_))
             | (Self::Function(_), Self::Function(_))
             | (Self::Builtin(_), Self::Builtin(_))
-            | (Self::BoundMethod { .. }, Self::BoundMethod { .. }) => self.same_reference(other),
+            | (Self::BoundMethod { .. }, Self::BoundMethod { .. })
+            | (Self::ToolRef(_), Self::ToolRef(_)) => self.same_reference(other),
             _ => false,
         }
     }
@@ -267,6 +286,13 @@ impl Display for Value {
             Self::Function(_) | Self::Builtin(_) | Self::BoundMethod { .. } => {
                 formatter.write_str("[Function]")
             }
+            Self::ToolRef(path) => {
+                if path.is_empty() {
+                    formatter.write_str("[tools]")
+                } else {
+                    formatter.write_str("[Function]")
+                }
+            }
         }
     }
 }
@@ -297,7 +323,7 @@ fn check_data_at(
         | Value::Boolean(_)
         | Value::Number(_)
         | Value::String(_) => Ok(()),
-        Value::Function(_) | Value::Builtin(_) | Value::BoundMethod { .. } => {
+        Value::Function(_) | Value::Builtin(_) | Value::BoundMethod { .. } | Value::ToolRef(_) => {
             Err(DataError::NonData {
                 label: label.to_owned(),
             })

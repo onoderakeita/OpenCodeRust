@@ -16,8 +16,8 @@ verified:
 
 `opencode-codemode` は upstream CodeMode の制限付きinterpreterを移植する
 ためのcrateである。Oxc parser による構文解析と構文診断、対応構文の静的検査、
-データ値境界、実行制限、同期評価器、stdlibの一部を提供する。tool呼び出しと
-promiseは未実装である。
+データ値境界、実行制限、同期評価器、stdlibの一部、同期のtool境界を提供する。
+非同期実行と実時間timeoutは未実装である。
 
 ## Parser boundary
 
@@ -71,7 +71,7 @@ upstreamは未対応構文を評価到達時に拒否する。`inspect_support` 
 
 ## Interpreter baseline
 
-`interpreter::execute` は対応構文のうち、tool呼び出しとpromiseを除く範囲を
+`interpreter::execute` は対応構文のうち、実時間timeoutを除く範囲を
 同期評価する。
 
 - 文: 変数宣言、式、block、if、while/do-while/for/for-in/for-of、
@@ -114,10 +114,26 @@ upstreamは未対応構文を評価到達時に拒否する。`inspect_support` 
 `toUpperCase` / `toLowerCase` はRustのUnicode変換を使う。callbackを取る
 配列methodは反復開始時に要素をsnapshotする。
 
+## Tool boundary
+
+`tools` は `ToolHost` に解決される参照で、`tools.ns.tool` 形式のパスを
+構築する。呼び出しは同期で、引数と結果はplain data境界を通る。
+
+- `Object.keys(tools)` / `Object.keys(tools.ns)` はhostの名前を列挙する。
+- 引数は深さ32、循環、関数、禁止メンバーを拒否する。
+- 結果は同じ境界を通す。hostの失敗は `message` と任意の `data` を持つ
+  objectとしてthrowし、`try`/`catch` で捕捉できる。
+- `maxToolCalls` は `set_limits` / `set_tool_call_limit` で適用し、超過は
+  `ToolCallLimitExceeded` を返す。
+- `Promise.resolve`、`Promise.reject`、`Promise.all`、`Promise.allSettled`、
+  `Promise.race` は同期的に評価する。`await` は値を通す。
+- 真の非同期実行、tool呼び出しの同時実行制御、未await rejectionの診断は
+  未実装。
+
 ## 未実装
 
 - TypeScriptの型消去・transpile parity
-- tool runtime、promise、`Promise.all`
+- 非同期tool実行と未await rejectionの診断
 - 実時間timeoutの強制
 - upstream parity test suite
 
