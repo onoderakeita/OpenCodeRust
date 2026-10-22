@@ -1,5 +1,7 @@
 //! Parser foundation for the upstream-compatible confined CodeMode interpreter.
 
+pub mod support;
+
 use std::fmt::{self, Display, Formatter};
 
 use oxc_allocator::Allocator;
@@ -7,9 +9,14 @@ use oxc_ast::ast::Program;
 use oxc_parser::{ParseOptions, Parser};
 use oxc_span::SourceType;
 
+pub use support::{inspect_support, SupportReport, UnsupportedSyntax};
+
 /// Parse a CodeMode program with TypeScript-capable module grammar and
 /// top-level `return` enabled, matching the upstream transpile-and-interpret
 /// input path.
+///
+/// Parenthesized expressions are not preserved so that the tree shape matches
+/// the upstream Acorn output.
 ///
 /// The allocator and source must outlive the returned AST.
 pub fn parse_program<'a>(
@@ -18,6 +25,7 @@ pub fn parse_program<'a>(
 ) -> Result<Program<'a>, ParseError> {
     let options = ParseOptions {
         allow_return_outside_function: true,
+        preserve_parens: false,
         ..ParseOptions::default()
     };
     let parsed = Parser::new(allocator, source, SourceType::ts())
