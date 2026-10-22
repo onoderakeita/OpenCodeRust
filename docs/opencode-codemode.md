@@ -64,7 +64,8 @@ upstreamは未対応構文を評価到達時に拒否する。`inspect_support` 
 
 `limits` は upstream の3つの任意制限を実装する。
 
-- `timeoutMs`: 1以上。未指定なら無制限。
+- `timeoutMs`: 1以上。未指定なら無制限。文・block境界で期限を確認する。
+  同期hostの呼び出し中は中断できない。
 - `maxToolCalls`: 0以上。超過は `ToolCallLimitExceeded`。
 - `maxOutputBytes`: 0以上。値 → logの順に予算を消費し、UTF-8境界を
   壊さず切り詰める。切り詰めは実行失敗にしない。
@@ -84,6 +85,8 @@ upstreamは未対応構文を評価到達時に拒否する。`inspect_support` 
 - `typeof` は未宣言識別子に `"undefined"` を返す。
 - `await` は値をそのまま返す。promise導入時に解決器へ置き換える。
 - 配列・文字列・数値のmethodは値として取り出せる (`const map = [].map`)。
+- 関数呼び出しの深さと文・式の評価深さは、それぞれ64で `RangeError` にする。
+  Rustの評価frameがJavaScriptより大きいための固定上限である。
 - 未対応: tool呼び出し、promise、`new`、regexp/bigint literal、
   `void`/`delete`/`instanceof`。
 - 緩い等価 (`==`) は基本型のcoercionのみで、objectのToPrimitiveは未実装。
@@ -134,7 +137,7 @@ upstreamは未対応構文を評価到達時に拒否する。`inspect_support` 
 
 - TypeScriptの型消去・transpile parity
 - 非同期tool実行と未await rejectionの診断
-- 実時間timeoutの強制
+- 同期host呼び出しを中断するtimeout
 - upstream parity test suite
 
 ## Validation

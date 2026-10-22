@@ -9,6 +9,7 @@
 use std::cell::RefCell;
 use std::fmt::{self, Display, Formatter};
 use std::rc::Rc;
+use std::time::{Duration, Instant};
 
 use indexmap::IndexMap;
 use oxc_ast::ast::{
@@ -25,6 +26,15 @@ use crate::limits::ToolCallBudget;
 use crate::tools::{ToolError, ToolHost};
 use crate::value::{check_data, is_blocked_member, FunctionId, Value};
 
+/// Maximum nested user-function calls before the interpreter raises a
+/// `RangeError`. The ceiling is conservative because Rust evaluation frames are
+/// much larger than JavaScript frames.
+const MAX_CALL_DEPTH: usize = 64;
+
+/// Maximum nested statement or expression evaluations. This protects the Rust
+/// stack from parser-accepted, deeply nested syntax.
+const MAX_EVAL_DEPTH: usize = 64;
+
 /// Classification of an interpreter runtime error, mirroring the upstream
 /// diagnostic kinds.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -39,6 +49,8 @@ pub enum RuntimeErrorKind {
     InvalidDataValue,
     /// Syntax accepted by the parser but outside the interpreter subset.
     UnsupportedSyntax,
+    /// The wall-clock timeout elapsed.
+    Timeout,
     /// The configured tool-call budget was exhausted.
     ToolCallLimitExceeded,
     /// A host tool failed.
@@ -55,6 +67,7 @@ impl Display for RuntimeErrorKind {
             Self::RangeError => "RangeError",
             Self::InvalidDataValue => "InvalidDataValue",
             Self::UnsupportedSyntax => "UnsupportedSyntax",
+            Self::Timeout => "Timeout",
             Self::ToolCallLimitExceeded => "ToolCallLimitExceeded",
             Self::ToolFailure => "ToolFailure",
             Self::ExecutionFailure => "ExecutionFailure",
@@ -218,6 +231,10 @@ pub struct Interpreter<'a> {
     logs: Vec<String>,
     tool_host: Option<Box<dyn ToolHost>>,
     tool_budget: Option<ToolCallBudget>,
+    timeout: Option<Duration>,
+    deadline: Option<Instant>,
+    call_depth: usize,
+    eval_depth: usize,
 }
 
 impl<'a> Default for Interpreter<'a> {
@@ -236,6 +253,10 @@ impl<'a> Interpreter<'a> {
             logs: Vec::new(),
             tool_host: None,
             tool_budget: None,
+            timeout: None,
+            deadline: None,
+            call_depth: 0,
+            eval_depth: 0,
         };
         interpreter.install_globals();
         interpreter
@@ -256,11 +277,41 @@ impl<'a> Interpreter<'a> {
         self.tool_budget = limit.map(|limit| ToolCallBudget::new(Some(limit)));
     }
 
-    /// Applies the tool-call portion of an execution limit set.
+    /// Applies the tool-call and timeout portions of an execution limit set.
+    ///
+    /// Output bounds are applied by the caller because they depend on how the
+    /// result is serialized for the model.
     pub fn set_limits(&mut self, limits: &crate::limits::ExecutionLimits) {
         self.tool_budget = limits
             .max_tool_calls
             .map(|limit| ToolCallBudget::new(Some(limit)));
+        self.timeout = limits.timeout_ms.map(Duration::from_millis);
+    }
+
+    fn enter_eval(&mut self, span: Span) -> Result<(), RuntimeError> {
+        if self.eval_depth >= MAX_EVAL_DEPTH {
+            return Err(RuntimeError::new(
+                RuntimeErrorKind::RangeError,
+                format!("Maximum evaluation depth of {MAX_EVAL_DEPTH} exceeded."),
+                span,
+            ));
+        }
+        self.eval_depth += 1;
+        Ok(())
+    }
+
+    fn check_timeout(&self, span: Span) -> Result<(), RuntimeError> {
+        if self
+            .deadline
+            .is_some_and(|deadline| Instant::now() >= deadline)
+        {
+            return Err(RuntimeError::new(
+                RuntimeErrorKind::Timeout,
+                "Execution timed out.",
+                span,
+            ));
+        }
+        Ok(())
     }
 
     /// Admitted tool calls in invocation order.
@@ -347,6 +398,9 @@ impl<'a> Interpreter<'a> {
     /// Evaluates a program and returns its top-level `return` value, or
     /// `undefined`.
     pub fn run(&mut self, program: &'a Program<'a>) -> Result<Value, RuntimeError> {
+        self.deadline = self
+            .timeout
+            .and_then(|timeout| Instant::now().checked_add(timeout));
         self.hoist_functions(&program.body)?;
         for statement in &program.body {
             match self.eval_statement(statement)? {
@@ -421,6 +475,14 @@ impl<'a> Interpreter<'a> {
     }
 
     fn eval_statement(&mut self, statement: &'a Statement<'a>) -> Result<Flow, RuntimeError> {
+        self.enter_eval(statement.span())?;
+        let result = self.eval_statement_inner(statement);
+        self.eval_depth -= 1;
+        result
+    }
+
+    fn eval_statement_inner(&mut self, statement: &'a Statement<'a>) -> Result<Flow, RuntimeError> {
+        self.check_timeout(statement.span())?;
         if let Some(declaration) = statement.as_declaration() {
             match declaration {
                 oxc_ast::ast::Declaration::VariableDeclaration(declaration) => {
@@ -546,6 +608,7 @@ impl<'a> Interpreter<'a> {
     }
 
     fn eval_block(&mut self, statements: &'a [Statement<'a>]) -> Result<Flow, RuntimeError> {
+        self.check_timeout(statements.first().map_or(Span::default(), GetSpan::span))?;
         let saved = Rc::clone(&self.scope);
         self.scope = Rc::new(RefCell::new(Scope::child(saved.clone())));
         let result = (|| {
@@ -697,6 +760,16 @@ impl<'a> Interpreter<'a> {
     }
 
     fn eval_expression(&mut self, expression: &'a Expression<'a>) -> Result<Value, RuntimeError> {
+        self.enter_eval(expression.span())?;
+        let result = self.eval_expression_inner(expression);
+        self.eval_depth -= 1;
+        result
+    }
+
+    fn eval_expression_inner(
+        &mut self,
+        expression: &'a Expression<'a>,
+    ) -> Result<Value, RuntimeError> {
         match expression {
             Expression::BooleanLiteral(literal) => Ok(Value::Boolean(literal.value)),
             Expression::NullLiteral(_) => Ok(Value::Null),
@@ -1934,6 +2007,25 @@ impl<'a> Interpreter<'a> {
         arguments: Vec<Value>,
         span: Span,
     ) -> Result<Value, RuntimeError> {
+        if self.call_depth >= MAX_CALL_DEPTH {
+            return Err(RuntimeError::new(
+                RuntimeErrorKind::RangeError,
+                format!("Maximum call depth of {MAX_CALL_DEPTH} exceeded."),
+                span,
+            ));
+        }
+        self.call_depth += 1;
+        let result = self.invoke_function_inner(id, arguments, span);
+        self.call_depth -= 1;
+        result
+    }
+
+    fn invoke_function_inner(
+        &mut self,
+        id: FunctionId,
+        arguments: Vec<Value>,
+        span: Span,
+    ) -> Result<Value, RuntimeError> {
         let function = self
             .functions
             .get(id.0)
@@ -3130,6 +3222,7 @@ mod tests {
     use oxc_allocator::Allocator;
 
     use super::{execute, Interpreter, RuntimeError};
+    use crate::limits::ExecutionLimits;
     use crate::tools::{ToolError, ToolHost};
     use crate::{parse_program, Value};
 
@@ -3553,6 +3646,36 @@ mod tests {
         let error = interpreter.run(&program).expect_err("should fail");
         assert_eq!(error.kind(), super::RuntimeErrorKind::ToolCallLimitExceeded);
         assert_eq!(interpreter.tool_calls(), ["echo"]);
+    }
+
+    #[test]
+    fn enforces_the_wall_clock_timeout() {
+        let allocator = Allocator::default();
+        let program = parse_program(&allocator, "while (true) {}").expect("fixture should parse");
+        let mut interpreter = Interpreter::new();
+        interpreter.set_limits(&ExecutionLimits {
+            timeout_ms: Some(1),
+            ..ExecutionLimits::default()
+        });
+        let error = interpreter.run(&program).expect_err("should time out");
+        assert_eq!(error.kind(), super::RuntimeErrorKind::Timeout);
+    }
+
+    #[test]
+    fn enforces_the_maximum_evaluation_depth() {
+        let source = format!(
+            "return {};",
+            (0..200).map(|_| "1").collect::<Vec<_>>().join(" + ")
+        );
+        let error = run(&source).expect_err("should exceed the evaluation depth");
+        assert_eq!(error.kind(), super::RuntimeErrorKind::RangeError);
+    }
+
+    #[test]
+    fn enforces_the_maximum_call_depth() {
+        let error = run("function recurse() { return recurse(); } return recurse();")
+            .expect_err("should exceed the call depth");
+        assert_eq!(error.kind(), super::RuntimeErrorKind::RangeError);
     }
 
     #[test]
