@@ -1389,6 +1389,31 @@ impl<'a> Interpreter<'a> {
         _span: Span,
     ) -> Result<Value, RuntimeError> {
         let argument = |index: usize| arguments.get(index).cloned().unwrap_or(Value::Undefined);
+        // Upstream coercion builtins run their input through the data boundary
+        // before coercing, so callables and un-awaited promises are rejected
+        // instead of stringifying to "[Function]" or "[object Promise]".
+        if matches!(
+            name,
+            "String" | "Number" | "Boolean" | "parseInt" | "parseFloat"
+        ) {
+            match coercion_issue(&argument(0), &mut Vec::new()) {
+                Some(CoercionIssue::Promise) => {
+                    return Err(RuntimeError::new(
+                        RuntimeErrorKind::InvalidDataValue,
+                        format!("{name} input contains an un-awaited Promise; await it first."),
+                        _span,
+                    ))
+                }
+                Some(CoercionIssue::NonData) => {
+                    return Err(RuntimeError::new(
+                        RuntimeErrorKind::InvalidDataValue,
+                        format!("{name} input must contain data only."),
+                        _span,
+                    ))
+                }
+                None => {}
+            }
+        }
         match name {
             "String" => Ok(Value::String(to_js_string(&argument(0)))),
             "Number" => Ok(Value::Number(to_number(&argument(0)))),
@@ -4224,6 +4249,50 @@ fn array_like_items(value: &Value) -> Option<Vec<Value>> {
     )
 }
 
+enum CoercionIssue {
+    NonData,
+    Promise,
+}
+
+/// Rejects callables and un-awaited promises at coercion inputs, matching
+/// upstream's use of the data boundary. Sandbox values (Date, Map, Set, errors)
+/// stay data; tool references are left to their existing rendering.
+fn coercion_issue(value: &Value, seen: &mut Vec<usize>) -> Option<CoercionIssue> {
+    match value {
+        Value::Function(_) | Value::Builtin(_) | Value::BoundMethod { .. } => {
+            Some(CoercionIssue::NonData)
+        }
+        Value::Promise(_) => Some(CoercionIssue::Promise),
+        Value::Array(items) => {
+            let identity = Rc::as_ptr(items) as *const () as usize;
+            if seen.contains(&identity) {
+                return None;
+            }
+            seen.push(identity);
+            let issue = items
+                .borrow()
+                .iter()
+                .find_map(|item| coercion_issue(item, seen));
+            seen.pop();
+            issue
+        }
+        Value::Object(object) => {
+            let identity = Rc::as_ptr(object) as *const () as usize;
+            if seen.contains(&identity) {
+                return None;
+            }
+            seen.push(identity);
+            let issue = object
+                .borrow()
+                .values()
+                .find_map(|item| coercion_issue(item, seen));
+            seen.pop();
+            issue
+        }
+        _ => None,
+    }
+}
+
 /// Mirrors upstream `containsOpaqueReference`: functions, tool references and
 /// un-awaited promises are interpreter machinery, not data operands. Sandbox
 /// values (Date, Map, Set, errors) are data even when they contain callables.
@@ -6000,6 +6069,62 @@ mod tests {
         );
         let error = run("return [1,2,3].map(42);").expect_err("non-callable callback");
         assert_eq!(error.kind(), super::RuntimeErrorKind::TypeError);
+    }
+
+    #[test]
+    fn coercion_builtins_reject_opaque_values() {
+        for (source, message) in [
+            (
+                "const f = () => 1; return String(f);",
+                "String input must contain data only",
+            ),
+            (
+                "const f = () => 1; return Number(f);",
+                "Number input must contain data only",
+            ),
+            (
+                "const f = () => 1; return Boolean(f);",
+                "Boolean input must contain data only",
+            ),
+            (
+                "const f = () => 1; return parseInt(f);",
+                "parseInt input must contain data only",
+            ),
+            (
+                "const f = () => 1; return parseFloat(f);",
+                "parseFloat input must contain data only",
+            ),
+            (
+                "return String({ f: () => 1 });",
+                "String input must contain data only",
+            ),
+            ("return Boolean(Promise.resolve(1));", "un-awaited Promise"),
+        ] {
+            let error = run(source).expect_err("opaque coercion input");
+            assert_eq!(error.kind(), super::RuntimeErrorKind::InvalidDataValue);
+            assert!(error.message().contains(message), "{}", error.message());
+        }
+        assert_eq!(
+            run_value("return String(new Map());"),
+            string("[object Map]")
+        );
+        assert_eq!(
+            run_value("return String(new Set());"),
+            string("[object Set]")
+        );
+        assert_eq!(
+            run_value("return String(new Date(0));"),
+            string("1970-01-01T00:00:00.000Z")
+        );
+        assert_eq!(
+            run_value("return String(new Error('m'));"),
+            string("[object Object]")
+        );
+        assert_eq!(run_value("return Number(new Date(5));"), number(5.0));
+        assert_eq!(
+            run_value("return Boolean(new Map());"),
+            Value::Boolean(true)
+        );
     }
 
     #[test]

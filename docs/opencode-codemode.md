@@ -138,6 +138,9 @@ shadowingできる。
 - `Number` statics: `Number.isNaN`、`isFinite`、`isInteger`、`isSafeInteger`、
   `parseInt`、`parseFloat`、定数 (`MAX_SAFE_INTEGER` など)。
 - `String` statics: `String.fromCharCode`、`String.fromCodePoint`。
+- グローバルな `String` / `Number` / `Boolean` / `parseInt` / `parseFloat` は、
+  callableと未await Promiseをdata境界で `InvalidDataValue` にする。
+  Date/Map/Set/Errorはdataとしてcoercionする。
 - `Object`: keys、values、entries、hasOwn、fromEntries (配列とMap)、assign。
   `keys` はdata objectと配列を受け、Date/Map/Set/Promiseでは空配列を返す。
   `values` / `entries` / `hasOwn` は配列とprimitiveを `TypeError` にし、
