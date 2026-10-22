@@ -206,6 +206,10 @@ fn hash_value<H: Hasher>(value: &Value, state: &mut H) {
             13u8.hash(state);
             (Rc::as_ptr(value) as *const () as usize).hash(state);
         }
+        Value::Date(value) => {
+            15u8.hash(state);
+            (Rc::as_ptr(value) as *const () as usize).hash(state);
+        }
         Value::BoundMethod { receiver, method } => {
             14u8.hash(state);
             method.hash(state);
@@ -363,6 +367,16 @@ pub type MapRef = Rc<MapValue>;
 /// Shared reference to a set.
 pub type SetRef = Rc<SetValue>;
 
+/// Shared date data.
+#[derive(Debug)]
+pub struct DateValue {
+    /// Unix time in milliseconds; `NaN` marks an invalid date.
+    pub time_ms: f64,
+}
+
+/// Shared reference to a date.
+pub type DateRef = Rc<DateValue>;
+
 /// A value inside the confined interpreter.
 ///
 /// Objects preserve insertion order, mirroring JavaScript own-key order for
@@ -398,6 +412,8 @@ pub enum Value {
     Map(MapRef),
     /// JavaScript `Set`.
     Set(SetRef),
+    /// JavaScript `Date`.
+    Date(DateRef),
     /// Native method bound to a receiver, such as `array.map`.
     BoundMethod {
         /// Receiver value the method operates on.
@@ -457,6 +473,13 @@ impl Value {
     /// Creates an empty set.
     pub fn set() -> Self {
         Self::Set(Rc::new(SetValue::new()))
+    }
+
+    /// Creates a date, applying the JavaScript TimeClip algorithm.
+    pub fn date(time_ms: f64) -> Self {
+        Self::Date(Rc::new(DateValue {
+            time_ms: crate::date::clip(time_ms),
+        }))
     }
 
     /// Creates a reference into the host tool tree.
@@ -521,6 +544,7 @@ impl Value {
             (Self::Promise(left), Self::Promise(right)) => Rc::ptr_eq(left, right),
             (Self::Map(left), Self::Map(right)) => Rc::ptr_eq(left, right),
             (Self::Set(left), Self::Set(right)) => Rc::ptr_eq(left, right),
+            (Self::Date(left), Self::Date(right)) => Rc::ptr_eq(left, right),
             _ => false,
         }
     }
@@ -586,6 +610,9 @@ impl Value {
             }
             Self::Promise(_) => JsonValue::Null,
             Self::Map(_) | Self::Set(_) => JsonValue::Object(JsonMap::new()),
+            Self::Date(date) => {
+                crate::date::iso_string(date.time_ms).map_or(JsonValue::Null, JsonValue::String)
+            }
             Self::Function(_) | Self::Builtin(_) | Self::BoundMethod { .. } | Self::ToolRef(_) => {
                 JsonValue::Null
             }
@@ -611,7 +638,8 @@ impl PartialEq for Value {
             | (Self::Error(_), Self::Error(_))
             | (Self::Promise(_), Self::Promise(_))
             | (Self::Map(_), Self::Map(_))
-            | (Self::Set(_), Self::Set(_)) => self.same_reference(other),
+            | (Self::Set(_), Self::Set(_))
+            | (Self::Date(_), Self::Date(_)) => self.same_reference(other),
             _ => false,
         }
     }
@@ -673,6 +701,10 @@ impl Display for Value {
             Self::Promise(_) => formatter.write_str("[Promise]"),
             Self::Map(_) => formatter.write_str("[object Map]"),
             Self::Set(_) => formatter.write_str("[object Set]"),
+            Self::Date(date) => match crate::date::iso_string(date.time_ms) {
+                Some(text) => formatter.write_str(&text),
+                None => formatter.write_str("Invalid Date"),
+            },
             Self::ToolRef(path) => {
                 if path.is_empty() {
                     formatter.write_str("[tools]")
@@ -712,7 +744,8 @@ fn check_data_at(
         | Value::String(_)
         | Value::Error(_)
         | Value::Map(_)
-        | Value::Set(_) => Ok(()),
+        | Value::Set(_)
+        | Value::Date(_) => Ok(()),
         Value::Function(_)
         | Value::Builtin(_)
         | Value::BoundMethod { .. }

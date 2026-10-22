@@ -46,8 +46,8 @@ v1 `opencode/src` の subsystem (`agent`、`session`、`tool`、`permission`、
 未実装または対応層が未分化の主な領域 (重要性順):
 
 1. `codemode` — parser基盤、対応構文検査、値境界、実行制限、同期評価器、
-   stdlib (Map/Set含む)、同期tool境界、期限監視、実行API
-   (`opencode-codemode`)。Date/RegExp/URL、非同期実行、host呼び出しを
+   stdlib (Date/Map/Set含む)、同期tool境界、期限監視、実行API
+   (`opencode-codemode`)。RegExp/URL、非同期実行、host呼び出しを
    中断するtimeoutは未実装。
 2. `protocol` / `client` / `httpapi-codegen` — 権威 HTTP 契約と生成
    client 層が未分化 (Rust は `opencode-server` の routes が唯一の面)。

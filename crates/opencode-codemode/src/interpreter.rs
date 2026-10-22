@@ -212,6 +212,15 @@ impl Scope {
             function_scope: true,
         }
     }
+
+    /// Top-level program scope: variable declarations shadow installed globals.
+    fn script(parent: Rc<RefCell<Scope>>) -> Self {
+        Self {
+            parent: Some(parent),
+            bindings: IndexMap::new(),
+            function_scope: true,
+        }
+    }
 }
 
 /// Completion produced by evaluating a statement.
@@ -259,9 +268,10 @@ impl<'a> Interpreter<'a> {
     /// Creates an interpreter with a fresh global scope and the standard
     /// globals installed.
     pub fn new() -> Self {
+        let globals = Rc::new(RefCell::new(Scope::global()));
         let mut interpreter = Self {
             functions: Vec::new(),
-            scope: Rc::new(RefCell::new(Scope::global())),
+            scope: Rc::clone(&globals),
             logs: Vec::new(),
             tool_host: None,
             tool_budget: ToolCallBudget::new(None),
@@ -271,6 +281,7 @@ impl<'a> Interpreter<'a> {
             eval_depth: 0,
         };
         interpreter.install_globals();
+        interpreter.scope = Rc::new(RefCell::new(Scope::script(globals)));
         interpreter
     }
 
@@ -397,6 +408,7 @@ impl<'a> Interpreter<'a> {
             ("ReferenceError", Value::Builtin("ReferenceError")),
             ("Map", Value::Builtin("Map")),
             ("Set", Value::Builtin("Set")),
+            ("Date", Value::Builtin("Date")),
             ("undefined", Value::Undefined),
             ("NaN", Value::Number(f64::NAN)),
             ("Infinity", Value::Number(f64::INFINITY)),
@@ -1010,6 +1022,7 @@ impl<'a> Interpreter<'a> {
                 match callee {
                     Value::Builtin("Map") => construct_map(arguments.first(), expression.span),
                     Value::Builtin("Set") => construct_set(arguments.first(), expression.span),
+                    Value::Builtin("Date") => Ok(construct_date(&arguments)),
                     Value::Builtin(name) if ErrorKind::from_name(name).is_some() => {
                         Ok(make_error(name, &arguments))
                     }
@@ -1103,7 +1116,9 @@ impl<'a> Interpreter<'a> {
                 Ok(Value::Boolean(compare(left, right, span)? >= 0.0))
             }
             BinaryOperator::Addition => {
-                if matches!(left, Value::String(_)) || matches!(right, Value::String(_)) {
+                if matches!(left, Value::String(_) | Value::Date(_))
+                    || matches!(right, Value::String(_) | Value::Date(_))
+                {
                     Ok(Value::String(format!(
                         "{}{}",
                         to_js_string(left),
@@ -1347,10 +1362,17 @@ impl<'a> Interpreter<'a> {
             "Error" | "TypeError" | "RangeError" | "SyntaxError" | "ReferenceError" => {
                 Ok(make_error(name, arguments))
             }
-            "Map" | "Set" => Err(RuntimeError::type_error(
+            "Map" | "Set" | "Date" => Err(RuntimeError::type_error(
                 format!("Constructor {name} requires 'new'."),
                 _span,
             )),
+            "Date.now" => Ok(Value::Number(crate::date::now_ms())),
+            "Date.parse" => Ok(Value::Number(crate::date::parse_iso(&to_js_string(
+                &argument(0),
+            )))),
+            "Date.UTC" => Ok(Value::Number(crate::date::from_components(
+                &arguments.iter().map(to_number).collect::<Vec<_>>(),
+            ))),
             "Number.isNaN" => Ok(Value::Boolean(to_number(&argument(0)).is_nan())),
             "Number.isFinite" => Ok(Value::Boolean(to_number(&argument(0)).is_finite())),
             "Number.isInteger" => {
@@ -2213,6 +2235,33 @@ impl<'a> Interpreter<'a> {
                 Ok(Value::String(number_to_string(number, radix)))
             }
             "Number.valueOf" => Ok(Value::Number(as_number(receiver, span)?)),
+            "Date.getTime" | "Date.valueOf" => Ok(Value::Number(as_date_time(receiver, span)?)),
+            "Date.toISOString" => crate::date::iso_string(as_date_time(receiver, span)?)
+                .map(Value::String)
+                .ok_or_else(|| {
+                    RuntimeError::new(RuntimeErrorKind::RangeError, "Invalid time value.", span)
+                }),
+            "Date.toJSON" => Ok(crate::date::iso_string(as_date_time(receiver, span)?)
+                .map_or(Value::Null, Value::String)),
+            "Date.toString" => Ok(Value::String(to_js_string(receiver))),
+            "Date.getFullYear" => Ok(date_component(receiver, span, |parts| parts.year as f64)),
+            "Date.getMonth" => Ok(date_component(receiver, span, |parts| parts.month as f64)),
+            "Date.getDate" => Ok(date_component(receiver, span, |parts| parts.day as f64)),
+            "Date.getDay" => Ok(date_component(receiver, span, |parts| parts.weekday as f64)),
+            "Date.getHours" => Ok(date_component(receiver, span, |parts| parts.hours as f64)),
+            "Date.getMinutes" => Ok(date_component(receiver, span, |parts| parts.minutes as f64)),
+            "Date.getSeconds" => Ok(date_component(receiver, span, |parts| parts.seconds as f64)),
+            "Date.getMilliseconds" => Ok(date_component(receiver, span, |parts| {
+                parts.milliseconds as f64
+            })),
+            "Date.getTimezoneOffset" => {
+                let time_ms = as_date_time(receiver, span)?;
+                Ok(Value::Number(if crate::date::parts(time_ms).is_some() {
+                    0.0
+                } else {
+                    f64::NAN
+                }))
+            }
             "Map.get" => {
                 let map = as_map_ref(receiver, span)?;
                 Ok(map.get(&argument(0)).unwrap_or(Value::Undefined))
@@ -2829,6 +2878,7 @@ impl<'a> Interpreter<'a> {
                 "message" => Value::String(error.message.clone()),
                 _ => Value::Undefined,
             }),
+            Value::Date(_) => Ok(bound_method(object, date_method(key))),
             Value::Map(map) => {
                 if key == "size" {
                     return Ok(Value::Number(map.len() as f64));
@@ -2982,6 +3032,23 @@ fn construct_set(init: Option<&Value>, span: Span) -> Result<Value, RuntimeError
     Ok(Value::Set(Rc::new(set)))
 }
 
+fn construct_date(arguments: &[Value]) -> Value {
+    let time_ms = match arguments {
+        [] => crate::date::now_ms(),
+        [value] => match value {
+            Value::Date(date) => date.time_ms,
+            Value::Number(number) => *number,
+            Value::String(text) => crate::date::parse_iso(text),
+            _ => f64::NAN,
+        },
+        values => {
+            let values = values.iter().map(to_number).collect::<Vec<_>>();
+            crate::date::from_components(&values)
+        }
+    };
+    Value::date(time_ms)
+}
+
 fn make_error(name: &str, arguments: &[Value]) -> Value {
     let kind = ErrorKind::from_name(name).unwrap_or(ErrorKind::Error);
     let message = match arguments.first() {
@@ -3005,6 +3072,7 @@ fn instance_of(left: &Value, right: &Value, span: Span) -> Result<bool, RuntimeE
         return Ok(match *name {
             "Map" => matches!(left, Value::Map(_)),
             "Set" => matches!(left, Value::Set(_)),
+            "Date" => matches!(left, Value::Date(_)),
             _ => false,
         });
     };
@@ -3032,6 +3100,9 @@ fn builtin_property(name: &str, key: &str) -> Value {
         ("Number", "NaN") => Value::Number(f64::NAN),
         ("String", "fromCharCode") => Value::Builtin("String.fromCharCode"),
         ("String", "fromCodePoint") => Value::Builtin("String.fromCodePoint"),
+        ("Date", "now") => Value::Builtin("Date.now"),
+        ("Date", "parse") => Value::Builtin("Date.parse"),
+        ("Date", "UTC") => Value::Builtin("Date.UTC"),
         _ => Value::Undefined,
     }
 }
@@ -3149,6 +3220,26 @@ fn set_method(name: &str) -> Option<&'static str> {
     })
 }
 
+fn date_method(name: &str) -> Option<&'static str> {
+    Some(match name {
+        "getTime" => "Date.getTime",
+        "valueOf" => "Date.valueOf",
+        "toISOString" => "Date.toISOString",
+        "toJSON" => "Date.toJSON",
+        "toString" => "Date.toString",
+        "getFullYear" | "getUTCFullYear" => "Date.getFullYear",
+        "getMonth" | "getUTCMonth" => "Date.getMonth",
+        "getDate" | "getUTCDate" => "Date.getDate",
+        "getDay" | "getUTCDay" => "Date.getDay",
+        "getHours" | "getUTCHours" => "Date.getHours",
+        "getMinutes" | "getUTCMinutes" => "Date.getMinutes",
+        "getSeconds" | "getUTCSeconds" => "Date.getSeconds",
+        "getMilliseconds" | "getUTCMilliseconds" => "Date.getMilliseconds",
+        "getTimezoneOffset" => "Date.getTimezoneOffset",
+        _ => return None,
+    })
+}
+
 fn as_array_ref(value: &Value, span: Span) -> Result<crate::value::ArrayRef, RuntimeError> {
     match value {
         Value::Array(array) => Ok(Rc::clone(array)),
@@ -3177,6 +3268,28 @@ fn as_set_ref(value: &Value, span: Span) -> Result<crate::value::SetRef, Runtime
             span,
         )),
     }
+}
+
+fn as_date_time(value: &Value, span: Span) -> Result<f64, RuntimeError> {
+    match value {
+        Value::Date(date) => Ok(date.time_ms),
+        _ => Err(RuntimeError::type_error(
+            "Date method requires a Date receiver.",
+            span,
+        )),
+    }
+}
+
+fn date_component(
+    value: &Value,
+    span: Span,
+    read: impl Fn(crate::date::DateParts) -> f64,
+) -> Value {
+    let time_ms = match as_date_time(value, span) {
+        Ok(time_ms) => time_ms,
+        Err(_) => return Value::Number(f64::NAN),
+    };
+    crate::date::parts(time_ms).map_or(Value::Number(f64::NAN), |parts| Value::Number(read(parts)))
 }
 
 fn as_string(value: &Value, span: Span) -> Result<String, RuntimeError> {
@@ -3434,6 +3547,11 @@ fn stringify_json_inner(value: &Value, ancestors: &mut Vec<usize>) -> Option<Str
             Some(format!("{{\"name\":{name},\"message\":{message}}}"))
         }
         Value::Promise(_) | Value::Map(_) | Value::Set(_) => Some("{}".to_owned()),
+        Value::Date(date) => Some(
+            crate::date::iso_string(date.time_ms)
+                .and_then(|text| serde_json::to_string(&text).ok())
+                .unwrap_or_else(|| "null".to_owned()),
+        ),
         Value::Null => Some("null".to_owned()),
         Value::Boolean(value) => Some(value.to_string()),
         Value::Number(value) => Some(if value.is_finite() {
@@ -3597,6 +3715,7 @@ fn has_property(value: &Value, key: &str) -> bool {
         Value::Error(_) => key == "name" || key == "message",
         Value::Map(_) => key == "size" || map_method(key).is_some(),
         Value::Set(_) => key == "size" || set_method(key).is_some(),
+        Value::Date(_) => date_method(key).is_some(),
         _ => false,
     }
 }
@@ -3616,7 +3735,8 @@ fn is_truthy(value: &Value) -> bool {
         | Value::Error(_)
         | Value::Promise(_)
         | Value::Map(_)
-        | Value::Set(_) => true,
+        | Value::Set(_)
+        | Value::Date(_) => true,
     }
 }
 
@@ -3700,6 +3820,7 @@ fn to_number(value: &Value) -> f64 {
         | Value::Promise(_)
         | Value::Map(_)
         | Value::Set(_) => f64::NAN,
+        Value::Date(date) => date.time_ms,
         Value::ToolRef(_) => f64::NAN,
     }
 }
@@ -3821,6 +3942,9 @@ fn to_js_string(value: &Value) -> String {
         Value::Promise(_) => "[object Promise]".to_owned(),
         Value::Map(_) => "[object Map]".to_owned(),
         Value::Set(_) => "[object Set]".to_owned(),
+        Value::Date(date) => {
+            crate::date::iso_string(date.time_ms).unwrap_or_else(|| "Invalid Date".to_owned())
+        }
         Value::ToolRef(_) => value.to_string(),
     }
 }
@@ -3862,7 +3986,8 @@ fn type_of(value: &Value) -> &'static str {
         | Value::Error(_)
         | Value::Promise(_)
         | Value::Map(_)
-        | Value::Set(_) => "object",
+        | Value::Set(_)
+        | Value::Date(_) => "object",
         Value::ToolRef(path) if path.is_empty() => "object",
         Value::Function(_) | Value::Builtin(_) | Value::BoundMethod { .. } | Value::ToolRef(_) => {
             "function"
@@ -4694,6 +4819,145 @@ mod tests {
 
         let error = run("return Set();").expect_err("should require new");
         assert!(error.message().contains("requires 'new'"));
+    }
+
+    #[test]
+    fn evaluates_dates_and_iso_rendering() {
+        assert_eq!(
+            run_value("return new Date(0).toISOString();"),
+            string("1970-01-01T00:00:00.000Z")
+        );
+        assert_eq!(
+            run_value(r#"return new Date("2024-01-02T03:04:05.000Z").getTime();"#),
+            number(1_704_164_645_000.0)
+        );
+        assert_eq!(
+            run_value(r#"return Date.parse("2024-01-02T03:04:05.000Z");"#),
+            number(1_704_164_645_000.0)
+        );
+        assert_eq!(
+            run_value(r#"return Date.parse("2024-01-02T03:04:05+09:00");"#),
+            number(1_704_132_245_000.0)
+        );
+        assert_eq!(
+            run_value("const a = new Date(1000); const b = new Date(3000); return b - a;"),
+            number(2_000.0)
+        );
+        assert_eq!(
+            run_value("const a = new Date(1000); const b = new Date(3000); return a < b;"),
+            Value::Boolean(true)
+        );
+        assert_eq!(run_value("return +new Date(42);"), number(42.0));
+    }
+
+    #[test]
+    fn reads_date_components() {
+        let value = run_value(
+            r#"
+            const d = new Date("2024-03-05T06:07:08.009Z");
+            return [
+                d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate(), d.getUTCDay(),
+                d.getUTCHours(), d.getUTCMinutes(), d.getUTCSeconds(),
+                d.getUTCMilliseconds(), d.getTimezoneOffset(),
+            ];
+        "#,
+        );
+        let array = value.as_array().expect("array result");
+        let expected = [2024.0, 2.0, 5.0, 2.0, 6.0, 7.0, 8.0, 9.0, 0.0];
+        for (item, expected) in array.iter().zip(expected) {
+            assert_eq!(*item, number(expected));
+        }
+
+        assert_eq!(
+            run_value(
+                r#"const d = new Date(2024, 0, 2); return [d.getFullYear(), d.getMonth(), d.getDate()].join(",");"#
+            ),
+            string("2024,0,2")
+        );
+        assert_eq!(
+            run_value(r#"return Date.UTC(2024, 0, 2);"#),
+            number(1_704_153_600_000.0)
+        );
+        assert_eq!(
+            run_value(r#"return Number.isNaN(new Date(2024, NaN).getTime());"#),
+            Value::Boolean(true)
+        );
+    }
+
+    #[test]
+    fn handles_invalid_dates() {
+        assert_eq!(
+            run_value(r#"return Number.isNaN(new Date("garbage").getTime());"#),
+            Value::Boolean(true)
+        );
+        assert_eq!(
+            run_value(r#"return new Date("garbage").toJSON();"#),
+            Value::Null
+        );
+        let error = run(r#"return new Date("garbage").toISOString();"#)
+            .expect_err("invalid ISO formatting should throw");
+        assert_eq!(error.kind(), super::RuntimeErrorKind::RangeError);
+        assert!(error.message().contains("Invalid time value."));
+    }
+
+    #[test]
+    fn serializes_and_coerces_dates() {
+        assert_eq!(
+            run_value("return `at ${new Date(0)}`;"),
+            string("at 1970-01-01T00:00:00.000Z")
+        );
+        assert_eq!(
+            run_value(r#"return JSON.stringify({ d: new Date(0) });"#),
+            string(r#"{"d":"1970-01-01T00:00:00.000Z"}"#)
+        );
+        assert_eq!(run_value("return Number(new Date(5));"), number(5.0));
+        assert_eq!(
+            run_value("return String(new Date(0));"),
+            string("1970-01-01T00:00:00.000Z")
+        );
+        assert_eq!(
+            run_value("return Boolean(new Date(0));"),
+            Value::Boolean(true)
+        );
+        assert_eq!(
+            run_value("let d = new Date(1000); d += 1; return d;"),
+            string("1970-01-01T00:00:01.000Z1")
+        );
+        assert_eq!(
+            run_value("return new Date(0) instanceof Date;"),
+            Value::Boolean(true)
+        );
+    }
+
+    #[test]
+    fn sorts_dates_and_reports_object_type() {
+        let value = run_value(
+            r#"
+            const dates = [new Date(3000), new Date(1000), new Date(2000)];
+            return dates.sort((a, b) => a - b).map((d) => d.getTime());
+        "#,
+        );
+        let array = value.as_array().expect("array result");
+        assert_eq!(
+            array.as_slice(),
+            &[number(1000.0), number(2000.0), number(3000.0)]
+        );
+        assert_eq!(run_value("return typeof new Date(0);"), string("object"));
+        assert_eq!(
+            run_value("return new Date(0).nope === undefined;"),
+            Value::Boolean(true)
+        );
+        assert_eq!(run_value("return typeof Date.now();"), string("number"));
+        assert_eq!(
+            run_value("const t = Date.now(); return t > 0 && t < 1e15;"),
+            Value::Boolean(true)
+        );
+    }
+
+    #[test]
+    fn program_variables_shadow_installed_globals() {
+        assert_eq!(run_value("const Date = 1; return Date;"), number(1.0));
+        assert_eq!(run_value("let Map = 2; return Map;"), number(2.0));
     }
 
     #[test]

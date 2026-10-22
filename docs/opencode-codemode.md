@@ -92,21 +92,26 @@ upstreamは未対応構文を評価到達時に拒否する。`inspect_support` 
 - 関数呼び出しの深さと文・式の評価深さは、それぞれ64で `RangeError` にする。
   Rustの評価frameがJavaScriptより大きいための固定上限である。
 - `new` は `Error`、`TypeError`、`RangeError`、`SyntaxError`、
-  `ReferenceError` のconstructorのみを許可する。`Error(...)` は `new` なしでも
-  同じ値を作る。
-- `instanceof` はこれらのError brandと `Map` / `Set` を判定する。それ以外の
-  object namespaceは `false`、非callableな右辺は `TypeError` にする。
+  `ReferenceError` のconstructorと `Map` / `Set` / `Date` を許可する。
+  `Error(...)` は `new` なしでも同じ値を作り、`Map` / `Set` / `Date` は
+  `new` なしでは `TypeError` にする。
+- `instanceof` はこれらのError brandと `Map` / `Set` / `Date` を判定する。
+  それ以外の object namespaceは `false`、非callableな右辺は `TypeError` に
+  する。
 - Error値は `name` と `message` を持ち、`{ name, message }` として直列化する。
   `Object.keys` は `["name", "message"]` を返し、spreadするとbrandを失う。
 - 捕捉された実行時失敗は対応するbrandのError値になる。
-- 未対応: regexp/bigint literal、`void`/`delete`、Error以外の `new`。
+- 未対応: regexp/bigint literal、`void`/`delete`、Error/Map/Set/Date以外の
+  `new`。
 - 緩い等価 (`==`) は基本型のcoercionのみで、objectのToPrimitiveは未実装。
 
 ## Stdlib baseline
 
 `install_globals` は `console`、`Math`、`JSON`、`Object`、`Array`、`String`、
-`Number`、`Boolean`、`Promise`、`Map`、`Set`、`parseInt`、`parseFloat`、
-`isNaN`、`isFinite`、`undefined`、`NaN`、`Infinity` を登録する。
+`Number`、`Boolean`、`Promise`、`Map`、`Set`、`Date`、`parseInt`、
+`parseFloat`、`isNaN`、`isFinite`、`undefined`、`NaN`、`Infinity` を登録する。
+builtinsはプログラムの親scopeに置くため、`const Date = 1` のような同名宣言で
+shadowingできる。
 
 - `console.log/info/warn/error` は引数を空白で連結し、interpreterの
   `logs()` に保存する。出力先は呼び出し側が決める。
@@ -136,6 +141,19 @@ upstreamは未対応構文を評価到達時に拒否する。`inspect_support` 
   keys、values、entries、size。membershipはSameValueZero。
 - Map/Setはspreadとfor-ofで反復でき、Mapは `[key, value]`、Setは値を返す。
   実データ境界では `{}` に直列化する。
+- `Date`: `new Date()`、`new Date(ms)`、`new Date(isoString)`、
+  `new Date(year, month, ...)`、`Date.now`、`Date.parse`、`Date.UTC`。
+  `getTime` / `valueOf`、ISO getter、local getter、`toISOString`、`toJSON`、
+  `toString`、`getTimezoneOffset` を持つ。
+- DateはUTC固定で評価する。component constructorとlocal getterもUTCとして
+  扱い、`getTimezoneOffset()` は有効日付で `0` を返す。これはhost timezone
+  非依存を優先した意図的な差分である。
+- `Date.parse` はISO 8601のsubset (`YYYY`、`YYYY-MM`、`YYYY-MM-DD`、
+  `T`またはspace区切り、`Z` / `±HH:MM` / `±HHMM`) を受理し、zone省略時は
+  UTCとする。それ以外は `NaN`。
+- 文字列化と境界直列化はISO形式、無効日付は `toString()` が
+  `Invalid Date`、境界では `null` になる。`toISOString()` は無効日付で
+  `RangeError` を投げる。
 
 文字列のindexはUTF-16 code unitではなくUnicode scalar値で数える。
 `toUpperCase` / `toLowerCase` はRustのUnicode変換を使う。callbackを取る
@@ -181,7 +199,7 @@ upstreamは未対応構文を評価到達時に拒否する。`inspect_support` 
 
 ## 未実装
 
-- Date、RegExp、URL、`String.normalize`
+- RegExp、URL、`String.normalize`
 - TypeScriptの型消去・transpile parity
 - 非同期tool実行と未await rejectionの診断
 - 同期host呼び出しを中断するtimeout

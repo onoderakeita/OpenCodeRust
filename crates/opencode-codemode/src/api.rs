@@ -353,6 +353,29 @@ mod tests {
     }
 
     #[test]
+    fn serializes_dates_to_iso_strings() {
+        let epoch = success(execute_code(
+            "return new Date(0);",
+            None,
+            &ExecutionLimits::default(),
+        ));
+        assert_eq!(
+            epoch.value,
+            JsonValue::String("1970-01-01T00:00:00.000Z".to_owned())
+        );
+
+        let nested = success(execute_code(
+            "return { when: new Date(1000) };",
+            None,
+            &ExecutionLimits::default(),
+        ));
+        assert_eq!(
+            nested.value["when"],
+            JsonValue::String("1970-01-01T00:00:01.000Z".to_owned())
+        );
+    }
+
+    #[test]
     fn reports_parse_failures() {
         let failure = failure(execute_code("const = ;", None, &ExecutionLimits::default()));
         assert_eq!(failure.error.kind, DiagnosticKind::ParseError);

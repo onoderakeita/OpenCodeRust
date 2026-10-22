@@ -3,6 +3,7 @@
 //! host tool references.
 
 pub mod api;
+pub mod date;
 pub mod interpreter;
 pub mod limits;
 pub mod support;
