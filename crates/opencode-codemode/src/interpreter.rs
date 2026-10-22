@@ -1135,16 +1135,16 @@ impl<'a> Interpreter<'a> {
                 Ok(Value::Boolean(compare(left, right, span)? >= 0.0))
             }
             BinaryOperator::Addition => {
-                if matches!(left, Value::String(_) | Value::Date(_))
-                    || matches!(right, Value::String(_) | Value::Date(_))
-                {
+                let left = to_primitive(left);
+                let right = to_primitive(right);
+                if matches!(left, Value::String(_)) || matches!(right, Value::String(_)) {
                     Ok(Value::String(format!(
                         "{}{}",
-                        to_js_string(left),
-                        to_js_string(right)
+                        to_js_string(&left),
+                        to_js_string(&right)
                     )))
                 } else {
-                    Ok(Value::Number(to_number(left) + to_number(right)))
+                    Ok(Value::Number(to_number(&left) + to_number(&right)))
                 }
             }
             BinaryOperator::Subtraction => Ok(Value::Number(to_number(left) - to_number(right))),
@@ -1953,35 +1953,60 @@ impl<'a> Interpreter<'a> {
             }
             "Array.reduce" | "Array.reduceRight" => {
                 let array = as_array_ref(receiver, span)?;
-                let mut items = array.borrow().clone();
-                if method == "Array.reduceRight" {
-                    items.reverse();
-                }
+                let items = array.borrow().clone();
                 let reducer = argument(0);
-                let (mut accumulator, start) = if arguments.len() > 1 {
-                    (argument(1), 0)
-                } else {
-                    let Some(first) = items.first().cloned() else {
-                        return Err(RuntimeError::type_error(
-                            "Reduce of empty array with no initial value.",
-                            span,
-                        ));
+                let right = method == "Array.reduceRight";
+                if right {
+                    let (mut accumulator, start) = if arguments.len() > 1 {
+                        (argument(1), items.len())
+                    } else {
+                        let Some(last) = items.last().cloned() else {
+                            return Err(RuntimeError::type_error(
+                                "Reduce of empty array with no initial value.",
+                                span,
+                            ));
+                        };
+                        (last, items.len().saturating_sub(1))
                     };
-                    (first, 1)
-                };
-                for (index, item) in items.into_iter().enumerate().skip(start) {
-                    accumulator = self.invoke_value(
-                        &reducer,
-                        vec![
-                            accumulator,
-                            item,
-                            Value::Number(index as f64),
-                            receiver.clone(),
-                        ],
-                        span,
-                    )?;
+                    for index in (0..start).rev() {
+                        accumulator = self.invoke_value(
+                            &reducer,
+                            vec![
+                                accumulator,
+                                items[index].clone(),
+                                Value::Number(index as f64),
+                                receiver.clone(),
+                            ],
+                            span,
+                        )?;
+                    }
+                    Ok(accumulator)
+                } else {
+                    let (mut accumulator, start) = if arguments.len() > 1 {
+                        (argument(1), 0)
+                    } else {
+                        let Some(first) = items.first().cloned() else {
+                            return Err(RuntimeError::type_error(
+                                "Reduce of empty array with no initial value.",
+                                span,
+                            ));
+                        };
+                        (first, 1)
+                    };
+                    for (index, item) in items.into_iter().enumerate().skip(start) {
+                        accumulator = self.invoke_value(
+                            &reducer,
+                            vec![
+                                accumulator,
+                                item,
+                                Value::Number(index as f64),
+                                receiver.clone(),
+                            ],
+                            span,
+                        )?;
+                    }
+                    Ok(accumulator)
                 }
-                Ok(accumulator)
             }
             "Array.find"
             | "Array.findIndex"
@@ -2538,6 +2563,7 @@ impl<'a> Interpreter<'a> {
                 if number.abs() >= 1e21 {
                     return Ok(Value::String(format_number(number)));
                 }
+                let number = if number == 0.0 { 0.0 } else { number };
                 Ok(Value::String(format!("{number:.digits$}")))
             }
             "Number.toPrecision" => {
@@ -4255,6 +4281,12 @@ fn number_to_exponential(value: f64, digits: Option<usize>) -> String {
     if value.is_infinite() {
         return if value < 0.0 { "-Infinity" } else { "Infinity" }.to_owned();
     }
+    if value == 0.0 {
+        return match digits {
+            None | Some(0) => "0e+0".to_owned(),
+            Some(digits) => format!("0.{}e+0", "0".repeat(digits)),
+        };
+    }
     let text = match digits {
         Some(digits) => format!("{value:.digits$e}"),
         None => format!("{value:e}"),
@@ -4440,17 +4472,35 @@ fn utf16_cmp(left: &str, right: &str) -> std::cmp::Ordering {
     left.encode_utf16().cmp(right.encode_utf16())
 }
 
+/// Applies the JavaScript `ToPrimitive` default hint used by `+` and the
+/// relational operators: objects become their string form, except that
+/// `Date` already stringifies through `to_js_string`.
+fn to_primitive(value: &Value) -> Value {
+    match value {
+        Value::Undefined
+        | Value::Null
+        | Value::Boolean(_)
+        | Value::Number(_)
+        | Value::String(_) => value.clone(),
+        _ => Value::String(to_js_string(value)),
+    }
+}
+
 fn compare(left: &Value, right: &Value, _span: Span) -> Result<f64, RuntimeError> {
-    match (left, right) {
+    let left = to_primitive(left);
+    let right = to_primitive(right);
+    match (&left, &right) {
         (Value::String(left), Value::String(right)) => Ok(match utf16_cmp(left, right) {
             std::cmp::Ordering::Less => -1.0,
             std::cmp::Ordering::Equal => 0.0,
             std::cmp::Ordering::Greater => 1.0,
         }),
         _ => {
-            let left = to_number(left);
-            let right = to_number(right);
-            Ok(if left < right {
+            let left = to_number(&left);
+            let right = to_number(&right);
+            Ok(if left.is_nan() || right.is_nan() {
+                f64::NAN
+            } else if left < right {
                 -1.0
             } else if left > right {
                 1.0
@@ -6075,6 +6125,13 @@ mod tests {
         assert_eq!(run_value("return (1).toExponential(2);"), string("1.00e+0"));
         assert_eq!(run_value("return (1.005).toFixed(2);"), string("1.00"));
         assert_eq!(run_value("return (1e21).toFixed(2);"), string("1e+21"));
+        assert_eq!(run_value("return (-0).toFixed(2);"), string("0.00"));
+        assert_eq!(run_value("return (-0).toExponential();"), string("0e+0"));
+        assert_eq!(
+            run_value("return (-0).toExponential(2);"),
+            string("0.00e+0")
+        );
+        assert_eq!(run_value("return (-0.0001).toFixed(2);"), string("-0.00"));
 
         assert_eq!(
             run_value(
@@ -6352,6 +6409,24 @@ mod tests {
             Value::Boolean(true)
         );
         assert_eq!(run_value("return typeof Error;"), string("function"));
+        assert_eq!(
+            run_value(
+                r#"try { JSON.parse("{oops") } catch (e) { return [e.name, e instanceof SyntaxError, e instanceof Error, e instanceof TypeError, e.message.includes("JSON")].join(","); }"#
+            ),
+            string("SyntaxError,true,true,false,true")
+        );
+        assert_eq!(
+            run_value(
+                r#"try { undeclared() } catch (e) { return [e.name, e instanceof ReferenceError].join(","); }"#
+            ),
+            string("ReferenceError,true")
+        );
+        assert_eq!(
+            run_value(
+                r#"try { const c = 1; c = 2; } catch (e) { return [e.name, e instanceof TypeError].join(","); }"#
+            ),
+            string("TypeError,true")
+        );
         assert_eq!(run_value("let x = 7; x **= 2; return x;"), number(49.0));
         assert_eq!(run_value("let x = 7; x &= 3; return x;"), number(3.0));
         assert_eq!(
@@ -6540,6 +6615,54 @@ mod tests {
         );
         assert_eq!(run_value(r#"return "\u{FEFF}x".trimStart();"#), string("x"));
         assert_eq!(run_value(r#"return "x\u{FEFF}".trimEnd();"#), string("x"));
+    }
+
+    #[test]
+    fn matches_upstream_relational_and_addition_coercion() {
+        assert_eq!(run_value("return [10] < [2];"), Value::Boolean(true));
+        assert_eq!(run_value("return [] < [1];"), Value::Boolean(true));
+        assert_eq!(run_value("return [1] < 2;"), Value::Boolean(true));
+        assert_eq!(run_value("return '10' < 2;"), Value::Boolean(false));
+        assert_eq!(run_value("return 0 / 0 <= 1;"), Value::Boolean(false));
+        assert_eq!(run_value("return 0 / 0 >= 1;"), Value::Boolean(false));
+        assert_eq!(run_value("return 0 / 0 < 1;"), Value::Boolean(false));
+        assert_eq!(run_value("return 0 / 0 > 1;"), Value::Boolean(false));
+
+        assert_eq!(run_value("return [1, 2] + 1;"), string("1,21"));
+        assert_eq!(run_value("return 1 + [2, 3];"), string("12,3"));
+        assert_eq!(run_value("return ({}) + 1;"), string("[object Object]1"));
+        assert_eq!(run_value("return [] + 1;"), string("1"));
+        assert_eq!(run_value("return [1] + 1;"), string("11"));
+        assert_eq!(run_value("return [1] + [2];"), string("12"));
+        assert_eq!(run_value("return new Map() + 1;"), string("[object Map]1"));
+        assert_eq!(
+            run_value("return new Date(0) + 1;"),
+            string("1970-01-01T00:00:00.000Z1")
+        );
+        assert_eq!(run_value("return null + 1;"), number(1.0));
+        assert_eq!(run_value("return true + 1;"), number(2.0));
+        assert_eq!(
+            run_value("return Number.isNaN(undefined + 1);"),
+            Value::Boolean(true)
+        );
+        assert_eq!(run_value("return 1 + 2;"), number(3.0));
+
+        assert_eq!(
+            run_value("return [1, 2, 3].reduceRight((acc, value, index) => acc + index, 0);"),
+            number(3.0)
+        );
+        assert_eq!(
+            run_value("return [1, 2, 3].reduceRight((acc, value) => acc + value);"),
+            number(6.0)
+        );
+        assert_eq!(
+            run_value("return ['a', 'b', 'c'].reduceRight((acc, value) => acc + value);"),
+            string("cba")
+        );
+        assert_eq!(
+            run_value("return [1, 2, 3].reduce((acc, value, index) => acc + index, 0);"),
+            number(3.0)
+        );
     }
 
     #[test]
