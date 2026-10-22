@@ -1455,7 +1455,15 @@ impl<'a> Interpreter<'a> {
             "Math.log10" => Ok(Value::Number(to_number(&argument(0)).log10())),
             "Math.ceil" => Ok(Value::Number(to_number(&argument(0)).ceil())),
             "Math.floor" => Ok(Value::Number(to_number(&argument(0)).floor())),
-            "Math.round" => Ok(Value::Number((to_number(&argument(0)) + 0.5).floor())),
+            "Math.round" => {
+                let value = to_number(&argument(0));
+                let rounded = (value + 0.5).floor();
+                Ok(Value::Number(if rounded == 0.0 && value < 0.0 {
+                    -0.0
+                } else {
+                    rounded
+                }))
+            }
             "Math.trunc" => Ok(Value::Number(to_number(&argument(0)).trunc())),
             "Math.sqrt" => Ok(Value::Number(to_number(&argument(0)).sqrt())),
             "Math.sign" => Ok(Value::Number(math_sign(to_number(&argument(0))))),
@@ -1816,6 +1824,20 @@ impl<'a> Interpreter<'a> {
         comparator: Option<&Value>,
         span: Span,
     ) -> Result<(), RuntimeError> {
+        let undefined_count = items.iter().filter(|value| value.is_undefined()).count();
+        if undefined_count > 0 {
+            let mut defined = items
+                .iter()
+                .filter(|value| !value.is_undefined())
+                .cloned()
+                .collect::<Vec<_>>();
+            self.sort_items(&mut defined, comparator, span)?;
+            let tail = std::iter::repeat_with(|| Value::Undefined).take(undefined_count);
+            for (slot, value) in items.iter_mut().zip(defined.into_iter().chain(tail)) {
+                *slot = value;
+            }
+            return Ok(());
+        }
         match comparator {
             Some(comparator) if !comparator.is_undefined() => {
                 let mut index = 1;
@@ -1828,7 +1850,7 @@ impl<'a> Interpreter<'a> {
                             span,
                         )?;
                         let order = to_number(&order);
-                        if order > 0.0 || order.is_nan() {
+                        if order > 0.0 {
                             items.swap(cursor - 1, cursor);
                             cursor -= 1;
                         } else {
@@ -2563,8 +2585,12 @@ impl<'a> Interpreter<'a> {
                 if number.abs() >= 1e21 {
                     return Ok(Value::String(format_number(number)));
                 }
-                let number = if number == 0.0 { 0.0 } else { number };
-                Ok(Value::String(format!("{number:.digits$}")))
+                let text = round_decimal(number.abs(), digits as i32);
+                Ok(Value::String(if number < 0.0 {
+                    format!("-{text}")
+                } else {
+                    text
+                }))
             }
             "Number.toPrecision" => {
                 let number = as_number(receiver, span)?;
@@ -4213,6 +4239,140 @@ fn optional_digits(
 
 /// Formats a number with `precision` significant digits, matching the fixed
 /// and exponential selection rules of `Number.prototype.toPrecision`.
+/// Decimal exponent of a positive, finite, non-zero value.
+fn decimal_exponent(value: f64) -> i32 {
+    format!("{value:e}")
+        .split_once('e')
+        .and_then(|(_, exponent)| exponent.parse().ok())
+        .unwrap_or(0)
+}
+
+/// Decimal exponent of a fixed-notation string such as `"0.0012"` or `"1200"`.
+fn fixed_exponent(text: &str) -> i32 {
+    let (integer, fraction) = text.split_once('.').unwrap_or((text, ""));
+    if let Some(index) = integer.bytes().position(|byte| byte != b'0') {
+        return (integer.len() - 1 - index) as i32;
+    }
+    match fraction.bytes().position(|byte| byte != b'0') {
+        Some(index) => -((index as i32) + 1),
+        None => 0,
+    }
+}
+
+/// Extracts `count` significant digits, padding with zeros when a rounded value
+/// ends before the requested precision.
+fn significant_digits(text: &str, count: usize) -> String {
+    let mut digits = text
+        .bytes()
+        .filter(|byte| byte.is_ascii_digit())
+        .skip_while(|byte| *byte == b'0')
+        .map(|byte| byte as char)
+        .collect::<String>();
+    if digits.is_empty() {
+        digits.push('0');
+    }
+    while digits.len() < count {
+        digits.push('0');
+    }
+    digits.truncate(count);
+    digits
+}
+
+/// Rounds a positive, finite value to `places` fractional digits (a negative
+/// `places` rounds integer digits) with ECMAScript's round-half-away rule.
+/// Rust's formatter rounds half to even, so the decision digit is read from a
+/// guarded exact expansion and the carry is applied to the decimal string.
+fn round_decimal(value: f64, places: i32) -> String {
+    if value == 0.0 {
+        return if places > 0 {
+            format!("0.{}", "0".repeat(places as usize))
+        } else {
+            "0".to_owned()
+        };
+    }
+    const GUARD: usize = 40;
+    let precision = places.max(0) as usize + GUARD;
+    let probe = format!("{value:.precision$}");
+    let (integer, fraction) = probe.split_once('.').unwrap_or((probe.as_str(), ""));
+    let mut digits = integer.bytes().chain(fraction.bytes()).collect::<Vec<u8>>();
+    let mut point = integer.len() as i64;
+    let decision = point + i64::from(places);
+    let mut kept = decision.max(0) as usize;
+    let round_up =
+        decision >= 0 && (decision as usize) < digits.len() && digits[decision as usize] >= b'5';
+    if round_up {
+        if kept == 0 {
+            digits.clear();
+            digits.push(b'1');
+            point = 1 - i64::from(places);
+            kept = 1;
+        } else {
+            let mut cursor = kept;
+            loop {
+                if cursor == 0 {
+                    digits.insert(0, b'1');
+                    point += 1;
+                    kept += 1;
+                    break;
+                }
+                cursor -= 1;
+                if digits[cursor] == b'9' {
+                    digits[cursor] = b'0';
+                } else {
+                    digits[cursor] += 1;
+                    break;
+                }
+            }
+        }
+    }
+    digits.truncate(kept);
+    if digits.is_empty() {
+        return if places > 0 {
+            format!("0.{}", "0".repeat(places as usize))
+        } else {
+            "0".to_owned()
+        };
+    }
+    if point <= 0 {
+        let mut output = String::from("0.");
+        output.push_str(&"0".repeat((-point) as usize));
+        output.push_str(&String::from_utf8_lossy(&digits));
+        output
+    } else if point as usize >= digits.len() {
+        let mut output = String::from_utf8_lossy(&digits).into_owned();
+        output.push_str(&"0".repeat(point as usize - digits.len()));
+        output
+    } else {
+        let (integer, fraction) = digits.split_at(point as usize);
+        format!(
+            "{}.{}",
+            String::from_utf8_lossy(integer),
+            String::from_utf8_lossy(fraction)
+        )
+    }
+}
+
+/// Formats a positive, finite value in exponential notation with `digits`
+/// fractional mantissa digits.
+fn exponential_from_fixed(value: f64, digits: usize) -> String {
+    let places = digits as i32 - decimal_exponent(value);
+    let rounded = round_decimal(value, places);
+    let exponent = fixed_exponent(&rounded);
+    let significant = significant_digits(&rounded, digits + 1);
+    let mut output = String::new();
+    output.push(significant.as_bytes()[0] as char);
+    if digits > 0 {
+        output.push('.');
+        output.push_str(&significant[1..]);
+    }
+    output.push('e');
+    if exponent >= 0 {
+        output.push('+');
+    }
+    output.push_str(&exponent.to_string());
+    output
+}
+
 fn number_to_precision(value: f64, precision: usize) -> String {
     if value.is_nan() {
         return "NaN".to_owned();
@@ -4220,6 +4380,8 @@ fn number_to_precision(value: f64, precision: usize) -> String {
     if value.is_infinite() {
         return if value < 0.0 { "-Infinity" } else { "Infinity" }.to_owned();
     }
+    let negative = value < 0.0;
+    let value = value.abs();
     if value == 0.0 {
         return if precision == 1 {
             "0".to_owned()
@@ -4228,23 +4390,17 @@ fn number_to_precision(value: f64, precision: usize) -> String {
         };
     }
 
-    let scientific = format!("{:.*e}", precision - 1, value);
-    let (mantissa, exponent) = scientific
-        .split_once('e')
-        .expect("scientific formatting always contains an exponent");
-    let exponent: i32 = exponent.parse().unwrap_or(0);
-    let negative = mantissa.starts_with('-');
-    let digits = mantissa
-        .chars()
-        .filter(|character| character.is_ascii_digit())
-        .collect::<String>();
+    let places = precision as i32 - 1 - decimal_exponent(value);
+    let rounded = round_decimal(value, places);
+    let exponent = fixed_exponent(&rounded);
+    let digits = significant_digits(&rounded, precision);
 
     let mut output = String::new();
     if negative {
         output.push('-');
     }
     if exponent < -6 || exponent >= precision as i32 {
-        output.push_str(&digits[..1]);
+        output.push(digits.as_bytes()[0] as char);
         if precision > 1 {
             output.push('.');
             output.push_str(&digits[1..]);
@@ -4256,11 +4412,8 @@ fn number_to_precision(value: f64, precision: usize) -> String {
         output.push_str(&exponent.to_string());
     } else if exponent >= 0 {
         let point = exponent as usize + 1;
-        if point >= precision {
-            output.push_str(&digits);
-            output.push_str(&"0".repeat(point - precision));
-        } else {
-            output.push_str(&digits[..point]);
+        output.push_str(&digits[..point]);
+        if point < precision {
             output.push('.');
             output.push_str(&digits[point..]);
         }
@@ -4287,10 +4440,15 @@ fn number_to_exponential(value: f64, digits: Option<usize>) -> String {
             Some(digits) => format!("0.{}e+0", "0".repeat(digits)),
         };
     }
-    let text = match digits {
-        Some(digits) => format!("{value:.digits$e}"),
-        None => format!("{value:e}"),
-    };
+    if let Some(digits) = digits {
+        let text = exponential_from_fixed(value.abs(), digits);
+        return if value < 0.0 {
+            format!("-{text}")
+        } else {
+            text
+        };
+    }
+    let text = format!("{value:e}");
     match text.split_once('e') {
         Some((mantissa, exponent)) => {
             let exponent: i32 = exponent.parse().unwrap_or(0);
@@ -6132,6 +6290,38 @@ mod tests {
             string("0.00e+0")
         );
         assert_eq!(run_value("return (-0.0001).toFixed(2);"), string("-0.00"));
+        assert_eq!(run_value("return (0.5).toFixed(0);"), string("1"));
+        assert_eq!(run_value("return (2.5).toFixed(0);"), string("3"));
+        assert_eq!(run_value("return (-2.5).toFixed(0);"), string("-3"));
+        assert_eq!(run_value("return (0.25).toFixed(1);"), string("0.3"));
+        assert_eq!(run_value("return (0.25).toPrecision(1);"), string("0.3"));
+        assert_eq!(run_value("return (2.5).toPrecision(1);"), string("3"));
+        assert_eq!(run_value("return (1.005).toPrecision(2);"), string("1.0"));
+        assert_eq!(
+            run_value("return (0.000001).toPrecision(2);"),
+            string("0.0000010")
+        );
+        assert_eq!(run_value("return (1e-7).toPrecision(2);"), string("1.0e-7"));
+        assert_eq!(
+            run_value("return (2.25).toExponential(1);"),
+            string("2.3e+0")
+        );
+        assert_eq!(
+            run_value("return (9.99).toExponential(1);"),
+            string("1.0e+1")
+        );
+        assert_eq!(
+            run_value("return (999.5).toExponential(0);"),
+            string("1e+3")
+        );
+        assert_eq!(
+            run_value("return (0.25).toExponential(1);"),
+            string("2.5e-1")
+        );
+        assert_eq!(
+            run_value("return (9.999999999999999e20).toExponential(2);"),
+            string("1.00e+21")
+        );
 
         assert_eq!(
             run_value(
@@ -6646,6 +6836,22 @@ mod tests {
             Value::Boolean(true)
         );
         assert_eq!(run_value("return 1 + 2;"), number(3.0));
+
+        assert_eq!(
+            run_value(
+                "return [undefined, 2, 1].sort((a, b) => a - b).map((value) => String(value)).join(',');"
+            ),
+            string("1,2,undefined")
+        );
+        assert_eq!(
+            run_value("return [3, 1, 2].sort(() => NaN).join(',');"),
+            string("3,1,2")
+        );
+        assert_eq!(
+            run_value("return 1 / Math.round(-0.4);"),
+            number(f64::NEG_INFINITY)
+        );
+        assert_eq!(run_value("return Math.round(-1.5);"), number(-1.0));
 
         assert_eq!(
             run_value("return [1, 2, 3].reduceRight((acc, value, index) => acc + index, 0);"),
