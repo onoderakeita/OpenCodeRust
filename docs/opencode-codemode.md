@@ -68,11 +68,28 @@ upstreamは未対応構文を評価到達時に拒否する。`inspect_support` 
 - `maxOutputBytes`: 0以上。値 → logの順に予算を消費し、UTF-8境界を
   壊さず切り詰める。切り詰めは実行失敗にしない。
 
+## Interpreter baseline
+
+`interpreter::execute` は対応構文のうち、tool呼び出しとstdlibを除く範囲を
+同期評価する。
+
+- 文: 変数宣言、式、block、if、while/do-while/for/for-in/for-of、
+  break/continue、return、switch (fallthrough)、throw/try/catch/finally、
+  function宣言 (hoist)。
+- 式: literal、identifier、template literal、array/object (spread)、
+  arrow/function、assignment (compound/logical)、await (通過)、
+  binary/logical/unary、call、conditional、member、optional chain、update。
+- 配列とobjectは共有参照で、代入はaliasし、`===` は参照同一性で比較する。
+- `typeof` は未宣言識別子に `"undefined"` を返す。
+- `await` は値をそのまま返す。promise導入時に解決器へ置き換える。
+- 未対応: tool呼び出し、promise、stdlib、`new`、regexp/bigint literal、
+  `void`/`delete`/`instanceof`、methodの値としての抽出。
+- 緩い等価 (`==`) は基本型のcoercionのみで、objectのToPrimitiveは未実装。
+
 ## 未実装
 
 - TypeScriptの型消去・transpile parity
-- AST評価器
-- stdlib、tool runtime
+- stdlib、tool runtime、promise
 - 実時間timeoutの強制
 - upstream parity test suite
 

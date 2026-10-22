@@ -44,6 +44,7 @@ oxc_allocator = "=0.154.0"
 oxc_ast = "=0.154.0"
 oxc_parser = "=0.154.0"
 oxc_span = "=0.154.0"
+oxc_syntax = "=0.154.0"
 indexmap = "2"
 tokio = { version = "1", features = ["full"] }
 serde = { version = "1", features = ["derive"] }
