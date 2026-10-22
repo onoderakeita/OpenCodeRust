@@ -131,7 +131,10 @@ shadowingできる。
   `parseInt`、`parseFloat`、定数 (`MAX_SAFE_INTEGER` など)。
 - `String` statics: `String.fromCharCode`、`String.fromCodePoint`。
 - `Object`: keys、values、entries、hasOwn、fromEntries (配列とMap)、assign。
-  fromEntriesのkeyは `String(...)` でcoercionする。
+  `keys` はdata objectと配列を受け、Date/Map/Set/Promiseでは空配列を返す。
+  `values` / `entries` / `hasOwn` はdata objectのみを受け、配列は `TypeError`
+  にする。`assign` は全引数をsourceとして新しいobjectを返し、sandbox値は
+  無視する。fromEntriesのkeyは `String(...)` でcoercionする。
 - `Array`: isArray、of、from (array-like含む)。インスタンスmethodは map、filter、forEach、
   reduce、reduceRight、find、findIndex、findLast、findLastIndex、some、
   every、join、slice、includes、indexOf、lastIndexOf、push、pop、shift、

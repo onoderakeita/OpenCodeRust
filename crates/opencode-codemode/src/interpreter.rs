@@ -1557,6 +1557,18 @@ impl<'a> Interpreter<'a> {
                         .unwrap_or_default();
                     return Ok(Value::array(keys.into_iter().map(Value::String).collect()));
                 }
+                match &source {
+                    Value::Object(_) | Value::Array(_) | Value::Error(_) => {}
+                    Value::Date(_) | Value::Map(_) | Value::Set(_) | Value::Promise(_) => {
+                        return Ok(Value::array(Vec::new()));
+                    }
+                    _ => {
+                        return Err(RuntimeError::type_error(
+                            "Object.keys expects a data object or array.",
+                            _span,
+                        ));
+                    }
+                }
                 Ok(Value::array(
                     own_keys(&source).into_iter().map(Value::String).collect(),
                 ))
@@ -1568,6 +1580,18 @@ impl<'a> Interpreter<'a> {
                         "Object.values cannot read tool references. Use Object.keys(tools) to discover names.",
                         _span,
                     ));
+                }
+                match &source {
+                    Value::Object(_) | Value::Error(_) => {}
+                    Value::Date(_) | Value::Map(_) | Value::Set(_) | Value::Promise(_) => {
+                        return Ok(Value::array(Vec::new()));
+                    }
+                    _ => {
+                        return Err(RuntimeError::type_error(
+                            "Object.values expects a data object.",
+                            _span,
+                        ));
+                    }
                 }
                 let mut values = Vec::new();
                 for key in own_keys(&source) {
@@ -1582,6 +1606,18 @@ impl<'a> Interpreter<'a> {
                         "Object.entries cannot read tool references. Use Object.keys(tools) to discover names.",
                         _span,
                     ));
+                }
+                match &source {
+                    Value::Object(_) | Value::Error(_) => {}
+                    Value::Date(_) | Value::Map(_) | Value::Set(_) | Value::Promise(_) => {
+                        return Ok(Value::array(Vec::new()));
+                    }
+                    _ => {
+                        return Err(RuntimeError::type_error(
+                            "Object.entries expects a data object.",
+                            _span,
+                        ));
+                    }
                 }
                 let mut entries = Vec::new();
                 for key in own_keys(&source) {
@@ -1601,14 +1637,9 @@ impl<'a> Interpreter<'a> {
                 let key = to_js_string(&argument(1));
                 match &source {
                     Value::Object(object) => Ok(Value::Boolean(object.borrow().contains_key(&key))),
-                    Value::Array(items) => Ok(Value::Boolean(
-                        key == "length"
-                            || key
-                                .parse::<usize>()
-                                .is_ok_and(|index| index < items.borrow().len()),
-                    )),
+                    Value::Error(_) => Ok(Value::Boolean(own_keys(&source).contains(&key))),
                     _ => Err(RuntimeError::type_error(
-                        "Object.hasOwn expects a data object or array.",
+                        "Object.hasOwn expects a data object.",
                         _span,
                     )),
                 }
@@ -1653,32 +1684,39 @@ impl<'a> Interpreter<'a> {
                 Ok(Value::Object(Rc::new(RefCell::new(object))))
             }
             "Object.assign" => {
-                let target = argument(0);
-                let Value::Object(target_object) = &target else {
-                    return Err(RuntimeError::type_error(
-                        "Object.assign target must be a data object.",
-                        _span,
-                    ));
-                };
-                for source in arguments.iter().skip(1) {
-                    if let Value::Object(source) = source {
-                        let entries = source
-                            .borrow()
-                            .iter()
-                            .map(|(key, value)| (key.clone(), value.clone()))
-                            .collect::<Vec<_>>();
-                        for (key, value) in entries {
-                            if is_blocked_member(&key) {
-                                return Err(RuntimeError::type_error(
-                                    format!("Property '{key}' is not available in CodeMode."),
-                                    _span,
-                                ));
+                let mut merged = IndexMap::new();
+                for source in arguments {
+                    match source {
+                        Value::Undefined | Value::Null => continue,
+                        Value::Object(object) => {
+                            for (key, value) in object.borrow().iter() {
+                                if is_blocked_member(key) {
+                                    return Err(RuntimeError::type_error(
+                                        format!("Property '{key}' is not available in CodeMode."),
+                                        _span,
+                                    ));
+                                }
+                                merged.insert(key.clone(), value.clone());
                             }
-                            target_object.borrow_mut().insert(key, value);
+                        }
+                        Value::Error(error) => {
+                            merged.insert(
+                                "name".to_owned(),
+                                Value::String(error.kind.name().to_owned()),
+                            );
+                            merged
+                                .insert("message".to_owned(), Value::String(error.message.clone()));
+                        }
+                        Value::Date(_) | Value::Map(_) | Value::Set(_) | Value::Promise(_) => {}
+                        _ => {
+                            return Err(RuntimeError::type_error(
+                                "Object.assign expects data objects.",
+                                _span,
+                            ));
                         }
                     }
                 }
-                Ok(target)
+                Ok(Value::Object(Rc::new(RefCell::new(merged))))
             }
             "Array.isArray" => Ok(Value::Boolean(matches!(argument(0), Value::Array(_)))),
             "Array.of" => Ok(Value::array(arguments.to_vec())),
@@ -5733,10 +5771,8 @@ mod tests {
             ),
             string("true,false")
         );
-        assert_eq!(
-            run_value(r#"return Object.hasOwn([1, 2], 1) + "," + Object.hasOwn([1, 2], 2);"#),
-            string("true,false")
-        );
+        let error = run("return Object.hasOwn([1, 2], 1);").expect_err("arrays are not accepted");
+        assert_eq!(error.kind(), super::RuntimeErrorKind::TypeError);
         assert_eq!(
             run_value(
                 r#"const m = new Map([["a", 1], ["b", 2]]); return JSON.stringify(Object.fromEntries(m));"#
@@ -5890,6 +5926,41 @@ mod tests {
         assert_eq!(error.kind(), super::RuntimeErrorKind::RangeError);
         let error = run("return (1).toPrecision(0);").expect_err("invalid precision");
         assert_eq!(error.kind(), super::RuntimeErrorKind::RangeError);
+    }
+
+    #[test]
+    fn matches_object_static_restrictions() {
+        assert_eq!(
+            run_value(r#"return Object.keys([10, 20]).join(",");"#),
+            string("0,1")
+        );
+        assert_eq!(
+            run_value("return Object.values(new Map([['a', 1]])).length;"),
+            number(0.0)
+        );
+        assert_eq!(
+            run_value("return Object.entries(new Date(0)).length;"),
+            number(0.0)
+        );
+        assert_eq!(
+            run_value(
+                "const a = { x: 1 }; const b = Object.assign(a, { y: 2 }); return [a.y === undefined, b.x, b.y].join(',');"
+            ),
+            string("true,1,2")
+        );
+        assert_eq!(
+            run_value("return Object.keys(Object.assign({}, new Map([['a', 1]]))).length;"),
+            number(0.0)
+        );
+
+        let error = run(r#"return Object.keys("ab");"#).expect_err("primitive keys");
+        assert_eq!(error.kind(), super::RuntimeErrorKind::TypeError);
+        let error = run("return Object.values([1, 2]);").expect_err("array values");
+        assert_eq!(error.kind(), super::RuntimeErrorKind::TypeError);
+        let error = run("return Object.entries([1, 2]);").expect_err("array entries");
+        assert_eq!(error.kind(), super::RuntimeErrorKind::TypeError);
+        let error = run("return Object.assign({}, [1]);").expect_err("array source");
+        assert_eq!(error.kind(), super::RuntimeErrorKind::TypeError);
     }
 
     #[test]
