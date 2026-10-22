@@ -1452,13 +1452,19 @@ impl<'a> Interpreter<'a> {
                     }
                 };
                 match name {
-                    "Promise.race" => Ok(items.into_iter().next().map_or_else(
-                        || Value::promise_fulfilled(Value::Undefined),
-                        |item| match item {
+                    "Promise.race" => {
+                        let Some(item) = items.into_iter().next() else {
+                            return Err(RuntimeError::new(
+                                RuntimeErrorKind::RangeError,
+                                "Promise.race requires at least one item; an empty race would never settle.",
+                                _span,
+                            ));
+                        };
+                        Ok(match item {
                             Value::Promise(_) => item,
                             _ => Value::promise_fulfilled(item),
-                        },
-                    )),
+                        })
+                    }
                     "Promise.all" => {
                         let mut values = Vec::new();
                         for item in &items {
@@ -1914,7 +1920,7 @@ impl<'a> Interpreter<'a> {
                 {
                     return Err(RuntimeError::new(
                         RuntimeErrorKind::InvalidDataValue,
-                        "Array.splice cannot insert a value that contains the receiver.",
+                        "Array.splice result would be circular because it contains the receiver.",
                         span,
                     ));
                 }
@@ -2724,7 +2730,20 @@ impl<'a> Interpreter<'a> {
                 "message" => Value::String(error.message.clone()),
                 _ => Value::Undefined,
             }),
-            Value::Promise(_) => Ok(Value::Undefined),
+            Value::Promise(_) => match key {
+                "then" | "catch" | "finally" => Err(RuntimeError::new(
+                    RuntimeErrorKind::UnsupportedSyntax,
+                    format!(
+                        "Promise.prototype.{key} is not supported in CodeMode. Use await instead."
+                    ),
+                    span,
+                )),
+                _ => Err(RuntimeError::new(
+                    RuntimeErrorKind::InvalidDataValue,
+                    format!("Cannot read '{key}' from an un-awaited Promise; await it first."),
+                    span,
+                )),
+            },
             Value::Number(_) => Ok(bound_method(object, number_method(key))),
             Value::ToolRef(path) => {
                 let mut next = path.as_ref().clone();
@@ -4263,6 +4282,26 @@ mod tests {
         assert_eq!(array[0], string("rejected"));
         assert_eq!(array[1], Value::Boolean(true));
         assert_eq!(array[2], string("b"));
+    }
+
+    #[test]
+    fn promise_surface_hints_at_await() {
+        let error = run("return Promise.resolve(1).then((x) => x);")
+            .expect_err("then should be unsupported");
+        assert_eq!(error.kind(), super::RuntimeErrorKind::UnsupportedSyntax);
+        assert!(error
+            .message()
+            .contains("Promise.prototype.then is not supported"));
+        assert!(error.message().contains("await"));
+
+        let error =
+            run("return Promise.resolve(1).value;").expect_err("property reads should fail");
+        assert_eq!(error.kind(), super::RuntimeErrorKind::InvalidDataValue);
+        assert!(error.message().contains("un-awaited Promise"));
+        assert!(error.message().contains("await it first"));
+
+        let error = run("return await Promise.race([]);").expect_err("empty race should fail");
+        assert!(error.message().contains("never settle"));
     }
 
     #[test]

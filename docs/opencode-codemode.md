@@ -147,7 +147,9 @@ upstreamは未対応構文を評価到達時に拒否する。`inspect_support` 
   `ToolCallLimitExceeded` を返す。
 - `Promise.resolve`、`Promise.reject`、`Promise.all`、`Promise.allSettled`、
   `Promise.race` は同期的に評価する。`await` はfulfilled値を取り出し、
-  rejected理由をthrowする。
+  rejected理由をthrowする。空の `Promise.race` はエラーにする。
+- `.then` / `.catch` / `.finally` と、未await Promiseのproperty読み取りは
+  awaitを促す診断を返す。
 - 真の非同期実行、tool呼び出しの同時実行制御、未await rejectionの診断は
   未実装。境界に到達した未解決のPromiseは `InvalidDataValue` になる。
 
