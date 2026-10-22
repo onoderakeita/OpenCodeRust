@@ -140,9 +140,12 @@ shadowingできる。
 - `String` statics: `String.fromCharCode`、`String.fromCodePoint`。
 - `Object`: keys、values、entries、hasOwn、fromEntries (配列とMap)、assign。
   `keys` はdata objectと配列を受け、Date/Map/Set/Promiseでは空配列を返す。
-  `values` / `entries` / `hasOwn` はdata objectのみを受け、配列は `TypeError`
-  にする。`assign` は全引数をsourceとして新しいobjectを返し、sandbox値は
-  無視する。fromEntriesのkeyは `String(...)` でcoercionする。列挙は
+  `values` / `entries` / `hasOwn` は配列とprimitiveを `TypeError` にし、
+  Date/Map/Set/Promiseでは `values` / `entries` が空配列、`hasOwn` が
+  `false` を返す。`assign` は全引数をsourceとして新しいobjectを返し、
+  Date/Map/Setは無視、未await Promiseは拒否する。object spreadも同様に
+  Date/Map/Setを無視し、配列と未await Promiseを拒否する。fromEntriesのkeyは
+  `String(...)` でcoercionする。列挙は
   ECMAScriptのproperty順 (配列indexの昇順、その後に挿入順) で行い、
   `Object.keys` / `values` / `entries`、`for...in`、`JSON.stringify`、
   spread、`Object.assign` に適用する。`for...in` はplain object、配列、

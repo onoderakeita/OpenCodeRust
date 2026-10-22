@@ -914,7 +914,10 @@ impl<'a> Interpreter<'a> {
                                         Value::String(error.message.clone()),
                                     );
                                 }
-                                Value::Promise(_) => {}
+                                // Sandbox values have no own enumerable properties in
+                                // JS, so spreading them is a no-op. A promise is
+                                // interpreter machinery and must be awaited first.
+                                Value::Date(_) | Value::Map(_) | Value::Set(_) => {}
                                 _ => {
                                     return Err(RuntimeError::new(
                                         RuntimeErrorKind::InvalidDataValue,
@@ -1780,7 +1783,15 @@ impl<'a> Interpreter<'a> {
                             merged
                                 .insert("message".to_owned(), Value::String(error.message.clone()));
                         }
-                        Value::Date(_) | Value::Map(_) | Value::Set(_) | Value::Promise(_) => {}
+                        Value::Date(_) | Value::Map(_) | Value::Set(_) => {}
+                        Value::Promise(_) => {
+                            return Err(RuntimeError::new(
+                                RuntimeErrorKind::InvalidDataValue,
+                                "Object.assign input contains an un-awaited Promise; \
+                                 await it first.",
+                                _span,
+                            ));
+                        }
                         _ => {
                             return Err(RuntimeError::type_error(
                                 "Object.assign expects data objects.",
@@ -5989,6 +6000,166 @@ mod tests {
         );
         let error = run("return [1,2,3].map(42);").expect_err("non-callable callback");
         assert_eq!(error.kind(), super::RuntimeErrorKind::TypeError);
+    }
+
+    #[test]
+    fn matches_upstream_stdlib_collection_and_date_parity() {
+        assert_eq!(
+            run_value("return new Date('2024-01-02T03:04:05.000Z').getTime();"),
+            number(1_704_164_645_000.0)
+        );
+        assert_eq!(run_value("return +new Date(42);"), number(42.0));
+        assert_eq!(
+            run_value("const d = new Date(2024, 0, 2); return [d.getFullYear(), d.getMonth(), d.getDate()].join(',');"),
+            string("2024,0,2")
+        );
+        assert_eq!(
+            run_value("return new Date('garbage').toJSON();"),
+            Value::Null
+        );
+        assert_eq!(
+            run_value("return String(new Date(0));"),
+            string("1970-01-01T00:00:00.000Z")
+        );
+        assert_eq!(run_value("return Number(new Date(5));"), number(5.0));
+        assert_eq!(
+            run_value("return [Boolean(new Date(0)), Boolean(new Map())].join(',');"),
+            string("true,true")
+        );
+        assert_eq!(
+            run_value(
+                "const dates = [new Date(3000), new Date(1000), new Date(2000)]; \
+                 return dates.sort((a, b) => a - b).map((d) => d.getTime()).join(',');"
+            ),
+            string("1000,2000,3000")
+        );
+
+        assert_eq!(
+            run_value(
+                "const m = new Map(); m.set('a', 1).set('b', 2); \
+                 return [m.get('a'), m.has('a'), m.get('zz') === undefined, m.size].join(',');"
+            ),
+            string("1,true,true,2")
+        );
+        assert_eq!(
+            run_value(
+                "const key = { id: 1 }; const m = new Map(); m.set(key, 'hit'); \
+                 return [m.get(key), m.get({ id: 1 }) === undefined].join(',');"
+            ),
+            string("hit,true")
+        );
+        assert_eq!(
+            run_value(
+                "const m = new Map([['a', 1], ['b', 2]]); \
+                 return JSON.stringify([m.keys(), m.values(), m.entries()]);"
+            ),
+            string("[[\"a\",\"b\"],[1,2],[[\"a\",1],[\"b\",2]]]")
+        );
+        assert_eq!(
+            run_value("return JSON.stringify(Array.from(new Map([['a', 1]])));"),
+            string("[[\"a\",1]]")
+        );
+        assert_eq!(
+            run_value(
+                "const m = new Map([['a', 1], ['b', 2]]); const seen = []; \
+                 m.forEach((count, key) => seen.push(key + count)); return seen.join(',');"
+            ),
+            string("a1,b2")
+        );
+        assert_eq!(
+            run_value(
+                "const m = new Map([['a', 1], ['b', 2]]); const removed = m.delete('a'); \
+                 const missed = m.delete('zz'); const sizeAfterDelete = m.size; m.clear(); \
+                 return [removed, missed, sizeAfterDelete, m.size].join(',');"
+            ),
+            string("true,false,1,0")
+        );
+        let error = run("return new Map('nope');").expect_err("string map initializer");
+        assert!(error.message().contains("[key, value] pairs"));
+        let error = run("return new Map(['flat']);").expect_err("flat pair initializer");
+        assert!(error.message().contains("[key, value] pairs"));
+
+        assert_eq!(
+            run_value(
+                "const s = new Set(); s.add(1).add(2).add(1); const removed = s.delete(2); \
+                 return [s.size, s.has(1), s.has(2), removed].join(',');"
+            ),
+            string("1,true,false,true")
+        );
+        assert_eq!(
+            run_value("return [...new Set('aba')].join('');"),
+            string("ab")
+        );
+        assert_eq!(
+            run_value("return new Set([NaN]).has(NaN);"),
+            Value::Boolean(true)
+        );
+        assert_eq!(
+            run_value(
+                "const m = new Map([['start', new Date(1000)]]); return m.get('start').getTime();"
+            ),
+            number(1000.0)
+        );
+        assert_eq!(
+            run_value("return JSON.stringify({ ...new Map([['a', 1]]), kept: true });"),
+            string("{\"kept\":true}")
+        );
+
+        assert_eq!(
+            run_value("return Object.values({ d: new Date(0) })[0].getTime();"),
+            number(0.0)
+        );
+        assert_eq!(
+            run_value(
+                "const [key, d] = Object.entries({ d: new Date(0) })[0]; \
+                 return key + ':' + d.getTime();"
+            ),
+            string("d:0")
+        );
+        assert_eq!(
+            run_value(
+                "const merged = Object.assign({}, { m: new Map([['a', 1]]) }); \
+                 return merged.m.get('a');"
+            ),
+            number(1.0)
+        );
+        assert_eq!(
+            run_value(
+                "const src = { m: new Map([['a', 1]]) }; const copy = { ...src }; \
+                 copy.m.set('b', 2); return [copy.m.get('a'), src.m.get('b')].join(',');"
+            ),
+            string("1,2")
+        );
+        assert_eq!(
+            run_value(
+                "const list = [new Date(1000)]; const copy = [...list]; return copy[0].getTime();"
+            ),
+            number(1000.0)
+        );
+        assert_eq!(
+            run_value("return Array.from([new Date(5)])[0].getTime();"),
+            number(5.0)
+        );
+        assert_eq!(
+            run_value(
+                "return [Object.keys(new Map([['a', 1]])).length, \
+                 Object.values(new Date(0)).length, \
+                 Object.entries(new Set([1])).length].join(',');"
+            ),
+            string("0,0,0")
+        );
+        assert_eq!(
+            run_value("return JSON.stringify(Object.assign({}, new Map([['a', 1]])));"),
+            string("{}")
+        );
+        assert_eq!(
+            run_value("return Object.hasOwn(new Date(0), 'time');"),
+            Value::Boolean(false)
+        );
+        let error = run("return Object.assign({}, Promise.resolve(1));")
+            .expect_err("un-awaited promise source");
+        assert_eq!(error.kind(), super::RuntimeErrorKind::InvalidDataValue);
+        assert!(error.message().contains("un-awaited Promise"));
     }
 
     #[test]
