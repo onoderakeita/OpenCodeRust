@@ -129,8 +129,9 @@ shadowingできる。
 - `Number` statics: `Number.isNaN`、`isFinite`、`isInteger`、`isSafeInteger`、
   `parseInt`、`parseFloat`、定数 (`MAX_SAFE_INTEGER` など)。
 - `String` statics: `String.fromCharCode`、`String.fromCodePoint`。
-- `Object`: keys、values、entries、fromEntries、assign。
-- `Array`: isArray、from。インスタンスmethodは map、filter、forEach、
+- `Object`: keys、values、entries、hasOwn、fromEntries (配列とMap)、assign。
+  fromEntriesのkeyは `String(...)` でcoercionする。
+- `Array`: isArray、of、from (array-like含む)。インスタンスmethodは map、filter、forEach、
   reduce、reduceRight、find、findIndex、findLast、findLastIndex、some、
   every、join、slice、includes、indexOf、lastIndexOf、push、pop、shift、
   unshift、reverse、concat、flat、flatMap、sort、toSorted、toReversed、

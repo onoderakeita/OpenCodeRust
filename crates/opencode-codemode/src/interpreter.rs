@@ -381,11 +381,13 @@ impl<'a> Interpreter<'a> {
             ("values", Value::Builtin("Object.values")),
             ("entries", Value::Builtin("Object.entries")),
             ("fromEntries", Value::Builtin("Object.fromEntries")),
+            ("hasOwn", Value::Builtin("Object.hasOwn")),
             ("assign", Value::Builtin("Object.assign")),
         ]);
         let array = Value::from_entries([
             ("isArray", Value::Builtin("Array.isArray")),
             ("from", Value::Builtin("Array.from")),
+            ("of", Value::Builtin("Array.of")),
         ]);
         let promise = Value::from_entries([
             ("resolve", Value::Builtin("Promise.resolve")),
@@ -1573,10 +1575,38 @@ impl<'a> Interpreter<'a> {
                 }
                 Ok(Value::array(entries))
             }
+            "Object.hasOwn" => {
+                let source = argument(0);
+                if source.tool_path().is_some() {
+                    return Err(RuntimeError::type_error(
+                        "Object.hasOwn cannot read tool references. Use Object.keys(tools) to discover names.",
+                        _span,
+                    ));
+                }
+                let key = to_js_string(&argument(1));
+                match &source {
+                    Value::Object(object) => Ok(Value::Boolean(object.borrow().contains_key(&key))),
+                    Value::Array(items) => Ok(Value::Boolean(
+                        key == "length"
+                            || key
+                                .parse::<usize>()
+                                .is_ok_and(|index| index < items.borrow().len()),
+                    )),
+                    _ => Err(RuntimeError::type_error(
+                        "Object.hasOwn expects a data object or array.",
+                        _span,
+                    )),
+                }
+            }
             "Object.fromEntries" => {
                 let source = argument(0);
                 let items = match &source {
                     Value::Array(array) => array.borrow().clone(),
+                    Value::Map(map) => map
+                        .entries()
+                        .into_iter()
+                        .map(|(key, value)| Value::array(vec![key, value]))
+                        .collect(),
                     _ => {
                         return Err(RuntimeError::type_error(
                             "Object.fromEntries requires an iterable of entries.",
@@ -1596,7 +1626,7 @@ impl<'a> Interpreter<'a> {
                         }
                     };
                     let key = entry.first().cloned().unwrap_or(Value::Undefined);
-                    let key = to_property_key(&key, _span)?;
+                    let key = to_js_string(&key);
                     if is_blocked_member(&key) {
                         return Err(RuntimeError::type_error(
                             format!("Property '{key}' is not available in CodeMode."),
@@ -1636,11 +1666,17 @@ impl<'a> Interpreter<'a> {
                 Ok(target)
             }
             "Array.isArray" => Ok(Value::Boolean(matches!(argument(0), Value::Array(_)))),
+            "Array.of" => Ok(Value::array(arguments.to_vec())),
             "Array.from" => {
                 let source = argument(0);
-                let items = spread_items(&source).ok_or_else(|| {
-                    RuntimeError::type_error("Array.from requires an array or string.", _span)
-                })?;
+                let items = spread_items(&source)
+                    .or_else(|| array_like_items(&source))
+                    .ok_or_else(|| {
+                        RuntimeError::type_error(
+                            "Array.from expects an array, string, Map, Set, or array-like value.",
+                            _span,
+                        )
+                    })?;
                 let mapper = arguments.get(1).cloned();
                 let items = match mapper {
                     Some(mapper) if !mapper.is_undefined() => {
@@ -3601,6 +3637,36 @@ fn string_to_number(text: &str) -> f64 {
     text.parse::<f64>().unwrap_or(f64::NAN)
 }
 
+/// Upper bound for `Array.from` array-like materialization, guarding against
+/// one-shot allocation that the timeout cannot interrupt.
+const MAX_ARRAY_LIKE_LENGTH: usize = 1_000_000;
+
+fn array_like_items(value: &Value) -> Option<Vec<Value>> {
+    let Value::Object(object) = value else {
+        return None;
+    };
+    let length = match object.borrow().get("length") {
+        Some(Value::Number(length)) if length.is_finite() && *length >= 0.0 => {
+            length.trunc() as usize
+        }
+        _ => return None,
+    };
+    if length > MAX_ARRAY_LIKE_LENGTH {
+        return None;
+    }
+    let object = object.borrow();
+    Some(
+        (0..length)
+            .map(|index| {
+                object
+                    .get(&index.to_string())
+                    .cloned()
+                    .unwrap_or(Value::Undefined)
+            })
+            .collect(),
+    )
+}
+
 fn own_keys(value: &Value) -> Vec<String> {
     match value {
         Value::Object(object) => object.borrow().keys().cloned().collect(),
@@ -5322,6 +5388,45 @@ mod tests {
                 "(index)\twhen\tn\n0\t1970-01-01T00:00:00.000Z\tNaN",
             ]
         );
+    }
+
+    #[test]
+    fn supports_object_and_array_static_gaps() {
+        assert_eq!(
+            run_value(
+                r#"const o = { a: 1 }; return [Object.hasOwn(o, "a"), Object.hasOwn(o, "b")].join(",");"#
+            ),
+            string("true,false")
+        );
+        assert_eq!(
+            run_value(r#"return Object.hasOwn([1, 2], 1) + "," + Object.hasOwn([1, 2], 2);"#),
+            string("true,false")
+        );
+        assert_eq!(
+            run_value(
+                r#"const m = new Map([["a", 1], ["b", 2]]); return JSON.stringify(Object.fromEntries(m));"#
+            ),
+            string(r#"{"a":1,"b":2}"#)
+        );
+        assert_eq!(
+            run_value(r#"return JSON.stringify(Object.fromEntries([[true, 1]]));"#),
+            string(r#"{"true":1}"#)
+        );
+        assert_eq!(
+            run_value("return Array.of(1, 2, 3).join(',');"),
+            string("1,2,3")
+        );
+        assert_eq!(
+            run_value(r#"return Array.from({ length: 3, 0: "a", 2: "c" }).join(",");"#),
+            string("a,,c")
+        );
+        assert_eq!(
+            run_value(r#"return Array.from({ length: 2, 0: 1, 1: 2 }, (x) => x + 1).join(",");"#),
+            string("2,3")
+        );
+        let error = run(r#"return Array.from({ length: 1000001 });"#)
+            .expect_err("oversized array-like should fail");
+        assert_eq!(error.kind(), super::RuntimeErrorKind::TypeError);
     }
 
     #[test]
