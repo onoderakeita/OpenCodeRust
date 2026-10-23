@@ -1495,7 +1495,12 @@ impl<'a> Interpreter<'a> {
             "String.fromCharCode" => {
                 let mut text = String::new();
                 for value in arguments {
-                    let code = to_number(value);
+                    let Value::Number(code) = value else {
+                        return Err(RuntimeError::type_error(
+                            "String.fromCharCode expects number arguments.",
+                            _span,
+                        ));
+                    };
                     let code = if code.is_finite() {
                         code.trunc().rem_euclid(65_536.0) as u32
                     } else {
@@ -1508,12 +1513,17 @@ impl<'a> Interpreter<'a> {
             "String.fromCodePoint" => {
                 let mut text = String::new();
                 for value in arguments {
-                    let code = to_number(value);
+                    let Value::Number(code) = value else {
+                        return Err(RuntimeError::type_error(
+                            "String.fromCodePoint expects number arguments.",
+                            _span,
+                        ));
+                    };
                     let character = if code.is_finite()
                         && code.fract() == 0.0
-                        && (0.0..=1_114_111.0).contains(&code)
+                        && (0.0..=1_114_111.0).contains(code)
                     {
-                        char::from_u32(code as u32)
+                        char::from_u32(*code as u32)
                     } else {
                         None
                     };
@@ -1873,6 +1883,9 @@ impl<'a> Interpreter<'a> {
             "Array.isArray" => Ok(Value::Boolean(matches!(argument(0), Value::Array(_)))),
             "Array.of" => Ok(Value::array(arguments.to_vec())),
             "Array.from" => {
+                if arguments.len() > 1 {
+                    return Err(RuntimeError::unsupported("Array.from map function", _span));
+                }
                 let source = argument(0);
                 match coercion_issue(&source, &mut Vec::new()) {
                     Some(CoercionIssue::Promise) => {
@@ -1915,21 +1928,6 @@ impl<'a> Interpreter<'a> {
                         array_like_items(&source).unwrap_or_default()
                     }
                     _ => Vec::new(),
-                };
-                let mapper = arguments.get(1).cloned();
-                let items = match mapper {
-                    Some(mapper) if !mapper.is_undefined() => {
-                        let mut mapped = Vec::with_capacity(items.len());
-                        for (index, item) in items.into_iter().enumerate() {
-                            mapped.push(self.invoke_value(
-                                &mapper,
-                                vec![item, Value::Number(index as f64)],
-                                _span,
-                            )?);
-                        }
-                        mapped
-                    }
-                    _ => items,
                 };
                 Ok(Value::array(items))
             }
@@ -7453,10 +7451,9 @@ mod tests {
             run_value(r#"return Array.from({ length: 3, 0: "a", 2: "c" }).join(",");"#),
             string("a,,c")
         );
-        assert_eq!(
-            run_value(r#"return Array.from({ length: 2, 0: 1, 1: 2 }, (x) => x + 1).join(",");"#),
-            string("2,3")
-        );
+        let error = run(r#"return Array.from({ length: 2, 0: 1, 1: 2 }, (x) => x + 1);"#)
+            .expect_err("Array.from map functions are unsupported");
+        assert_eq!(error.kind(), super::RuntimeErrorKind::UnsupportedSyntax);
         let error = run(r#"return Array.from({ length: 1000001 });"#)
             .expect_err("oversized array-like should fail");
         assert_eq!(error.kind(), super::RuntimeErrorKind::TypeError);
@@ -7948,6 +7945,12 @@ mod tests {
             run_value(r#"return String.fromCharCode(-1) === "\uFFFF";"#),
             Value::Boolean(true)
         );
+        let error = run("return String.fromCharCode('65');")
+            .expect_err("fromCharCode requires number arguments");
+        assert_eq!(error.kind(), super::RuntimeErrorKind::TypeError);
+        let error = run("return String.fromCodePoint('65');")
+            .expect_err("fromCodePoint requires number arguments");
+        assert_eq!(error.kind(), super::RuntimeErrorKind::TypeError);
         assert_eq!(run_value(r#"return Number("\uFEFF1");"#), number(1.0));
         assert_eq!(run_value(r#"return parseFloat("\uFEFF1.5");"#), number(1.5));
         assert_eq!(run_value(r#"return parseInt("\uFEFF10");"#), number(10.0));

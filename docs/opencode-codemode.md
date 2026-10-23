@@ -173,7 +173,8 @@ shadowingできる。
 - `Array`: isArray、of、from (array-like含む)。`from` は配列・文字列・
   Map/Set・数値lengthを持つobjectを変換し、それ以外 (数値、null、
   lengthのないobjectなど) は空配列を返す。array-likeのlengthが上限を
-  超える場合は `TypeError` にする。インスタンスmethodは map、filter、forEach、
+  超える場合は `TypeError` にする。第2引数のmap関数はupstreamに合わせて
+  `UnsupportedSyntax` にする。インスタンスmethodは map、filter、forEach、
   reduce、reduceRight、find、findIndex、findLast、findLastIndex、some、
   every、join、slice、includes、indexOf、lastIndexOf、push、pop、shift、
   unshift、reverse、concat、flat、flatMap、sort、toSorted、toReversed、

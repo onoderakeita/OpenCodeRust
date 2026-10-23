@@ -247,14 +247,6 @@
     ]
   },
   {
-    "expr": "Array.from({length: 3}, (_, i) => i)",
-    "expected": [
-      0,
-      1,
-      2
-    ]
-  },
-  {
     "expr": "Array.isArray([])",
     "expected": true
   },
@@ -737,22 +729,6 @@
   {
     "expr": "[1,2,3].join()",
     "expected": "1,2,3"
-  },
-  {
-    "expr": "Array.from(new Set([1,2]))",
-    "expected": [
-      1,
-      2
-    ]
-  },
-  {
-    "expr": "Array.from(new Map([['a',1]]))",
-    "expected": [
-      [
-        "a",
-        1
-      ]
-    ]
   },
   {
     "expr": "Array.from('')",
@@ -8083,5 +8059,21 @@
   {
     "expr": "JSON.stringify({a:1,b:2}, null, 'abcdefghijklm')",
     "expected": "{\nabcdefghij\"a\": 1,\nabcdefghij\"b\": 2\n}"
+  },
+  {
+    "expr": "Array.from(new Set([1,2]))",
+    "expected": [
+      1,
+      2
+    ]
+  },
+  {
+    "expr": "Array.from(new Map([['a',1]]))",
+    "expected": [
+      [
+        "a",
+        1
+      ]
+    ]
   }
 ]
