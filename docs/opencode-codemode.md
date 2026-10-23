@@ -214,8 +214,9 @@ shadowingできる。
   絶対位置で、負数は0になる。Arrayの検索系 (`indexOf` / `includes` /
   `lastIndexOf`) は負数を末尾からの相対として扱う。
   `split` のlimitはToUint32で変換し、`NaN` / `Infinity` は0、負数は
-  2^32のmoduloになる。trim系はBOM (U+FEFF) も除去し、`<` / `>` の
-  文字列比較はUTF-16 code unit順になる。
+  2^32のmoduloになる。`repeat` はupstreamと同じく有限かつ非負のcountだけを
+  受け、`NaN` / `Infinity` / 負数は `RangeError` にする。trim系はBOM
+  (U+FEFF) も除去し、`<` / `>` の文字列比較はUTF-16 code unit順になる。
   `normalize` とRegExp依存のmatch系は未実装。
 - `Number` instance methods: toFixed、toPrecision、toExponential、toString
   (radix 2..36の整数)、valueOf。digits/radixはnumberまたは `undefined` だけを

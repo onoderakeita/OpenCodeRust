@@ -3018,15 +3018,14 @@ impl<'a> Interpreter<'a> {
             "String.repeat" => {
                 let text = as_string(receiver, span)?;
                 let number = number_arg(0)?;
-                let count = if number.is_nan() { 0.0 } else { number.trunc() };
-                if count < 0.0 || count == f64::INFINITY {
+                if !number.is_finite() || number < 0.0 {
                     return Err(RuntimeError::new(
                         RuntimeErrorKind::RangeError,
-                        "Invalid count value.",
+                        "String.repeat expects a finite non-negative count.",
                         span,
                     ));
                 }
-                let count = count as usize;
+                let count = number.trunc() as usize;
                 if text.len().saturating_mul(count) > MAX_STRING_LENGTH {
                     return Err(RuntimeError::new(
                         RuntimeErrorKind::RangeError,
@@ -3111,15 +3110,14 @@ impl<'a> Interpreter<'a> {
                     None | Some(Value::Undefined) => 10,
                     Some(Value::Number(value)) if value.is_nan() => 10,
                     Some(Value::Number(value)) => {
-                        let radix = value.trunc();
-                        if !(2.0..=36.0).contains(&radix) {
+                        if *value < 2.0 || *value > 36.0 {
                             return Err(RuntimeError::new(
                                 RuntimeErrorKind::RangeError,
-                                "toString() radix must be between 2 and 36.",
+                                "Number.toString radix must be between 2 and 36.",
                                 span,
                             ));
                         }
-                        radix as u32
+                        value.trunc() as u32
                     }
                     Some(_) => {
                         return Err(RuntimeError::type_error(
@@ -7926,10 +7924,15 @@ mod tests {
             run_value("return (0.25).toExponential(1);"),
             string("2.5e-1")
         );
-        assert_eq!(run_value("return 'a'.repeat(-0.5);"), string(""));
         assert_eq!(run_value("return 'a'.repeat(2.9);"), string("aa"));
-        let error = run("return 'a'.repeat(-1);").expect_err("negative repeat");
-        assert_eq!(error.kind(), super::RuntimeErrorKind::RangeError);
+        for source in ["return 'a'.repeat(-0.5);", "return 'a'.repeat(-1);"] {
+            let error = run(source).expect_err("negative repeat");
+            assert_eq!(
+                error.kind(),
+                super::RuntimeErrorKind::RangeError,
+                "{source}"
+            );
+        }
         let error = run("return 'a'.repeat(Infinity);").expect_err("infinite repeat");
         assert_eq!(error.kind(), super::RuntimeErrorKind::RangeError);
         assert_eq!(
@@ -8348,7 +8351,8 @@ mod tests {
         assert_eq!(run_value("return [0].includes(-0);"), Value::Boolean(true));
         assert_eq!(run_value("return [0].indexOf(-0);"), number(0.0));
         assert_eq!(run_value("return 'ab'.repeat(3);"), string("ababab"));
-        assert_eq!(run_value("return 'x'.repeat(NaN);"), string(""));
+        let error = run("return 'x'.repeat(NaN);").expect_err("NaN repeat");
+        assert_eq!(error.kind(), super::RuntimeErrorKind::RangeError);
         assert_eq!(run_value("return 'x'.padStart(5, 'ab');"), string("ababx"));
         assert_eq!(run_value("return 'x'.padEnd(0);"), string("x"));
 
@@ -8383,8 +8387,11 @@ mod tests {
         for source in [
             "return 'x'.repeat(Infinity);",
             "return 'x'.repeat(-Infinity);",
+            "return 'x'.repeat(NaN);",
+            "return 'x'.repeat(-0.5);",
             "return 'x'.repeat(-1);",
             "return 'x'.padStart(Infinity);",
+            "return (255).toString(36.9);",
         ] {
             let error = run(source).expect_err("range-checked string size");
             assert_eq!(
