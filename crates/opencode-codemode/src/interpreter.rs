@@ -4107,9 +4107,6 @@ fn builtin_property(name: &str, key: &str) -> Value {
         ("Number", "EPSILON") => Value::Number(f64::EPSILON),
         ("Number", "MAX_VALUE") => Value::Number(f64::MAX),
         ("Number", "MIN_VALUE") => Value::Number(f64::from_bits(1)),
-        ("Number", "POSITIVE_INFINITY") => Value::Number(f64::INFINITY),
-        ("Number", "NEGATIVE_INFINITY") => Value::Number(f64::NEG_INFINITY),
-        ("Number", "NaN") => Value::Number(f64::NAN),
         ("String", "fromCharCode") => Value::Builtin("String.fromCharCode"),
         ("String", "fromCodePoint") => Value::Builtin("String.fromCodePoint"),
         ("Object", "keys") => Value::Builtin("Object.keys"),
@@ -8117,7 +8114,17 @@ mod tests {
             run_value("return Number.isNaN(Math.max());"),
             Value::Boolean(false)
         );
-        assert_eq!(run_value("return typeof Math.sin;"), string("undefined"));
+        let error = run("return Math.sin(1);").expect_err("Math.sin is not implemented");
+        assert_eq!(error.kind(), super::RuntimeErrorKind::TypeError);
+        assert_eq!(
+            run_value("return typeof Number.POSITIVE_INFINITY;"),
+            string("undefined")
+        );
+        assert_eq!(
+            run_value("return typeof Number.NEGATIVE_INFINITY;"),
+            string("undefined")
+        );
+        assert_eq!(run_value("return typeof Number.NaN;"), string("undefined"));
         assert_eq!(run_value("return typeof isNaN;"), string("undefined"));
         assert_eq!(run_value("return typeof isFinite;"), string("undefined"));
         let error = run("return isNaN(1);").expect_err("isNaN is not a CodeMode global");
