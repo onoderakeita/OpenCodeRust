@@ -176,7 +176,14 @@ fn parse_time_part(text: &str) -> Option<(u32, u32, u32, u32, i32)> {
         Some(piece) => parse_seconds(piece)?,
         None => (0, 0),
     };
-    if pieces.next().is_some() || hours > 23 || minutes > 59 || seconds > 59 {
+    // ECMAScript accepts 24:00:00.000 as the end of the day and rolls it into
+    // the next day; any other hour-24 component is invalid.
+    if pieces.next().is_some()
+        || hours > 24
+        || (hours == 24 && (minutes != 0 || seconds != 0 || milliseconds != 0))
+        || minutes > 59
+        || seconds > 59
+    {
         return None;
     }
     Some((hours, minutes, seconds, milliseconds, offset_minutes))

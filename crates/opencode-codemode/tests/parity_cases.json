@@ -1,0 +1,1645 @@
+[
+  {
+    "expr": "'abc'.slice(-2)",
+    "expected": "bc"
+  },
+  {
+    "expr": "'abc'.slice(1, -1)",
+    "expected": "b"
+  },
+  {
+    "expr": "'abc'.substring(2, 0)",
+    "expected": "ab"
+  },
+  {
+    "expr": "'abc'.substr(-2, 1)",
+    "expected": "b"
+  },
+  {
+    "expr": "'abcabc'.indexOf('bc', 2)",
+    "expected": 4
+  },
+  {
+    "expr": "'abcabc'.lastIndexOf('bc', 3)",
+    "expected": 1
+  },
+  {
+    "expr": "'abc'.includes('b', 2)",
+    "expected": false
+  },
+  {
+    "expr": "'abc'.startsWith('bc', 1)",
+    "expected": true
+  },
+  {
+    "expr": "'abc'.endsWith('ab', 2)",
+    "expected": true
+  },
+  {
+    "expr": "'a'.padStart(3, 'xy')",
+    "expected": "xya"
+  },
+  {
+    "expr": "'a'.padEnd(4, 'xy')",
+    "expected": "axyx"
+  },
+  {
+    "expr": "'ab'.repeat(0)",
+    "expected": ""
+  },
+  {
+    "expr": "'ab'.repeat(2.9)",
+    "expected": "abab"
+  },
+  {
+    "expr": "'ab'.at(-1)",
+    "expected": "b"
+  },
+  {
+    "expr": "'ab'.charAt(5)",
+    "expected": ""
+  },
+  {
+    "expr": "String('ab'.charCodeAt(5))",
+    "expected": "NaN"
+  },
+  {
+    "expr": "String('ab'.codePointAt(5))",
+    "expected": "undefined"
+  },
+  {
+    "expr": "'abc'.replace('b', '[$&]')",
+    "expected": "a[b]c"
+  },
+  {
+    "expr": "'abc'.replace('', '-')",
+    "expected": "-abc"
+  },
+  {
+    "expr": "'abc'.replaceAll('', '-')",
+    "expected": "-a-b-c-"
+  },
+  {
+    "expr": "'a-b-c'.split('-', 2)",
+    "expected": [
+      "a",
+      "b"
+    ]
+  },
+  {
+    "expr": "'abc'.split('', 2)",
+    "expected": [
+      "a",
+      "b"
+    ]
+  },
+  {
+    "expr": "'abc'.concat('d', 1)",
+    "expected": "abcd1"
+  },
+  {
+    "expr": "'b'.localeCompare('a')",
+    "expected": 1
+  },
+  {
+    "expr": "'ABC'.toLowerCase()",
+    "expected": "abc"
+  },
+  {
+    "expr": "'abc'.toUpperCase()",
+    "expected": "ABC"
+  },
+  {
+    "expr": "[1,2,3].slice(-2)",
+    "expected": [
+      2,
+      3
+    ]
+  },
+  {
+    "expr": "[1,2,3].at(-1)",
+    "expected": 3
+  },
+  {
+    "expr": "[1,2,3].includes(2, -2)",
+    "expected": true
+  },
+  {
+    "expr": "[1,2,3].indexOf(2, -2)",
+    "expected": 1
+  },
+  {
+    "expr": "[1,2,3].lastIndexOf(2, -2)",
+    "expected": 1
+  },
+  {
+    "expr": "[1,[2,[3]]].flat(2)",
+    "expected": [
+      1,
+      2,
+      3
+    ]
+  },
+  {
+    "expr": "[1,2].concat([3],4)",
+    "expected": [
+      1,
+      2,
+      3,
+      4
+    ]
+  },
+  {
+    "expr": "[1,2,3].with(-1, 9)",
+    "expected": [
+      1,
+      2,
+      9
+    ]
+  },
+  {
+    "expr": "[1,2,3].fill(0, 1)",
+    "expected": [
+      1,
+      0,
+      0
+    ]
+  },
+  {
+    "expr": "[1,2,3,4].copyWithin(0, 2)",
+    "expected": [
+      3,
+      4,
+      3,
+      4
+    ]
+  },
+  {
+    "expr": "[3,1,2].toSorted()",
+    "expected": [
+      1,
+      2,
+      3
+    ]
+  },
+  {
+    "expr": "[1,2,3].reverse()",
+    "expected": [
+      3,
+      2,
+      1
+    ]
+  },
+  {
+    "expr": "[1,2,3].join('-')",
+    "expected": "1-2-3"
+  },
+  {
+    "expr": "String([null, undefined, 1].join(','))",
+    "expected": ",,1"
+  },
+  {
+    "expr": "[1,2,3].reduce((a,b)=>a+b)",
+    "expected": 6
+  },
+  {
+    "expr": "[1,2,3].reduceRight((a,b)=>a-b)",
+    "expected": 0
+  },
+  {
+    "expr": "[1,2,3].findLast(x => x < 3)",
+    "expected": 2
+  },
+  {
+    "expr": "[1,2,3].findLastIndex(x => x < 3)",
+    "expected": 1
+  },
+  {
+    "expr": "[[1],[2]].flatMap(x => x.concat([3]))",
+    "expected": [
+      1,
+      3,
+      2,
+      3
+    ]
+  },
+  {
+    "expr": "[1,2,3].every(x => x > 0)",
+    "expected": true
+  },
+  {
+    "expr": "[1,2,3].some(x => x > 2)",
+    "expected": true
+  },
+  {
+    "expr": "Array.of(1,2,3)",
+    "expected": [
+      1,
+      2,
+      3
+    ]
+  },
+  {
+    "expr": "Array.from('ab')",
+    "expected": [
+      "a",
+      "b"
+    ]
+  },
+  {
+    "expr": "Array.from({length: 3}, (_, i) => i)",
+    "expected": [
+      0,
+      1,
+      2
+    ]
+  },
+  {
+    "expr": "Array.isArray([])",
+    "expected": true
+  },
+  {
+    "expr": "(1.005).toFixed(2)",
+    "expected": "1.00"
+  },
+  {
+    "expr": "(2.5).toFixed(0)",
+    "expected": "3"
+  },
+  {
+    "expr": "(-2.5).toFixed(0)",
+    "expected": "-3"
+  },
+  {
+    "expr": "(123.456).toPrecision(4)",
+    "expected": "123.5"
+  },
+  {
+    "expr": "(0.000123).toPrecision(2)",
+    "expected": "0.00012"
+  },
+  {
+    "expr": "(12345).toExponential(2)",
+    "expected": "1.23e+4"
+  },
+  {
+    "expr": "(255).toString(16)",
+    "expected": "ff"
+  },
+  {
+    "expr": "(0.1 + 0.2).toFixed(1)",
+    "expected": "0.3"
+  },
+  {
+    "expr": "Number.isInteger(5.0)",
+    "expected": true
+  },
+  {
+    "expr": "Number.isSafeInteger(2**53)",
+    "expected": false
+  },
+  {
+    "expr": "Number.parseFloat('3.14abc')",
+    "expected": 3.14
+  },
+  {
+    "expr": "parseInt('0x10')",
+    "expected": 16
+  },
+  {
+    "expr": "parseInt('10', 2)",
+    "expected": 2
+  },
+  {
+    "expr": "parseFloat('-.5')",
+    "expected": -0.5
+  },
+  {
+    "expr": "Number('  12  ')",
+    "expected": 12
+  },
+  {
+    "expr": "Number('')",
+    "expected": 0
+  },
+  {
+    "expr": "Number('0b101')",
+    "expected": 5
+  },
+  {
+    "expr": "Number.isNaN(NaN)",
+    "expected": true
+  },
+  {
+    "expr": "Object.keys(JSON.parse('{\"b\":1,\"2\":2,\"a\":3}')).join(',')",
+    "expected": "2,b,a"
+  },
+  {
+    "expr": "Object.keys({b:1, 2:2, a:3}).join(',')",
+    "expected": "2,b,a"
+  },
+  {
+    "expr": "JSON.stringify({a:undefined,b:1})",
+    "expected": "{\"b\":1}"
+  },
+  {
+    "expr": "JSON.stringify({d: new Date(0)})",
+    "expected": "{\"d\":\"1970-01-01T00:00:00.000Z\"}"
+  },
+  {
+    "expr": "JSON.stringify({a:1,b:[2,3]}, null, 2)",
+    "expected": "{\n  \"a\": 1,\n  \"b\": [\n    2,\n    3\n  ]\n}"
+  },
+  {
+    "expr": "Object.fromEntries([['a',1],['a',2]])",
+    "expected": {
+      "a": 2
+    }
+  },
+  {
+    "expr": "Object.entries({a:1})",
+    "expected": [
+      [
+        "a",
+        1
+      ]
+    ]
+  },
+  {
+    "expr": "Object.assign({a:1},{b:2},{a:3})",
+    "expected": {
+      "a": 3,
+      "b": 2
+    }
+  },
+  {
+    "expr": "Object.hasOwn({a:1}, 'a')",
+    "expected": true
+  },
+  {
+    "expr": "Object.values({2:'b',1:'a'})",
+    "expected": [
+      "a",
+      "b"
+    ]
+  },
+  {
+    "expr": "JSON.stringify(Object.fromEntries(new Map([['a',1],['b',2]])))",
+    "expected": "{\"a\":1,\"b\":2}"
+  },
+  {
+    "expr": "new Date(Date.UTC(2024,0,2,3,4,5,6)).toISOString()",
+    "expected": "2024-01-02T03:04:05.006Z"
+  },
+  {
+    "expr": "Date.UTC(99,0,1)",
+    "expected": 915148800000
+  },
+  {
+    "expr": "Date.UTC(2024,12,1)",
+    "expected": 1735689600000
+  },
+  {
+    "expr": "new Date(0).getUTCFullYear()",
+    "expected": 1970
+  },
+  {
+    "expr": "new Date('2024-01-02').toISOString()",
+    "expected": "2024-01-02T00:00:00.000Z"
+  },
+  {
+    "expr": "new Date(0).toJSON()",
+    "expected": "1970-01-01T00:00:00.000Z"
+  },
+  {
+    "expr": "String(Math.max())",
+    "expected": "-Infinity"
+  },
+  {
+    "expr": "String(Math.min())",
+    "expected": "Infinity"
+  },
+  {
+    "expr": "Math.hypot(3,4)",
+    "expected": 5
+  },
+  {
+    "expr": "1/Math.sign(-0)",
+    "expected": null
+  },
+  {
+    "expr": "Math.trunc(-1.9)",
+    "expected": -1
+  },
+  {
+    "expr": "1/Math.round(-0.5)",
+    "expected": null
+  },
+  {
+    "expr": "encodeURIComponent('a b&c')",
+    "expected": "a%20b%26c"
+  },
+  {
+    "expr": "encodeURI('http://a/b?c=d&e#f')",
+    "expected": "http://a/b?c=d&e#f"
+  },
+  {
+    "expr": "decodeURI('%3F%23')",
+    "expected": "%3F%23"
+  },
+  {
+    "expr": "decodeURIComponent('%3F%23')",
+    "expected": "?#"
+  },
+  {
+    "expr": "[...new Map([['a',1],['b',2]])].length",
+    "expected": 2
+  },
+  {
+    "expr": "[...new Set([1,2,1])].length",
+    "expected": 2
+  },
+  {
+    "expr": "new Map([['a',1]]).get('a')",
+    "expected": 1
+  },
+  {
+    "expr": "new Set('aba').size",
+    "expected": 2
+  },
+  {
+    "expr": "'abc'.slice(-10)",
+    "expected": "abc"
+  },
+  {
+    "expr": "'abc'.slice(10)",
+    "expected": ""
+  },
+  {
+    "expr": "'abc'.substring(-1, 2)",
+    "expected": "ab"
+  },
+  {
+    "expr": "'abc'.substr(1, -1)",
+    "expected": ""
+  },
+  {
+    "expr": "'abc'.indexOf('', 99)",
+    "expected": 3
+  },
+  {
+    "expr": "'abc'.lastIndexOf('', -1)",
+    "expected": 0
+  },
+  {
+    "expr": "'aaa'.lastIndexOf('a', 1)",
+    "expected": 1
+  },
+  {
+    "expr": "'abc'.includes('', 99)",
+    "expected": true
+  },
+  {
+    "expr": "'abc'.startsWith('', 99)",
+    "expected": true
+  },
+  {
+    "expr": "'abc'.endsWith('', -1)",
+    "expected": true
+  },
+  {
+    "expr": "'abc'.repeat(1.9)",
+    "expected": "abc"
+  },
+  {
+    "expr": "'abc'.padStart(2)",
+    "expected": "abc"
+  },
+  {
+    "expr": "'abc'.padStart(6)",
+    "expected": "   abc"
+  },
+  {
+    "expr": "'abc'.padStart(6, '')",
+    "expected": "abc"
+  },
+  {
+    "expr": "'abc'.at(0)",
+    "expected": "a"
+  },
+  {
+    "expr": "String('abc'.at(10))",
+    "expected": "undefined"
+  },
+  {
+    "expr": "'abc'.charAt(-1)",
+    "expected": ""
+  },
+  {
+    "expr": "'abc'.replace('b', '$1')",
+    "expected": "a$1c"
+  },
+  {
+    "expr": "'abc'.replace('b', '$`')",
+    "expected": "aac"
+  },
+  {
+    "expr": "'abc'.replace('b', \"$'\")",
+    "expected": "acc"
+  },
+  {
+    "expr": "'abc'.replace('b', '$$')",
+    "expected": "a$c"
+  },
+  {
+    "expr": "'abc'.replaceAll('b', 'x')",
+    "expected": "axc"
+  },
+  {
+    "expr": "'abc'.split('b', 0).length",
+    "expected": 0
+  },
+  {
+    "expr": "'abc'.split(undefined)",
+    "expected": [
+      "abc"
+    ]
+  },
+  {
+    "expr": "'abc'.concat()",
+    "expected": "abc"
+  },
+  {
+    "expr": "'a'.localeCompare('a')",
+    "expected": 0
+  },
+  {
+    "expr": "[].flat()",
+    "expected": []
+  },
+  {
+    "expr": "[1,[2]].flat(0)",
+    "expected": [
+      1,
+      [
+        2
+      ]
+    ]
+  },
+  {
+    "expr": "[1,[2]].flat(NaN)",
+    "expected": [
+      1,
+      [
+        2
+      ]
+    ]
+  },
+  {
+    "expr": "[1,2,3].slice(1, -1)",
+    "expected": [
+      2
+    ]
+  },
+  {
+    "expr": "[1,2,3].slice(-10, 10)",
+    "expected": [
+      1,
+      2,
+      3
+    ]
+  },
+  {
+    "expr": "String([1,2,3].at(10))",
+    "expected": "undefined"
+  },
+  {
+    "expr": "String([1,2,3].at(-10))",
+    "expected": "undefined"
+  },
+  {
+    "expr": "[1,2,3].includes(1, -10)",
+    "expected": true
+  },
+  {
+    "expr": "[1,2,3].indexOf(1, NaN)",
+    "expected": 0
+  },
+  {
+    "expr": "[1,2,3].indexOf(3, -1)",
+    "expected": 2
+  },
+  {
+    "expr": "[1,2,3].lastIndexOf(1, -10)",
+    "expected": -1
+  },
+  {
+    "expr": "[1,2,3].with(0, 9)",
+    "expected": [
+      9,
+      2,
+      3
+    ]
+  },
+  {
+    "expr": "[1,2,3].fill(9, -2)",
+    "expected": [
+      1,
+      9,
+      9
+    ]
+  },
+  {
+    "expr": "[1,2,3].fill(9, 2, 1)",
+    "expected": [
+      1,
+      2,
+      3
+    ]
+  },
+  {
+    "expr": "[1,2,3,4,5].copyWithin(1, 3)",
+    "expected": [
+      1,
+      4,
+      5,
+      4,
+      5
+    ]
+  },
+  {
+    "expr": "[1,2,3].copyWithin(-2, 0)",
+    "expected": [
+      1,
+      1,
+      2
+    ]
+  },
+  {
+    "expr": "[].reduce((a,b)=>a+b, 10)",
+    "expected": 10
+  },
+  {
+    "expr": "[1].reduce((a,b)=>a+b)",
+    "expected": 1
+  },
+  {
+    "expr": "[1,2,3].reduceRight((a,b)=>a+b)",
+    "expected": 6
+  },
+  {
+    "expr": "String([1,2,3].find(x => x > 9))",
+    "expected": "undefined"
+  },
+  {
+    "expr": "[1,2,3].findIndex(x => x > 9)",
+    "expected": -1
+  },
+  {
+    "expr": "[1,2,3].filter(x => x % 2)",
+    "expected": [
+      1,
+      3
+    ]
+  },
+  {
+    "expr": "[1,2,3].map((x,i) => x + i)",
+    "expected": [
+      1,
+      3,
+      5
+    ]
+  },
+  {
+    "expr": "[3,10,2].sort()",
+    "expected": [
+      10,
+      2,
+      3
+    ]
+  },
+  {
+    "expr": "[10,2,3].sort((a,b)=>a-b)",
+    "expected": [
+      2,
+      3,
+      10
+    ]
+  },
+  {
+    "expr": "[undefined,2,1].sort((a,b)=>a-b).map(String)",
+    "expected": [
+      "1",
+      "2",
+      "undefined"
+    ]
+  },
+  {
+    "expr": "[1,2,3].join()",
+    "expected": "1,2,3"
+  },
+  {
+    "expr": "Array.from(new Set([1,2]))",
+    "expected": [
+      1,
+      2
+    ]
+  },
+  {
+    "expr": "Array.from(new Map([['a',1]]))",
+    "expected": [
+      [
+        "a",
+        1
+      ]
+    ]
+  },
+  {
+    "expr": "Array.from('')",
+    "expected": []
+  },
+  {
+    "expr": "Array.from(5)",
+    "expected": []
+  },
+  {
+    "expr": "Array.of()",
+    "expected": []
+  },
+  {
+    "expr": "(0).toFixed(0)",
+    "expected": "0"
+  },
+  {
+    "expr": "(-0.4).toFixed(0)",
+    "expected": "-0"
+  },
+  {
+    "expr": "(1e21).toFixed(2)",
+    "expected": "1e+21"
+  },
+  {
+    "expr": "(1e-7).toFixed(10)",
+    "expected": "0.0000001000"
+  },
+  {
+    "expr": "(123.456).toPrecision(1)",
+    "expected": "1e+2"
+  },
+  {
+    "expr": "(0.000123).toPrecision(1)",
+    "expected": "0.0001"
+  },
+  {
+    "expr": "(12345).toPrecision(10)",
+    "expected": "12345.00000"
+  },
+  {
+    "expr": "(0).toExponential(0)",
+    "expected": "0e+0"
+  },
+  {
+    "expr": "(12345).toExponential(0)",
+    "expected": "1e+4"
+  },
+  {
+    "expr": "(25).toString(2)",
+    "expected": "11001"
+  },
+  {
+    "expr": "(35).toString(36)",
+    "expected": "z"
+  },
+  {
+    "expr": "(-255).toString(16)",
+    "expected": "-ff"
+  },
+  {
+    "expr": "Number.MAX_SAFE_INTEGER",
+    "expected": 9007199254740991
+  },
+  {
+    "expr": "Number.EPSILON",
+    "expected": 2.220446049250313e-16
+  },
+  {
+    "expr": "Number.MIN_VALUE",
+    "expected": 5e-324
+  },
+  {
+    "expr": "Number.MAX_VALUE",
+    "expected": 1.7976931348623157e+308
+  },
+  {
+    "expr": "Number.isFinite('5')",
+    "expected": false
+  },
+  {
+    "expr": "Number.isInteger(5.5)",
+    "expected": false
+  },
+  {
+    "expr": "String(parseInt('123', 37))",
+    "expected": "NaN"
+  },
+  {
+    "expr": "String(parseInt('123', 1))",
+    "expected": "NaN"
+  },
+  {
+    "expr": "parseInt('0b11')",
+    "expected": 0
+  },
+  {
+    "expr": "String(parseInt('-0'))",
+    "expected": "0"
+  },
+  {
+    "expr": "String(parseFloat('Infinity'))",
+    "expected": "Infinity"
+  },
+  {
+    "expr": "parseFloat('0x10')",
+    "expected": 0
+  },
+  {
+    "expr": "String(Number('Infinity'))",
+    "expected": "Infinity"
+  },
+  {
+    "expr": "Number('0o10')",
+    "expected": 8
+  },
+  {
+    "expr": "Number('  ')",
+    "expected": 0
+  },
+  {
+    "expr": "JSON.stringify({b:2,a:1})",
+    "expected": "{\"b\":2,\"a\":1}"
+  },
+  {
+    "expr": "JSON.stringify({2:'b',1:'a'})",
+    "expected": "{\"1\":\"a\",\"2\":\"b\"}"
+  },
+  {
+    "expr": "JSON.stringify([1,[2,{a:3}]])",
+    "expected": "[1,[2,{\"a\":3}]]"
+  },
+  {
+    "expr": "JSON.stringify('x')",
+    "expected": "\"x\""
+  },
+  {
+    "expr": "JSON.parse('null')",
+    "expected": null
+  },
+  {
+    "expr": "JSON.parse('{\"a\":1,\"a\":2}')",
+    "expected": {
+      "a": 2
+    }
+  },
+  {
+    "expr": "Object.keys({})",
+    "expected": []
+  },
+  {
+    "expr": "Object.values({})",
+    "expected": []
+  },
+  {
+    "expr": "Object.entries({})",
+    "expected": []
+  },
+  {
+    "expr": "Object.assign({}, null, undefined)",
+    "expected": {}
+  },
+  {
+    "expr": "Object.fromEntries(new Map([['a',1]]))",
+    "expected": {
+      "a": 1
+    }
+  },
+  {
+    "expr": "Object.hasOwn({}, 'toString')",
+    "expected": false
+  },
+  {
+    "expr": "new Date(Date.UTC(1970,0,1)).getTime()",
+    "expected": 0
+  },
+  {
+    "expr": "new Date(0).getUTCMonth()",
+    "expected": 0
+  },
+  {
+    "expr": "new Date(-1).toISOString()",
+    "expected": "1969-12-31T23:59:59.999Z"
+  },
+  {
+    "expr": "new Date(86400000).toISOString()",
+    "expected": "1970-01-02T00:00:00.000Z"
+  },
+  {
+    "expr": "new Date(Date.UTC(2024,1,29)).toISOString()",
+    "expected": "2024-02-29T00:00:00.000Z"
+  },
+  {
+    "expr": "new Date(Date.UTC(2023,1,29)).toISOString()",
+    "expected": "2023-03-01T00:00:00.000Z"
+  },
+  {
+    "expr": "new Date('2024-01-02T03:04:05Z').toISOString()",
+    "expected": "2024-01-02T03:04:05.000Z"
+  },
+  {
+    "expr": "new Date('2024-01-02T03:04:05.123Z').toISOString()",
+    "expected": "2024-01-02T03:04:05.123Z"
+  },
+  {
+    "expr": "String(Date.parse('not a date'))",
+    "expected": "NaN"
+  },
+  {
+    "expr": "new Date(8640000000000000).toISOString().slice(0, 10)",
+    "expected": "+275760-09"
+  },
+  {
+    "expr": "String(new Date(8640000000000001))",
+    "expected": "Invalid Date"
+  },
+  {
+    "expr": "1/Math.abs(-0)",
+    "expected": null
+  },
+  {
+    "expr": "1/Math.ceil(-0.5)",
+    "expected": null
+  },
+  {
+    "expr": "Math.floor(-0.5)",
+    "expected": -1
+  },
+  {
+    "expr": "Math.round(2.5)",
+    "expected": 3
+  },
+  {
+    "expr": "Math.round(-2.5)",
+    "expected": -2
+  },
+  {
+    "expr": "Math.round(0.49999999999999994)",
+    "expected": 0
+  },
+  {
+    "expr": "String(Math.max(1, NaN))",
+    "expected": "NaN"
+  },
+  {
+    "expr": "1/Math.min(-0, 0)",
+    "expected": null
+  },
+  {
+    "expr": "Math.pow(2, 10)",
+    "expected": 1024
+  },
+  {
+    "expr": "String(Math.sqrt(-1))",
+    "expected": "NaN"
+  },
+  {
+    "expr": "String(Math.log(0))",
+    "expected": "-Infinity"
+  },
+  {
+    "expr": "String(Math.log(-1))",
+    "expected": "NaN"
+  },
+  {
+    "expr": "Math.exp(1)",
+    "expected": 2.718281828459045
+  },
+  {
+    "expr": "Math.sign(0)",
+    "expected": 0
+  },
+  {
+    "expr": "Math.sign(-2)",
+    "expected": -1
+  },
+  {
+    "expr": "String([...new Map([[NaN,1]]).keys()][0])",
+    "expected": "NaN"
+  },
+  {
+    "expr": "new Map([[0,'a'],[-0,'b']]).size",
+    "expected": 1
+  },
+  {
+    "expr": "new Set([0,-0]).size",
+    "expected": 1
+  },
+  {
+    "expr": "new Set([NaN,NaN]).size",
+    "expected": 1
+  },
+  {
+    "expr": "new Map([['a',1]]).has('a')",
+    "expected": true
+  },
+  {
+    "expr": "JSON.stringify(new Set([1]))",
+    "expected": "{}"
+  },
+  {
+    "expr": "JSON.stringify(new Map([['a',1]]))",
+    "expected": "{}"
+  },
+  {
+    "expr": "new Date('2024-01-02T03:04:05+09:00').toISOString()",
+    "expected": "2024-01-01T18:04:05.000Z"
+  },
+  {
+    "expr": "new Date('2024-01-02T03:04:05.123+09:00').toISOString()",
+    "expected": "2024-01-01T18:04:05.123Z"
+  },
+  {
+    "expr": "new Date('2024-01-02T03:04:05.123-05:30').toISOString()",
+    "expected": "2024-01-02T08:34:05.123Z"
+  },
+  {
+    "expr": "new Date('2024-01-02T03:04:05.123456Z').toISOString()",
+    "expected": "2024-01-02T03:04:05.123Z"
+  },
+  {
+    "expr": "new Date('2024-01-02T03:04:05.1Z').toISOString()",
+    "expected": "2024-01-02T03:04:05.100Z"
+  },
+  {
+    "expr": "new Date('2024-01-02T03:04:05.12Z').toISOString()",
+    "expected": "2024-01-02T03:04:05.120Z"
+  },
+  {
+    "expr": "new Date('2024-01-02T24:00:00Z').toISOString()",
+    "expected": "2024-01-03T00:00:00.000Z"
+  },
+  {
+    "expr": "String(new Date('2024-13-01'))",
+    "expected": "Invalid Date"
+  },
+  {
+    "expr": "String(new Date(NaN))",
+    "expected": "Invalid Date"
+  },
+  {
+    "expr": "String(Date.UTC())",
+    "expected": "NaN"
+  },
+  {
+    "expr": "Date.UTC(2024, 0, 1, 0, 0, 0, 0)",
+    "expected": 1704067200000
+  },
+  {
+    "expr": "new Date(-62167219200000).getUTCFullYear()",
+    "expected": 0
+  },
+  {
+    "expr": "new Date(0).getUTCDay()",
+    "expected": 4
+  },
+  {
+    "expr": "new Date(Date.UTC(2024, 8, 1)).getUTCDay()",
+    "expected": 0
+  },
+  {
+    "expr": "String(0.000001)",
+    "expected": "0.000001"
+  },
+  {
+    "expr": "String(0.0000001)",
+    "expected": "1e-7"
+  },
+  {
+    "expr": "String(1e20)",
+    "expected": "100000000000000000000"
+  },
+  {
+    "expr": "String(1e21)",
+    "expected": "1e+21"
+  },
+  {
+    "expr": "String(-0)",
+    "expected": "0"
+  },
+  {
+    "expr": "String(NaN)",
+    "expected": "NaN"
+  },
+  {
+    "expr": "String(Infinity)",
+    "expected": "Infinity"
+  },
+  {
+    "expr": "String(1.5e-10)",
+    "expected": "1.5e-10"
+  },
+  {
+    "expr": "(1234.5678).toFixed(2)",
+    "expected": "1234.57"
+  },
+  {
+    "expr": "(0.000001).toFixed(7)",
+    "expected": "0.0000010"
+  },
+  {
+    "expr": "(-0).toFixed(2)",
+    "expected": "0.00"
+  },
+  {
+    "expr": "(1e-10).toPrecision(2)",
+    "expected": "1.0e-10"
+  },
+  {
+    "expr": "(999.999).toPrecision(4)",
+    "expected": "1000"
+  },
+  {
+    "expr": "(999.999).toPrecision(3)",
+    "expected": "1.00e+3"
+  },
+  {
+    "expr": "(0.00001).toExponential(1)",
+    "expected": "1.0e-5"
+  },
+  {
+    "expr": "(-12345).toExponential(1)",
+    "expected": "-1.2e+4"
+  },
+  {
+    "expr": "Number.isInteger(-0)",
+    "expected": true
+  },
+  {
+    "expr": "Number.isSafeInteger(Number.MAX_SAFE_INTEGER)",
+    "expected": true
+  },
+  {
+    "expr": "Object.keys([10,20])",
+    "expected": [
+      "0",
+      "1"
+    ]
+  },
+  {
+    "expr": "Object.fromEntries([])",
+    "expected": {}
+  },
+  {
+    "expr": "Object.values({a:1,b:2})",
+    "expected": [
+      1,
+      2
+    ]
+  },
+  {
+    "expr": "Object.keys({b:1, a:2, 10:3, 2:4})",
+    "expected": [
+      "2",
+      "10",
+      "b",
+      "a"
+    ]
+  },
+  {
+    "expr": "String(JSON.stringify(undefined))",
+    "expected": "undefined"
+  },
+  {
+    "expr": "JSON.stringify(null)",
+    "expected": "null"
+  },
+  {
+    "expr": "JSON.stringify(-0)",
+    "expected": "0"
+  },
+  {
+    "expr": "JSON.stringify(1e21)",
+    "expected": "1e+21"
+  },
+  {
+    "expr": "JSON.stringify({a:1}, null, '  ')",
+    "expected": "{\n  \"a\": 1\n}"
+  },
+  {
+    "expr": "JSON.stringify({a:1}, null, 20)",
+    "expected": "{\n          \"a\": 1\n}"
+  },
+  {
+    "expr": "JSON.stringify([1,2], null, 'abcdefghijklm')",
+    "expected": "[\nabcdefghij1,\nabcdefghij2\n]"
+  },
+  {
+    "expr": "JSON.parse('  [1]  ')",
+    "expected": [
+      1
+    ]
+  },
+  {
+    "expr": "JSON.parse('1')",
+    "expected": 1
+  },
+  {
+    "expr": "JSON.parse('\"x\"')",
+    "expected": "x"
+  },
+  {
+    "expr": "JSON.stringify([...new Map([['a',1],['b',2]]).keys()])",
+    "expected": "[\"a\",\"b\"]"
+  },
+  {
+    "expr": "JSON.stringify([...new Map([['a',1],['b',2]]).values()])",
+    "expected": "[1,2]"
+  },
+  {
+    "expr": "new Map([['a',1]]).set('a',2).get('a')",
+    "expected": 2
+  },
+  {
+    "expr": "new Map().set(NaN,1).has(NaN)",
+    "expected": true
+  },
+  {
+    "expr": "new Set([1,2]).delete(3)",
+    "expected": false
+  },
+  {
+    "expr": "new Set([1,2]).add(2).size",
+    "expected": 2
+  },
+  {
+    "expr": "JSON.stringify([...new Set([2,1,2])])",
+    "expected": "[2,1]"
+  },
+  {
+    "expr": "JSON.stringify([...new Map([['a',1]])].map(([k,v]) => k + v))",
+    "expected": "[\"a1\"]"
+  },
+  {
+    "expr": "'a' + 1",
+    "expected": "a1"
+  },
+  {
+    "expr": "String(null + 1)",
+    "expected": "1"
+  },
+  {
+    "expr": "String(undefined + 1)",
+    "expected": "NaN"
+  },
+  {
+    "expr": "[] + []",
+    "expected": ""
+  },
+  {
+    "expr": "[1] + [2]",
+    "expected": "12"
+  },
+  {
+    "expr": "({}) + ''",
+    "expected": "[object Object]"
+  },
+  {
+    "expr": "[1,2] == '1,2'",
+    "expected": true
+  },
+  {
+    "expr": "null == undefined",
+    "expected": true
+  },
+  {
+    "expr": "null == 0",
+    "expected": false
+  },
+  {
+    "expr": "'' == 0",
+    "expected": true
+  },
+  {
+    "expr": "'0' == false",
+    "expected": true
+  },
+  {
+    "expr": "1 < 2 < 3",
+    "expected": true
+  },
+  {
+    "expr": "3 > 2 > 1",
+    "expected": false
+  },
+  {
+    "expr": "'10' < '9'",
+    "expected": true
+  },
+  {
+    "expr": "NaN == NaN",
+    "expected": false
+  },
+  {
+    "expr": "0 === -0",
+    "expected": true
+  },
+  {
+    "expr": "typeof null",
+    "expected": "object"
+  },
+  {
+    "expr": "typeof []",
+    "expected": "object"
+  },
+  {
+    "expr": "typeof function(){}",
+    "expected": "function"
+  },
+  {
+    "expr": "String(null?.a)",
+    "expected": "undefined"
+  },
+  {
+    "expr": "({a:1})?.a",
+    "expected": 1
+  },
+  {
+    "expr": "null ?? 5",
+    "expected": 5
+  },
+  {
+    "expr": "0 ?? 5",
+    "expected": 0
+  },
+  {
+    "expr": "`${ {a:1} }`",
+    "expected": "[object Object]"
+  },
+  {
+    "expr": "new Date(Date.UTC(2024, 0, 31, 23, 59, 59, 999)).toISOString()",
+    "expected": "2024-01-31T23:59:59.999Z"
+  },
+  {
+    "expr": "new Date(Date.UTC(2024, 11, 31, 23, 59, 59, 999) + 1).toISOString()",
+    "expected": "2025-01-01T00:00:00.000Z"
+  },
+  {
+    "expr": "new Date(-86400000).toISOString()",
+    "expected": "1969-12-31T00:00:00.000Z"
+  },
+  {
+    "expr": "Date.UTC(0, 0, 1)",
+    "expected": -2208988800000
+  },
+  {
+    "expr": "new Date(Date.UTC(99, 11, 31)).toISOString()",
+    "expected": "1999-12-31T00:00:00.000Z"
+  },
+  {
+    "expr": "new Date(Date.UTC(2024, 1, 30)).toISOString()",
+    "expected": "2024-03-01T00:00:00.000Z"
+  },
+  {
+    "expr": "new Date(Date.UTC(2024, -1, 1)).toISOString()",
+    "expected": "2023-12-01T00:00:00.000Z"
+  },
+  {
+    "expr": "new Date(Date.UTC(2024, 0, 1, 0, 0, 0, 1000)).toISOString()",
+    "expected": "2024-01-01T00:00:01.000Z"
+  },
+  {
+    "expr": "new Date(Date.UTC(2024, 0, 1, 0, 0, 0, -1)).toISOString()",
+    "expected": "2023-12-31T23:59:59.999Z"
+  },
+  {
+    "expr": "new Date(Date.UTC(2024, 5, 15, 12, 34, 56, 789)).getUTCMonth()",
+    "expected": 5
+  },
+  {
+    "expr": "new Date(Date.UTC(2024, 5, 15, 12, 34, 56, 789)).getUTCDate()",
+    "expected": 15
+  },
+  {
+    "expr": "new Date(Date.UTC(2024, 5, 15, 12, 34, 56, 789)).getUTCHours()",
+    "expected": 12
+  },
+  {
+    "expr": "new Date(Date.UTC(2024, 5, 15, 12, 34, 56, 789)).getUTCMinutes()",
+    "expected": 34
+  },
+  {
+    "expr": "new Date(Date.UTC(2024, 5, 15, 12, 34, 56, 789)).getUTCSeconds()",
+    "expected": 56
+  },
+  {
+    "expr": "new Date(Date.UTC(2024, 5, 15, 12, 34, 56, 789)).getUTCMilliseconds()",
+    "expected": 789
+  },
+  {
+    "expr": "new Date(Date.UTC(2024, 5, 15)).getUTCDay()",
+    "expected": 6
+  },
+  {
+    "expr": "(1.45).toFixed(1)",
+    "expected": "1.4"
+  },
+  {
+    "expr": "(1.55).toFixed(1)",
+    "expected": "1.6"
+  },
+  {
+    "expr": "(0.615).toFixed(2)",
+    "expected": "0.61"
+  },
+  {
+    "expr": "(1.7976931348623157e308).toFixed(2)",
+    "expected": "1.7976931348623157e+308"
+  },
+  {
+    "expr": "(5e-324).toFixed(2)",
+    "expected": "0.00"
+  },
+  {
+    "expr": "(123.456).toFixed(0)",
+    "expected": "123"
+  },
+  {
+    "expr": "(0.000001).toPrecision(1)",
+    "expected": "0.000001"
+  },
+  {
+    "expr": "(0.0000001).toPrecision(1)",
+    "expected": "1e-7"
+  },
+  {
+    "expr": "(1e21).toPrecision(3)",
+    "expected": "1.00e+21"
+  },
+  {
+    "expr": "(123.456).toExponential()",
+    "expected": "1.23456e+2"
+  },
+  {
+    "expr": "(0).toExponential()",
+    "expected": "0e+0"
+  },
+  {
+    "expr": "(1e-7).toExponential(3)",
+    "expected": "1.000e-7"
+  },
+  {
+    "expr": "String(0.1 + 0.2)",
+    "expected": "0.30000000000000004"
+  },
+  {
+    "expr": "(0.1 + 0.2).toPrecision(17)",
+    "expected": "0.30000000000000004"
+  },
+  {
+    "expr": "String(1e-6)",
+    "expected": "0.000001"
+  },
+  {
+    "expr": "String(1e-7)",
+    "expected": "1e-7"
+  },
+  {
+    "expr": "Object.fromEntries([['a',1],['b',2]])",
+    "expected": {
+      "a": 1,
+      "b": 2
+    }
+  },
+  {
+    "expr": "Object.fromEntries([[1,2],[true,3]])",
+    "expected": {
+      "1": 2,
+      "true": 3
+    }
+  },
+  {
+    "expr": "JSON.stringify(Object.fromEntries([['a']]))",
+    "expected": "{}"
+  },
+  {
+    "expr": "Object.fromEntries(new Map([['a',1],['a',2]]))",
+    "expected": {
+      "a": 2
+    }
+  },
+  {
+    "expr": "JSON.stringify([...new Map().set('a',1).set('b',2)])",
+    "expected": "[[\"a\",1],[\"b\",2]]"
+  },
+  {
+    "expr": "new Map([['a',1]]).delete('a')",
+    "expected": true
+  },
+  {
+    "expr": "(() => { const m = new Map([['a',1]]); m.clear(); return m.size; })()",
+    "expected": 0
+  },
+  {
+    "expr": "new Set([1,2,3]).delete(2)",
+    "expected": true
+  },
+  {
+    "expr": "(() => { const s = new Set([1]); s.add(2); return s.size; })()",
+    "expected": 2
+  },
+  {
+    "expr": "new Map([[1,'a'],[1,'b']]).size",
+    "expected": 1
+  },
+  {
+    "expr": "new Map([[1,'a'],[1,'b']]).get(1)",
+    "expected": "b"
+  },
+  {
+    "expr": "new Set([NaN,NaN,1]).size",
+    "expected": 2
+  },
+  {
+    "expr": "[...new Set([undefined,null])].join('|')",
+    "expected": "|"
+  },
+  {
+    "expr": "new Map([[{},1]]).has({})",
+    "expected": false
+  },
+  {
+    "expr": "(() => { const k = {}; return new Map([[k,1]]).has(k); })()",
+    "expected": true
+  },
+  {
+    "expr": "JSON.stringify({a:1}, null, 0)",
+    "expected": "{\"a\":1}"
+  },
+  {
+    "expr": "JSON.stringify({a:1}, null, -1)",
+    "expected": "{\"a\":1}"
+  },
+  {
+    "expr": "JSON.stringify({a:1}, null, 10)",
+    "expected": "{\n          \"a\": 1\n}"
+  },
+  {
+    "expr": "JSON.stringify({a:1}, null, '')",
+    "expected": "{\"a\":1}"
+  },
+  {
+    "expr": "JSON.stringify({a:1}, null, '\\t')",
+    "expected": "{\n\t\"a\": 1\n}"
+  },
+  {
+    "expr": "JSON.stringify({a:{b:{c:1}}}, null, 2)",
+    "expected": "{\n  \"a\": {\n    \"b\": {\n      \"c\": 1\n    }\n  }\n}"
+  },
+  {
+    "expr": "JSON.stringify([], null, 2)",
+    "expected": "[]"
+  },
+  {
+    "expr": "JSON.stringify({}, null, 2)",
+    "expected": "{}"
+  },
+  {
+    "expr": "JSON.stringify({a:[]}, null, 2)",
+    "expected": "{\n  \"a\": []\n}"
+  },
+  {
+    "expr": "JSON.parse('{\"a\":1, \"b\":[true,false,null]}')",
+    "expected": {
+      "a": 1,
+      "b": [
+        true,
+        false,
+        null
+      ]
+    }
+  },
+  {
+    "expr": "1/JSON.parse('-0')",
+    "expected": null
+  },
+  {
+    "expr": "String(JSON.parse('1e400'))",
+    "expected": "Infinity"
+  },
+  {
+    "expr": "JSON.stringify({a:1e400})",
+    "expected": "{\"a\":null}"
+  },
+  {
+    "expr": "JSON.stringify({a:NaN})",
+    "expected": "{\"a\":null}"
+  }
+]

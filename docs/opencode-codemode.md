@@ -130,15 +130,20 @@ shadowingできる。
   配列を `(index)\t...` 形式に整形する。
 - `Math`: abs、cbrt、ceil、floor、round、trunc、max、min、pow、sqrt、hypot、
   sign、log、log2、log10、exp、sin、cos、tan、PI、E、LN2、LN10、LOG2E、
-  LOG10E、SQRT2、SQRT1_2。
+  LOG10E、SQRT2、SQRT1_2。`round` は `0 < x < 0.5` を `+0` にし、
+  `0.49999999999999994` の二重丸めを避ける。負のゼロは保持する。
 - `JSON`: parse、stringify。objectのkey順はECMAScriptと同じく配列indexの
-  昇順、その後に挿入順で、parseでも入力順を保つ。stringifyは `undefined` を
-  objectから省略、arrayでは `null` にする。関数・callable・未await Promiseは
-  `InvalidDataValue`、循環参照と深すぎる値は `TypeError` にする。第3引数の
-  indent (数値0..10または先頭10文字の文字列) を受け付ける。replacerの配列・
-  関数は `UnsupportedSyntax` にする。Errorはindent指定時も整形する。
+  昇順、その後に挿入順で、parseでも入力順を保つ。`f64` を超える数値literal
+  (`1e400` など) は `Infinity` / `-Infinity` としてparseする。stringifyは
+  `undefined` をobjectから省略、arrayでは `null` にする。関数・callable・
+  未await Promiseは `InvalidDataValue`、循環参照と深すぎる値は `TypeError`
+  にする。第3引数のindent (数値0..10または先頭10文字の文字列) を受け付ける。
+  replacerの配列・関数は `UnsupportedSyntax` にする。Errorはindent指定時も
+  整形する。
 - `Number` statics: `Number.isNaN`、`isFinite`、`isInteger`、`isSafeInteger`、
-  `parseInt`、`parseFloat`、定数 (`MAX_SAFE_INTEGER` など)。
+  `parseInt`、`parseFloat`、定数 (`MAX_SAFE_INTEGER`、`MAX_VALUE`、
+  `MIN_VALUE` など)。`MIN_VALUE` は最小の正のsubnormal (`5e-324`) で、
+  `f64::MIN_POSITIVE` ではない。
 - `String` statics: `String.fromCharCode`、`String.fromCodePoint`。
 - URI helpers: `encodeURI` / `encodeURIComponent` はUTF-8をpercent-encodeし、
   `decodeURI` / `decodeURIComponent` は厳密なUTF-8として復号する。
@@ -160,7 +165,10 @@ shadowingできる。
   `Object.keys` / `values` / `entries`、`for...in`、`JSON.stringify`、
   spread、`Object.assign` に適用する。`for...in` はplain object、配列、
   `tools` 参照だけを受け、文字列・Map/Set・数値・nullは `TypeError` にする。
-- `Array`: isArray、of、from (array-like含む)。インスタンスmethodは map、filter、forEach、
+- `Array`: isArray、of、from (array-like含む)。`from` は配列・文字列・
+  Map/Set・数値lengthを持つobjectを変換し、それ以外 (数値、null、
+  lengthのないobjectなど) は空配列を返す。array-likeのlengthが上限を
+  超える場合は `TypeError` にする。インスタンスmethodは map、filter、forEach、
   reduce、reduceRight、find、findIndex、findLast、findLastIndex、some、
   every、join、slice、includes、indexOf、lastIndexOf、push、pop、shift、
   unshift、reverse、concat、flat、flatMap、sort、toSorted、toReversed、
@@ -177,8 +185,10 @@ shadowingできる。
   replace、replaceAll、concat、toString、localeCompare。`replace` 系は
   `$$` / `$&` / ``$` `` / `$'` のreplacement patternを展開し、callableの
   replacerは `(match, offset, input)` で呼ぶ。offsetはUTF-16 code unitで
-  数える。searchはstringのみを受け、それ以外は `TypeError` にする。trim系は
-  BOM (U+FEFF) も除去し、`<` / `>` の文字列比較はUTF-16 code unit順になる。
+  数える。searchはstringのみを受け、それ以外は `TypeError` にする。
+  `lastIndexOf` のpositionは絶対位置としてclampし、負数は0、`NaN` は
+  文字列長として扱う (`indexOf` / `includes` の負数は末尾からの相対)。
+  trim系はBOM (U+FEFF) も除去し、`<` / `>` の文字列比較はUTF-16 code unit順になる。
   `normalize` とRegExp依存のmatch系は未実装。
 - `Number` instance methods: toFixed、toPrecision、toExponential、toString
   (radix 2..36の整数)、valueOf。digitsが範囲外なら `RangeError` にする。
@@ -201,7 +211,8 @@ shadowingできる。
   非依存を優先した意図的な差分である。
 - `Date.parse` はISO 8601のsubset (`YYYY`、`YYYY-MM`、`YYYY-MM-DD`、
   `T`またはspace区切り、`Z` / `±HH:MM` / `±HHMM`) を受理し、zone省略時は
-  UTCとする。それ以外は `NaN`。
+  UTCとする。`24:00:00.000` は翌日として受理するが、hour 24で分秒以降が
+  非ゼロなら `NaN`。それ以外は `NaN`。
 - 文字列化と境界直列化はISO形式、無効日付は `toString()` が
   `Invalid Date`、境界では `null` になる。`toISOString()` は無効日付で
   `RangeError` を投げる。
@@ -257,13 +268,19 @@ shadowingできる。
 - TypeScriptの型消去・transpile parity
 - 非同期tool実行と未await rejectionの診断
 - 同期host呼び出しを中断するtimeout
-- upstream parity test suite
+- upstream parity test suiteの完全移植 (依存不要な差分コーパスは実装済み)
 
 ## Validation
 
 ```bash
 cargo test -p opencode-codemode
+markdownlint docs/opencode-codemode.md
 ```
+
+`tests/parity_corpus.rs` は依存不要なstdlib・coercion・operatorの差分
+コーパス (`tests/parity_cases.json`) を実行する。期待値はNode.jsで生成し、
+UTC固定Date・plain-object Errorなどupstream固有の差分をレビューして
+除外している。
 
 ## References
 

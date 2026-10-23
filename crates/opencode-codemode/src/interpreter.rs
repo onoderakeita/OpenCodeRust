@@ -1537,7 +1537,13 @@ impl<'a> Interpreter<'a> {
             "Math.floor" => Ok(Value::Number(to_number(&argument(0)).floor())),
             "Math.round" => {
                 let value = to_number(&argument(0));
-                let rounded = (value + 0.5).floor();
+                // ECMAScript rounds x in (0, 0.5) to +0. The guard matters for
+                // 0.49999999999999994, where `x + 0.5` rounds up to 1.0.
+                let rounded = if value > 0.0 && value < 0.5 {
+                    0.0
+                } else {
+                    (value + 0.5).floor()
+                };
                 Ok(Value::Number(if rounded == 0.0 && value < 0.0 {
                     -0.0
                 } else {
@@ -1565,14 +1571,17 @@ impl<'a> Interpreter<'a> {
                         _span,
                     ));
                 };
-                let json: serde_json::Value = serde_json::from_str(&text).map_err(|error| {
-                    RuntimeError::new(
-                        RuntimeErrorKind::SyntaxError,
-                        format!("JSON.parse failed: {error}"),
-                        _span,
-                    )
-                })?;
-                json_to_value(&json, _span)
+                let repaired = repair_overflow_numbers(&text);
+                let parse_text = repaired.as_deref().unwrap_or(&text);
+                let json: serde_json::Value =
+                    serde_json::from_str(parse_text).map_err(|error| {
+                        RuntimeError::new(
+                            RuntimeErrorKind::SyntaxError,
+                            format!("JSON.parse failed: {error}"),
+                            _span,
+                        )
+                    })?;
+                json_to_value_with_overflow(&json, _span, repaired.is_some())
             }
             "JSON.stringify" => {
                 if let Some(Value::Array(_)) | Some(Value::Function(_)) = arguments.get(1) {
@@ -1864,14 +1873,48 @@ impl<'a> Interpreter<'a> {
             "Array.of" => Ok(Value::array(arguments.to_vec())),
             "Array.from" => {
                 let source = argument(0);
-                let items = spread_items(&source)
-                    .or_else(|| array_like_items(&source))
-                    .ok_or_else(|| {
-                        RuntimeError::type_error(
-                            "Array.from expects an array, string, Map, Set, or array-like value.",
+                match coercion_issue(&source, &mut Vec::new()) {
+                    Some(CoercionIssue::Promise) => {
+                        return Err(RuntimeError::new(
+                            RuntimeErrorKind::InvalidDataValue,
+                            "Array.from input contains an un-awaited Promise; await it first.",
                             _span,
-                        )
-                    })?;
+                        ))
+                    }
+                    Some(CoercionIssue::NonData) => {
+                        return Err(RuntimeError::new(
+                            RuntimeErrorKind::InvalidDataValue,
+                            "Array.from input must contain data only.",
+                            _span,
+                        ))
+                    }
+                    None => {}
+                }
+                // Like upstream, a value that is neither iterable nor
+                // array-like yields an empty array instead of an error.
+                let items = match &source {
+                    Value::Array(_) | Value::String(_) | Value::Map(_) | Value::Set(_) => {
+                        spread_items(&source).unwrap_or_default()
+                    }
+                    Value::Object(object) => {
+                        // A numeric length is an array-like request; keep the
+                        // allocation guard instead of silently returning [].
+                        let oversized = match object.borrow().get("length") {
+                            Some(Value::Number(length)) if length.is_finite() && *length >= 0.0 => {
+                                length.trunc() > MAX_ARRAY_LIKE_LENGTH as f64
+                            }
+                            _ => false,
+                        };
+                        if oversized {
+                            return Err(RuntimeError::type_error(
+                                "Array.from array-like length exceeds the supported limit.",
+                                _span,
+                            ));
+                        }
+                        array_like_items(&source).unwrap_or_default()
+                    }
+                    _ => Vec::new(),
+                };
                 let mapper = arguments.get(1).cloned();
                 let items = match mapper {
                     Some(mapper) if !mapper.is_undefined() => {
@@ -2586,12 +2629,23 @@ impl<'a> Interpreter<'a> {
                 let needle: Vec<char> = to_js_string(&argument(0)).chars().collect();
                 let characters: Vec<char> = text.chars().collect();
                 let length = characters.len() as i64;
-                let default = if method == "String.indexOf" {
-                    0
+                let from = if method == "String.lastIndexOf" {
+                    // lastIndexOf takes an absolute position: negatives clamp to
+                    // 0 and NaN defaults to the end of the string.
+                    match arguments.get(1) {
+                        None | Some(Value::Undefined) => length,
+                        Some(value) => {
+                            let number = to_number(value);
+                            if number.is_nan() {
+                                length
+                            } else {
+                                (number.trunc() as i64).clamp(0, length)
+                            }
+                        }
+                    }
                 } else {
-                    length
-                };
-                let from = normalize_index(&argument(1), length, default).clamp(0, length) as usize;
+                    normalize_index(&argument(1), length, 0).clamp(0, length)
+                } as usize;
                 let matches = (0..=characters.len().saturating_sub(needle.len()))
                     .filter(|index| characters[*index..].starts_with(&needle))
                     .collect::<Vec<_>>();
@@ -3704,7 +3758,7 @@ fn builtin_property(name: &str, key: &str) -> Value {
         ("Number", "MIN_SAFE_INTEGER") => Value::Number(-9_007_199_254_740_991.0),
         ("Number", "EPSILON") => Value::Number(f64::EPSILON),
         ("Number", "MAX_VALUE") => Value::Number(f64::MAX),
-        ("Number", "MIN_VALUE") => Value::Number(f64::MIN_POSITIVE),
+        ("Number", "MIN_VALUE") => Value::Number(f64::from_bits(1)),
         ("Number", "POSITIVE_INFINITY") => Value::Number(f64::INFINITY),
         ("Number", "NEGATIVE_INFINITY") => Value::Number(f64::NEG_INFINITY),
         ("Number", "NaN") => Value::Number(f64::NAN),
@@ -4391,16 +4445,118 @@ fn is_js_whitespace(character: char) -> bool {
 }
 
 fn json_to_value(json: &serde_json::Value, span: Span) -> Result<Value, RuntimeError> {
+    json_to_value_with_overflow(json, span, false)
+}
+
+/// Placeholders used while parsing JSON numeric literals that overflow `f64`.
+///
+/// `serde_json` rejects `1e400`, while ECMAScript `JSON.parse` returns
+/// `Infinity`. The scanner below replaces only those literals, so the sentinels
+/// can be recognized after a successful parse.
+const POSITIVE_INFINITY_SENTINEL: &str = "__opencode_codemode_positive_infinity__";
+const NEGATIVE_INFINITY_SENTINEL: &str = "__opencode_codemode_negative_infinity__";
+
+/// Rewrites overflowing JSON number literals to sentinel strings.
+///
+/// Returns `None` when every number fits in `f64`, which keeps the common path
+/// identical to a plain `serde_json` parse. Strings are copied verbatim so
+/// digits and `-` inside string values are never touched.
+fn repair_overflow_numbers(source: &str) -> Option<String> {
+    let bytes = source.as_bytes();
+    let mut output = String::with_capacity(source.len() + 16);
+    let mut index = 0;
+    let mut changed = false;
+
+    while index < bytes.len() {
+        match bytes[index] {
+            b'"' => {
+                let start = index;
+                index += 1;
+                while index < bytes.len() {
+                    match bytes[index] {
+                        b'\\' => index = (index + 2).min(bytes.len()),
+                        b'"' => {
+                            index += 1;
+                            break;
+                        }
+                        _ => index += 1,
+                    }
+                }
+                output.push_str(&source[start..index]);
+            }
+            b'-' | b'0'..=b'9' => {
+                let start = index;
+                if bytes[index] == b'-' {
+                    index += 1;
+                }
+                while index < bytes.len() && bytes[index].is_ascii_digit() {
+                    index += 1;
+                }
+                if index < bytes.len() && bytes[index] == b'.' {
+                    index += 1;
+                    while index < bytes.len() && bytes[index].is_ascii_digit() {
+                        index += 1;
+                    }
+                }
+                if index < bytes.len() && matches!(bytes[index], b'e' | b'E') {
+                    index += 1;
+                    if index < bytes.len() && matches!(bytes[index], b'+' | b'-') {
+                        index += 1;
+                    }
+                    while index < bytes.len() && bytes[index].is_ascii_digit() {
+                        index += 1;
+                    }
+                }
+                let token = &source[start..index];
+                match token.parse::<f64>() {
+                    Ok(value) if value.is_infinite() => {
+                        output.push('"');
+                        output.push_str(if value.is_sign_negative() {
+                            NEGATIVE_INFINITY_SENTINEL
+                        } else {
+                            POSITIVE_INFINITY_SENTINEL
+                        });
+                        output.push('"');
+                        changed = true;
+                    }
+                    _ => output.push_str(token),
+                }
+            }
+            _ => {
+                let character = source[index..]
+                    .chars()
+                    .next()
+                    .expect("index is on a character boundary");
+                output.push(character);
+                index += character.len_utf8();
+            }
+        }
+    }
+
+    changed.then_some(output)
+}
+
+fn json_to_value_with_overflow(
+    json: &serde_json::Value,
+    span: Span,
+    allow_overflow_sentinels: bool,
+) -> Result<Value, RuntimeError> {
     use serde_json::Value as Json;
     Ok(match json {
         Json::Null => Value::Null,
         Json::Bool(value) => Value::Boolean(*value),
         Json::Number(value) => Value::Number(value.as_f64().unwrap_or(f64::NAN)),
+        Json::String(value) if allow_overflow_sentinels && value == POSITIVE_INFINITY_SENTINEL => {
+            Value::Number(f64::INFINITY)
+        }
+        Json::String(value) if allow_overflow_sentinels && value == NEGATIVE_INFINITY_SENTINEL => {
+            Value::Number(f64::NEG_INFINITY)
+        }
         Json::String(value) => Value::String(value.clone()),
         Json::Array(items) => Value::array(
             items
                 .iter()
-                .map(|item| json_to_value(item, span))
+                .map(|item| json_to_value_with_overflow(item, span, allow_overflow_sentinels))
                 .collect::<Result<Vec<_>, _>>()?,
         ),
         Json::Object(map) => {
@@ -4413,7 +4569,10 @@ fn json_to_value(json: &serde_json::Value, span: Span) -> Result<Value, RuntimeE
                         span,
                     ));
                 }
-                object.insert(key.clone(), json_to_value(value, span)?);
+                object.insert(
+                    key.clone(),
+                    json_to_value_with_overflow(value, span, allow_overflow_sentinels)?,
+                );
             }
             Value::Object(Rc::new(RefCell::new(object)))
         }
@@ -6106,6 +6265,72 @@ mod tests {
         );
         let error = run("return [1,2,3].map(42);").expect_err("non-callable callback");
         assert_eq!(error.kind(), super::RuntimeErrorKind::TypeError);
+    }
+
+    #[test]
+    fn matches_reference_edge_cases_found_by_the_corpus() {
+        assert_eq!(run_value("return 'abc'.lastIndexOf('', -1);"), number(0.0));
+        assert_eq!(
+            run_value("return 'abc'.lastIndexOf('', undefined);"),
+            number(3.0)
+        );
+        assert_eq!(
+            run_value("return JSON.stringify(Array.from(5));"),
+            string("[]")
+        );
+        assert_eq!(
+            run_value("return JSON.stringify(Array.from(undefined));"),
+            string("[]")
+        );
+        assert_eq!(
+            run_value("return String(Number.MIN_VALUE);"),
+            string("5e-324")
+        );
+        assert_eq!(
+            run_value("return Math.round(0.49999999999999994);"),
+            number(0.0)
+        );
+        assert_eq!(
+            run_value("return new Date('2024-01-02T24:00:00Z').toISOString();"),
+            string("2024-01-03T00:00:00.000Z")
+        );
+        assert_eq!(
+            run_value("return String(new Date('2024-01-02T24:00:01Z'));"),
+            string("Invalid Date")
+        );
+    }
+
+    #[test]
+    fn parses_overflowing_json_numbers_as_infinity() {
+        assert_eq!(
+            run_value("return String(JSON.parse('1e400'));"),
+            string("Infinity")
+        );
+        assert_eq!(
+            run_value("return String(JSON.parse('-1e400'));"),
+            string("-Infinity")
+        );
+        assert_eq!(
+            run_value("return String(JSON.parse('{\"a\":1e400}').a);"),
+            string("Infinity")
+        );
+        assert_eq!(
+            run_value("return JSON.stringify(JSON.parse('[1e400,-1e400]'));"),
+            string("[null,null]")
+        );
+        assert_eq!(
+            run_value("return JSON.parse('\"1e400\"');"),
+            string("1e400")
+        );
+        assert_eq!(
+            run_value("return JSON.parse('{\"1e400\":1}')['1e400'];"),
+            number(1.0)
+        );
+        assert_eq!(run_value("return JSON.parse('0e999');"), number(0.0));
+        assert_eq!(
+            run_value("return String(JSON.parse('1.7976931348623157e308'));"),
+            string("1.7976931348623157e+308")
+        );
     }
 
     #[test]
