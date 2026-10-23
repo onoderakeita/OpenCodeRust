@@ -170,13 +170,16 @@ shadowingできる。
   `parseInt` のradixはnumberまたは `undefined` だけを受け、他型は
   `TypeError` にする。Date/Map/Set/Errorはdataとしてcoercionする。
 - `Object`: keys、values、entries、hasOwn、fromEntries (配列とMap)、assign。
-  `keys` はdata objectと配列を受け、Date/Map/Set/Promiseでは空配列を返す。
+  `keys` はdata objectと配列を受け、Date/Map/Setでは空配列を返す。
   `values` / `entries` / `hasOwn` は配列とprimitiveを `TypeError` にし、
-  Date/Map/Set/Promiseでは `values` / `entries` が空配列、`hasOwn` が
-  `false` を返す。`assign` は全引数をsourceとして新しいobjectを返し、
-  Date/Map/Setは無視、未await Promiseは拒否する。object spreadも同様に
-  Date/Map/Setを無視し、配列と未await Promiseを拒否する。fromEntriesのkeyは
-  `String(...)` でcoercionする。列挙は
+  Date/Map/Setでは `values` / `entries` が空配列、`hasOwn` が `false` を
+  返す。未await Promiseとcallable/ToolRefはdata境界で
+  `InvalidDataValue` にする。`assign` は全引数をsourceとして新しいobjectを
+  返し、Date/Map/Setは無視、未await Promiseとcallable/ToolRefは拒否する。
+  object spreadも同様にDate/Map/Setを無視し、配列と未await Promiseを
+  拒否する。fromEntriesのkeyは `String(...)` でcoercionする。これらのstaticは引数をdata境界で深く検証し、
+  ネストしたcallable/Promise、blocked property、循環、深さ超過を
+  `InvalidDataValue` にする。列挙は
   ECMAScriptのproperty順 (配列indexの昇順、その後に挿入順) で行い、
   `Object.keys` / `values` / `entries`、`for...in`、`JSON.stringify`、
   spread、`Object.assign` に適用する。`for...in` はplain object、配列、

@@ -1782,10 +1782,25 @@ impl<'a> Interpreter<'a> {
                         .unwrap_or_default();
                     return Ok(Value::array(keys.into_iter().map(Value::String).collect()));
                 }
+                check_data_argument(&source, "Object.keys input", _span)?;
                 match &source {
                     Value::Object(_) | Value::Array(_) | Value::Error(_) => {}
-                    Value::Date(_) | Value::Map(_) | Value::Set(_) | Value::Promise(_) => {
+                    Value::Date(_) | Value::Map(_) | Value::Set(_) => {
                         return Ok(Value::array(Vec::new()));
+                    }
+                    Value::Promise(_) => {
+                        return Err(RuntimeError::new(
+                            RuntimeErrorKind::InvalidDataValue,
+                            "Object.keys input contains an un-awaited Promise; await it first.",
+                            _span,
+                        ));
+                    }
+                    Value::Function(_) | Value::Builtin(_) | Value::BoundMethod { .. } => {
+                        return Err(RuntimeError::new(
+                            RuntimeErrorKind::InvalidDataValue,
+                            "Object.keys input must contain data only.",
+                            _span,
+                        ));
                     }
                     _ => {
                         return Err(RuntimeError::type_error(
@@ -1801,15 +1816,31 @@ impl<'a> Interpreter<'a> {
             "Object.values" => {
                 let source = argument(0);
                 if source.tool_path().is_some() {
-                    return Err(RuntimeError::type_error(
+                    return Err(RuntimeError::new(
+                        RuntimeErrorKind::InvalidDataValue,
                         "Object.values cannot read tool references. Use Object.keys(tools) to discover names.",
                         _span,
                     ));
                 }
+                check_data_argument(&source, "Object.values input", _span)?;
                 match &source {
                     Value::Object(_) | Value::Error(_) => {}
-                    Value::Date(_) | Value::Map(_) | Value::Set(_) | Value::Promise(_) => {
+                    Value::Date(_) | Value::Map(_) | Value::Set(_) => {
                         return Ok(Value::array(Vec::new()));
+                    }
+                    Value::Promise(_) => {
+                        return Err(RuntimeError::new(
+                            RuntimeErrorKind::InvalidDataValue,
+                            "Object.values input contains an un-awaited Promise; await it first.",
+                            _span,
+                        ));
+                    }
+                    Value::Function(_) | Value::Builtin(_) | Value::BoundMethod { .. } => {
+                        return Err(RuntimeError::new(
+                            RuntimeErrorKind::InvalidDataValue,
+                            "Object.values input must contain data only.",
+                            _span,
+                        ));
                     }
                     _ => {
                         return Err(RuntimeError::type_error(
@@ -1827,15 +1858,31 @@ impl<'a> Interpreter<'a> {
             "Object.entries" => {
                 let source = argument(0);
                 if source.tool_path().is_some() {
-                    return Err(RuntimeError::type_error(
+                    return Err(RuntimeError::new(
+                        RuntimeErrorKind::InvalidDataValue,
                         "Object.entries cannot read tool references. Use Object.keys(tools) to discover names.",
                         _span,
                     ));
                 }
+                check_data_argument(&source, "Object.entries input", _span)?;
                 match &source {
                     Value::Object(_) | Value::Error(_) => {}
-                    Value::Date(_) | Value::Map(_) | Value::Set(_) | Value::Promise(_) => {
+                    Value::Date(_) | Value::Map(_) | Value::Set(_) => {
                         return Ok(Value::array(Vec::new()));
+                    }
+                    Value::Promise(_) => {
+                        return Err(RuntimeError::new(
+                            RuntimeErrorKind::InvalidDataValue,
+                            "Object.entries input contains an un-awaited Promise; await it first.",
+                            _span,
+                        ));
+                    }
+                    Value::Function(_) | Value::Builtin(_) | Value::BoundMethod { .. } => {
+                        return Err(RuntimeError::new(
+                            RuntimeErrorKind::InvalidDataValue,
+                            "Object.entries input must contain data only.",
+                            _span,
+                        ));
                     }
                     _ => {
                         return Err(RuntimeError::type_error(
@@ -1854,17 +1901,29 @@ impl<'a> Interpreter<'a> {
             "Object.hasOwn" => {
                 let source = argument(0);
                 if source.tool_path().is_some() {
-                    return Err(RuntimeError::type_error(
+                    return Err(RuntimeError::new(
+                        RuntimeErrorKind::InvalidDataValue,
                         "Object.hasOwn cannot read tool references. Use Object.keys(tools) to discover names.",
                         _span,
                     ));
                 }
+                check_data_argument(&source, "Object.hasOwn input", _span)?;
                 let key = to_js_string(&argument(1));
                 match &source {
                     Value::Object(object) => Ok(Value::Boolean(object.borrow().contains_key(&key))),
                     Value::Error(_) => Ok(Value::Boolean(own_keys(&source).contains(&key))),
-                    Value::Date(_) | Value::Map(_) | Value::Set(_) | Value::Promise(_) => {
-                        Ok(Value::Boolean(false))
+                    Value::Date(_) | Value::Map(_) | Value::Set(_) => Ok(Value::Boolean(false)),
+                    Value::Promise(_) => Err(RuntimeError::new(
+                        RuntimeErrorKind::InvalidDataValue,
+                        "Object.hasOwn input contains an un-awaited Promise; await it first.",
+                        _span,
+                    )),
+                    Value::Function(_) | Value::Builtin(_) | Value::BoundMethod { .. } => {
+                        Err(RuntimeError::new(
+                            RuntimeErrorKind::InvalidDataValue,
+                            "Object.hasOwn input must contain data only.",
+                            _span,
+                        ))
                     }
                     _ => Err(RuntimeError::type_error(
                         "Object.hasOwn expects a data object.",
@@ -1875,12 +1934,32 @@ impl<'a> Interpreter<'a> {
             "Object.fromEntries" => {
                 let source = argument(0);
                 let items = match &source {
-                    Value::Array(array) => array.borrow().clone(),
+                    Value::Array(array) => {
+                        check_data_argument(&source, "Object.fromEntries input", _span)?;
+                        array.borrow().clone()
+                    }
                     Value::Map(map) => map
                         .entries()
                         .into_iter()
                         .map(|(key, value)| Value::array(vec![key, value]))
                         .collect(),
+                    Value::Promise(_) => {
+                        return Err(RuntimeError::new(
+                            RuntimeErrorKind::InvalidDataValue,
+                            "Object.fromEntries input contains an un-awaited Promise; await it first.",
+                            _span,
+                        ));
+                    }
+                    Value::Function(_)
+                    | Value::Builtin(_)
+                    | Value::BoundMethod { .. }
+                    | Value::ToolRef(_) => {
+                        return Err(RuntimeError::new(
+                            RuntimeErrorKind::InvalidDataValue,
+                            "Object.fromEntries input must contain data only.",
+                            _span,
+                        ));
+                    }
                     _ => {
                         return Err(RuntimeError::type_error(
                             "Object.fromEntries requires an iterable of entries.",
@@ -1914,6 +1993,9 @@ impl<'a> Interpreter<'a> {
             "Object.assign" => {
                 let mut merged = IndexMap::new();
                 for source in arguments {
+                    if !matches!(source, Value::Undefined | Value::Null) {
+                        check_data_argument(source, "Object.assign input", _span)?;
+                    }
                     match source {
                         Value::Undefined | Value::Null => continue,
                         Value::Object(object) => {
@@ -1943,6 +2025,16 @@ impl<'a> Interpreter<'a> {
                                 RuntimeErrorKind::InvalidDataValue,
                                 "Object.assign input contains an un-awaited Promise; \
                                  await it first.",
+                                _span,
+                            ));
+                        }
+                        Value::Function(_)
+                        | Value::Builtin(_)
+                        | Value::BoundMethod { .. }
+                        | Value::ToolRef(_) => {
+                            return Err(RuntimeError::new(
+                                RuntimeErrorKind::InvalidDataValue,
+                                "Object.assign input must contain data only.",
                                 _span,
                             ));
                         }
@@ -5685,6 +5777,15 @@ fn format_console_value(value: &Value, seen: &mut Vec<usize>, depth: usize) -> S
     }
 }
 
+/// Applies the upstream data checkpoint (`boundedData`) to an Object static
+/// argument. Sandbox values stay leaves; nested callables, promises, blocked
+/// members, cycles, and over-deep values become `InvalidDataValue`.
+fn check_data_argument(value: &Value, label: &str, span: Span) -> Result<(), RuntimeError> {
+    check_data(value, label).map_err(|error| {
+        RuntimeError::new(RuntimeErrorKind::InvalidDataValue, error.to_string(), span)
+    })
+}
+
 /// Renders `console.table` for an array of plain objects.
 /// Upstream's `console.table` rejects opaque runtime references anywhere in
 /// its input instead of printing the marker for the whole table.
@@ -7146,7 +7247,7 @@ mod tests {
         let error = run("return Object.assign({}, Promise.resolve(1));")
             .expect_err("un-awaited promise source");
         assert_eq!(error.kind(), super::RuntimeErrorKind::InvalidDataValue);
-        assert!(error.message().contains("un-awaited Promise"));
+        assert!(error.message().contains("data only"));
     }
 
     #[test]
@@ -7854,6 +7955,45 @@ mod tests {
                 "(index)\tValue\nname\tTypeError\nmessage\tbad",
                 "undefined",
             ]
+        );
+    }
+
+    #[test]
+    fn rejects_opaque_object_static_inputs() {
+        for source in [
+            "return Object.keys(Promise.resolve(1));",
+            "return Object.values(Promise.resolve(1));",
+            "return Object.entries(Promise.resolve(1));",
+            "return Object.hasOwn(Promise.resolve(1), 'x');",
+            "return Object.fromEntries(Promise.resolve([[1, 2]]));",
+            "return Object.assign(Promise.resolve(1));",
+            "return Object.keys(() => 1);",
+            "return Object.values(() => 1);",
+            "return Object.entries(() => 1);",
+            "return Object.hasOwn(() => 1, 'x');",
+            "return Object.fromEntries(() => 1);",
+            "return Object.assign(() => 1);",
+            "return Object.keys({ p: Promise.resolve(1) });",
+            "return Object.values({ f: () => 1 });",
+            "return Object.entries({ p: Promise.resolve(1) });",
+            "return Object.hasOwn({ p: Promise.resolve(1) }, 'p');",
+            "return Object.fromEntries([[1, Promise.resolve(2)]]);",
+            "return Object.assign({}, { p: Promise.resolve(1) });",
+        ] {
+            let error = run(source).expect_err("opaque input must be rejected");
+            assert_eq!(
+                error.kind(),
+                super::RuntimeErrorKind::InvalidDataValue,
+                "{source}"
+            );
+        }
+        assert_eq!(
+            run_value("return Object.keys(new Map([['a', 1]])).length;"),
+            number(0.0)
+        );
+        assert_eq!(
+            run_value("return Object.hasOwn(new Map(), 'a');"),
+            Value::Boolean(false)
         );
     }
 
