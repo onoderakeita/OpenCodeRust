@@ -415,8 +415,6 @@ impl<'a> Interpreter<'a> {
             ("Boolean", Value::Builtin("Boolean")),
             ("parseInt", Value::Builtin("parseInt")),
             ("parseFloat", Value::Builtin("parseFloat")),
-            ("isNaN", Value::Builtin("isNaN")),
-            ("isFinite", Value::Builtin("isFinite")),
             ("encodeURI", Value::Builtin("encodeURI")),
             ("encodeURIComponent", Value::Builtin("encodeURIComponent")),
             ("decodeURI", Value::Builtin("decodeURI")),
@@ -1433,13 +1431,20 @@ impl<'a> Interpreter<'a> {
             "String" => Ok(Value::String(to_js_string(&argument(0)))),
             "Number" => Ok(Value::Number(to_number(&argument(0)))),
             "Boolean" => Ok(Value::Boolean(is_truthy(&argument(0)))),
-            "parseInt" => Ok(Value::Number(parse_int(
-                &to_js_string(&argument(0)),
-                to_number(&argument(1)),
-            ))),
+            "parseInt" => {
+                let radix = match arguments.get(1) {
+                    None | Some(Value::Undefined) => 0.0,
+                    Some(Value::Number(value)) => *value,
+                    Some(_) => {
+                        return Err(RuntimeError::type_error(
+                            "parseInt expects a numeric radix.",
+                            _span,
+                        ))
+                    }
+                };
+                Ok(Value::Number(parse_int(&to_js_string(&argument(0)), radix)))
+            }
             "parseFloat" => Ok(Value::Number(parse_float(&to_js_string(&argument(0))))),
-            "isNaN" => Ok(Value::Boolean(to_number(&argument(0)).is_nan())),
-            "isFinite" => Ok(Value::Boolean(to_number(&argument(0)).is_finite())),
             "encodeURI" | "encodeURIComponent" | "decodeURI" | "decodeURIComponent" => {
                 let text = to_js_string(&argument(0));
                 let result = match name {
@@ -6229,7 +6234,7 @@ mod tests {
                 parseFloat("3.5abc"),
                 String(12),
                 Boolean(""),
-                isNaN("nope"),
+                Number.isNaN(NaN + 1),
                 (255).toString(16),
                 (1.005).toFixed(2),
             ];
@@ -7768,6 +7773,7 @@ mod tests {
             r#"return Math.pow("2", 3);"#,
             r#"return Math.hypot(1, null);"#,
             r#"return Number.parseInt("10", "2");"#,
+            r#"return parseInt("10", "2");"#,
             r#"return (255).toString("2");"#,
             r#"return (1.23).toFixed("2");"#,
             r#"return (1.23).toPrecision("2");"#,
@@ -7785,6 +7791,10 @@ mod tests {
             Value::Boolean(false)
         );
         assert_eq!(run_value("return typeof Math.sin;"), string("undefined"));
+        assert_eq!(run_value("return typeof isNaN;"), string("undefined"));
+        assert_eq!(run_value("return typeof isFinite;"), string("undefined"));
+        let error = run("return isNaN(1);").expect_err("isNaN is not a CodeMode global");
+        assert_eq!(error.kind(), super::RuntimeErrorKind::ReferenceError);
         assert_eq!(run_value("return (255).toString(NaN);"), string("255"));
         assert_eq!(run_value("return (255).toString(2.9);"), string("11111111"));
         assert_eq!(

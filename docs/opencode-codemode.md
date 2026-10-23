@@ -120,8 +120,9 @@ upstreamは未対応構文を評価到達時に拒否する。`inspect_support` 
 
 `install_globals` は `console`、`Math`、`JSON`、`Object`、`Array`、`String`、
 `Number`、`Boolean`、`Promise`、`Map`、`Set`、`Date`、`parseInt`、
-`parseFloat`、`isNaN`、`isFinite`、`encodeURI`、`encodeURIComponent`、
-`decodeURI`、`decodeURIComponent`、`undefined`、`NaN`、`Infinity` を登録する。
+`parseFloat`、`encodeURI`、`encodeURIComponent`、`decodeURI`、
+`decodeURIComponent`、`undefined`、`NaN`、`Infinity` を登録する。
+グローバルな `isNaN` / `isFinite` はupstreamにないため公開しない。
 builtinsはプログラムの親scopeに置くため、`const Date = 1` のような同名宣言で
 shadowingできる。
 
@@ -162,7 +163,8 @@ shadowingできる。
   callableと未await Promiseは `InvalidDataValue` になる。
 - グローバルな `String` / `Number` / `Boolean` / `parseInt` / `parseFloat` は、
   callableと未await Promiseをdata境界で `InvalidDataValue` にする。
-  Date/Map/Set/Errorはdataとしてcoercionする。
+  `parseInt` のradixはnumberまたは `undefined` だけを受け、他型は
+  `TypeError` にする。Date/Map/Set/Errorはdataとしてcoercionする。
 - `Object`: keys、values、entries、hasOwn、fromEntries (配列とMap)、assign。
   `keys` はdata objectと配列を受け、Date/Map/Set/Promiseでは空配列を返す。
   `values` / `entries` / `hasOwn` は配列とprimitiveを `TypeError` にし、
