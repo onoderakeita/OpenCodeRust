@@ -189,7 +189,9 @@ shadowingできる。
   replacerは `(match, offset, input)` で呼ぶ。offsetはUTF-16 code unitで
   数える。searchはstringのみを受け、それ以外は `TypeError` にする。
   `lastIndexOf` のpositionは絶対位置としてclampし、負数は0、`NaN` は
-  文字列長として扱う (`indexOf` / `includes` の負数は末尾からの相対)。
+  文字列長として扱う。`indexOf` / `includes` / `startsWith` / `endsWith` も
+  絶対位置で、負数は0になる。Arrayの検索系 (`indexOf` / `includes` /
+  `lastIndexOf`) は負数を末尾からの相対として扱う。
   `split` のlimitはToUint32で変換し、`NaN` / `Infinity` は0、負数は
   2^32のmoduloになる。trim系はBOM (U+FEFF) も除去し、`<` / `>` の
   文字列比較はUTF-16 code unit順になる。

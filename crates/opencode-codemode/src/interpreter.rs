@@ -2358,6 +2358,9 @@ impl<'a> Interpreter<'a> {
                 let items = array.borrow().clone();
                 let needle = argument(0);
                 let length = items.len() as i64;
+                if length == 0 {
+                    return Ok(Value::Number(-1.0));
+                }
                 let from = if arguments.len() > 1 {
                     let number = to_number(&argument(1));
                     if number.is_nan() {
@@ -2365,7 +2368,7 @@ impl<'a> Interpreter<'a> {
                     } else {
                         let mut index = number.trunc() as i64;
                         if index < 0 {
-                            index += length;
+                            index = index.saturating_add(length);
                         }
                         index
                     }
@@ -2647,7 +2650,7 @@ impl<'a> Interpreter<'a> {
                         }
                     }
                 } else {
-                    normalize_index(&argument(1), length, 0).clamp(0, length)
+                    absolute_index(&argument(1), length, 0)
                 } as usize;
                 let matches = (0..=characters.len().saturating_sub(needle.len()))
                     .filter(|index| characters[*index..].starts_with(&needle))
@@ -2669,8 +2672,7 @@ impl<'a> Interpreter<'a> {
                 } else {
                     0
                 };
-                let position = normalize_index(&argument(1), length as i64, default)
-                    .clamp(0, length as i64) as usize;
+                let position = absolute_index(&argument(1), length as i64, default) as usize;
                 let result = match method {
                     "String.endsWith" => {
                         position >= needle.len()
@@ -4015,9 +4017,25 @@ fn normalize_index(value: &Value, length: i64, fallback: i64) -> i64 {
             } else {
                 let mut index = number.trunc() as i64;
                 if index < 0 {
-                    index += length;
+                    index = index.saturating_add(length);
                 }
                 index
+            }
+        }
+    }
+}
+
+/// Absolute position clamp used by String search methods. Unlike Array search
+/// methods, negative positions clamp to 0 instead of counting from the end.
+fn absolute_index(value: &Value, length: i64, fallback: i64) -> i64 {
+    match value {
+        Value::Undefined => fallback,
+        _ => {
+            let number = to_number(value);
+            if number.is_nan() {
+                0
+            } else {
+                (number.trunc() as i64).clamp(0, length)
             }
         }
     }
@@ -6392,6 +6410,22 @@ mod tests {
         assert_eq!(
             run_value("return (1e-7).toExponential(20);"),
             string("9.99999999999999954748e-8")
+        );
+        // String search positions are absolute; negative values clamp to 0.
+        assert_eq!(run_value("return 'abcabc'.indexOf('a', -1);"), number(0.0));
+        assert_eq!(
+            run_value("return 'abcabc'.includes('a', -1);"),
+            Value::Boolean(true)
+        );
+        assert_eq!(
+            run_value("return 'abcabc'.startsWith('a', -1);"),
+            Value::Boolean(true)
+        );
+        // Empty arrays must not underflow the lastIndex search window.
+        assert_eq!(run_value("return [].lastIndexOf(1);"), number(-1.0));
+        assert_eq!(
+            run_value("return [].lastIndexOf(1, -Infinity);"),
+            number(-1.0)
         );
     }
 

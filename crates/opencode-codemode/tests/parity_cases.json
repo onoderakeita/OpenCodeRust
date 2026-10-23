@@ -7491,5 +7491,49 @@
   {
     "expr": "(1.7976931348623157e+308).toFixed(100)",
     "expected": "1.7976931348623157e+308"
+  },
+  {
+    "expr": "JSON.stringify('abcabc'.indexOf('a', -1))",
+    "expected": "0"
+  },
+  {
+    "expr": "JSON.stringify('abcabc'.includes('a', -1))",
+    "expected": "true"
+  },
+  {
+    "expr": "JSON.stringify('abcabc'.startsWith('a', -1))",
+    "expected": "true"
+  },
+  {
+    "expr": "JSON.stringify('abcabc'.endsWith('a', -1))",
+    "expected": "false"
+  },
+  {
+    "expr": "JSON.stringify('abcabc'.indexOf('a', -Infinity))",
+    "expected": "0"
+  },
+  {
+    "expr": "JSON.stringify([].lastIndexOf(1))",
+    "expected": "-1"
+  },
+  {
+    "expr": "JSON.stringify([].lastIndexOf(1, 5))",
+    "expected": "-1"
+  },
+  {
+    "expr": "JSON.stringify([].lastIndexOf(1, -Infinity))",
+    "expected": "-1"
+  },
+  {
+    "expr": "JSON.stringify([].slice(-Infinity))",
+    "expected": "[]"
+  },
+  {
+    "expr": "JSON.stringify([].splice(0, 1))",
+    "expected": "[]"
+  },
+  {
+    "expr": "JSON.stringify([].fill(1, -1))",
+    "expected": "[]"
   }
 ]
