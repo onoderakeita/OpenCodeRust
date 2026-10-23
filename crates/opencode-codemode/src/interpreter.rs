@@ -1409,23 +1409,8 @@ impl<'a> Interpreter<'a> {
                 | "decodeURI"
                 | "decodeURIComponent"
         ) {
-            match coercion_issue(&argument(0), &mut Vec::new()) {
-                Some(CoercionIssue::Promise) => {
-                    return Err(RuntimeError::new(
-                        RuntimeErrorKind::InvalidDataValue,
-                        format!("{name} input contains an un-awaited Promise; await it first."),
-                        _span,
-                    ))
-                }
-                Some(CoercionIssue::NonData) => {
-                    return Err(RuntimeError::new(
-                        RuntimeErrorKind::InvalidDataValue,
-                        format!("{name} input must contain data only."),
-                        _span,
-                    ))
-                }
-                None => {}
-            }
+            let label = format!("{name} input");
+            check_data_argument(&argument(0), &label, _span)?;
         }
         match name {
             "String" => Ok(Value::String(to_js_string(&argument(0)))),
@@ -2055,23 +2040,7 @@ impl<'a> Interpreter<'a> {
                     return Err(RuntimeError::unsupported("Array.from map function", _span));
                 }
                 let source = argument(0);
-                match coercion_issue(&source, &mut Vec::new()) {
-                    Some(CoercionIssue::Promise) => {
-                        return Err(RuntimeError::new(
-                            RuntimeErrorKind::InvalidDataValue,
-                            "Array.from input contains an un-awaited Promise; await it first.",
-                            _span,
-                        ))
-                    }
-                    Some(CoercionIssue::NonData) => {
-                        return Err(RuntimeError::new(
-                            RuntimeErrorKind::InvalidDataValue,
-                            "Array.from input must contain data only.",
-                            _span,
-                        ))
-                    }
-                    None => {}
-                }
+                check_data_argument(&source, "Array.from input", _span)?;
                 // Upstream accepts arrays, strings, Map/Set, and objects with a
                 // numeric `length`; everything else is a TypeError rather than
                 // an empty array.
@@ -2579,6 +2548,7 @@ impl<'a> Interpreter<'a> {
                         span,
                     ));
                 }
+                check_data_argument(receiver, "Array.join input", span)?;
                 let array = as_array_ref(receiver, span)?;
                 let separator = match arguments.first() {
                     Some(Value::String(separator)) => separator.clone(),
@@ -4702,50 +4672,6 @@ fn string_to_number(text: &str) -> f64 {
 /// Upper bound for `Array.from` array-like materialization, guarding against
 /// one-shot allocation that the timeout cannot interrupt.
 const MAX_ARRAY_LIKE_LENGTH: usize = 1_000_000;
-
-enum CoercionIssue {
-    NonData,
-    Promise,
-}
-
-/// Rejects callables and un-awaited promises at coercion inputs, matching
-/// upstream's use of the data boundary. Sandbox values (Date, Map, Set, errors)
-/// stay data; tool references are left to their existing rendering.
-fn coercion_issue(value: &Value, seen: &mut Vec<usize>) -> Option<CoercionIssue> {
-    match value {
-        Value::Function(_) | Value::Builtin(_) | Value::BoundMethod { .. } => {
-            Some(CoercionIssue::NonData)
-        }
-        Value::Promise(_) => Some(CoercionIssue::Promise),
-        Value::Array(items) => {
-            let identity = Rc::as_ptr(items) as *const () as usize;
-            if seen.contains(&identity) {
-                return None;
-            }
-            seen.push(identity);
-            let issue = items
-                .borrow()
-                .iter()
-                .find_map(|item| coercion_issue(item, seen));
-            seen.pop();
-            issue
-        }
-        Value::Object(object) => {
-            let identity = Rc::as_ptr(object) as *const () as usize;
-            if seen.contains(&identity) {
-                return None;
-            }
-            seen.push(identity);
-            let issue = object
-                .borrow()
-                .values()
-                .find_map(|item| coercion_issue(item, seen));
-            seen.pop();
-            issue
-        }
-        _ => None,
-    }
-}
 
 /// Mirrors upstream `containsOpaqueReference`: functions, tool references and
 /// un-awaited promises are interpreter machinery, not data operands. Sandbox
@@ -7037,7 +6963,7 @@ mod tests {
             .contains("encodeURIComponent input must contain data only"));
         let error = run("return decodeURI(Promise.resolve(1));").expect_err("promise URI input");
         assert_eq!(error.kind(), super::RuntimeErrorKind::InvalidDataValue);
-        assert!(error.message().contains("un-awaited Promise"));
+        assert!(error.message().contains("data only"));
     }
 
     #[test]
@@ -7099,7 +7025,7 @@ mod tests {
                 "return String({ f: () => 1 });",
                 "String input must contain data only",
             ),
-            ("return Boolean(Promise.resolve(1));", "un-awaited Promise"),
+            ("return Boolean(Promise.resolve(1));", "data only"),
         ] {
             let error = run(source).expect_err("opaque coercion input");
             assert_eq!(error.kind(), super::RuntimeErrorKind::InvalidDataValue);
@@ -8064,6 +7990,27 @@ mod tests {
         ] {
             let error = run(source).expect_err("callback must be supported");
             assert_eq!(error.kind(), super::RuntimeErrorKind::TypeError, "{source}");
+        }
+    }
+
+    #[test]
+    fn validates_join_and_coercion_inputs_deeply() {
+        for source in [
+            "return [() => 1].join();",
+            "return [Promise.resolve(1)].join();",
+            "return [{ nested: Promise.resolve(1) }].join();",
+            "return Array.from([() => 1]);",
+            "return Array.from([Promise.resolve(1)]);",
+            "return String({ nested: Promise.resolve(1) });",
+            "return Number([() => 1]);",
+            "return encodeURIComponent({ nested: () => 1 });",
+        ] {
+            let error = run(source).expect_err("nested opaque data must be rejected");
+            assert_eq!(
+                error.kind(),
+                super::RuntimeErrorKind::InvalidDataValue,
+                "{source}"
+            );
         }
     }
 

@@ -166,7 +166,8 @@ shadowingできる。
   不正なUTF-8は `URIError` をthrowする。入力はdata境界を通すため、
   callableと未await Promiseは `InvalidDataValue` になる。
 - グローバルな `String` / `Number` / `Boolean` / `parseInt` / `parseFloat` は、
-  callableと未await Promiseをdata境界で `InvalidDataValue` にする。
+  入力 (ネストを含む) のcallableと未await Promiseをdata境界で
+  `InvalidDataValue` にする。
   `parseInt` のradixはnumberまたは `undefined` だけを受け、他型は
   `TypeError` にする。Date/Map/Set/Errorはdataとしてcoercionする。
 - `Object`: keys、values、entries、hasOwn、fromEntries (配列とMap)、assign。
@@ -187,7 +188,9 @@ shadowingできる。
 - `Array`: isArray、of、from (array-like含む)。`from` は配列・文字列・
   Map/Set・数値lengthを持つobjectを変換し、それ以外 (数値、null、
   lengthのないobject、文字列lengthなど) は `TypeError` にする。
-  array-likeのlengthが上限を超える場合は `TypeError` にする。第2引数の
+  入力はdata境界で深く検証し、ネストしたcallable/Promiseは
+  `InvalidDataValue` にする。array-likeのlengthが上限を超える場合は
+  `TypeError` にする。第2引数の
   map関数はupstreamに合わせて `UnsupportedSyntax` にする。インスタンスmethodは
   map、filter、forEach、
   reduce、reduceRight、find、findIndex、findLast、findLastIndex、some、
@@ -198,7 +201,9 @@ shadowingできる。
   index系の引数 (`includes` のstart、`slice`、`at`、`with`、`splice`、
   `fill`、`copyWithin`、`flat` のdepthなど) はupstreamと同じく
   「省略またはnumber」だけを受け、文字列・nullなどは `TypeError` にする。
-  `join` は引数なしまたは文字列1個だけを受け、`splice()` は何も変更しない。
+  `join` は引数なしまたは文字列1個だけを受け、receiverをdata境界で
+  深く検証するためネストしたcallable/Promiseは `InvalidDataValue` にし、
+  `splice()` は何も変更しない。
   callbackの第3引数は呼び出し時snapshotの配列で、receiver自身ではない。
   callbackはユーザー関数、または `Number` / `String` / `Boolean` /
   `parseInt` / `parseFloat` / URI関数だけを受け、`Number.isFinite` や
