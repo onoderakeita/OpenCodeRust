@@ -132,6 +132,8 @@ shadowingできる。
   sign、log、log2、log10、exp、sin、cos、tan、PI、E、LN2、LN10、LOG2E、
   LOG10E、SQRT2、SQRT1_2。`round` は `0 < x < 0.5` を `+0` にし、
   `0.49999999999999994` の二重丸めを避ける。負のゼロは保持する。
+  `pow` は `(±1) ** ±Infinity` を `NaN`、`(-Infinity) ** 奇数` を
+  `-Infinity` にするなどECMAScriptの特殊caseに従う。
 - `JSON`: parse、stringify。objectのkey順はECMAScriptと同じく配列indexの
   昇順、その後に挿入順で、parseでも入力順を保つ。`f64` を超える数値literal
   (`1e400` など) は `Infinity` / `-Infinity` としてparseする。stringifyは
@@ -188,7 +190,9 @@ shadowingできる。
   数える。searchはstringのみを受け、それ以外は `TypeError` にする。
   `lastIndexOf` のpositionは絶対位置としてclampし、負数は0、`NaN` は
   文字列長として扱う (`indexOf` / `includes` の負数は末尾からの相対)。
-  trim系はBOM (U+FEFF) も除去し、`<` / `>` の文字列比較はUTF-16 code unit順になる。
+  `split` のlimitはToUint32で変換し、`NaN` / `Infinity` は0、負数は
+  2^32のmoduloになる。trim系はBOM (U+FEFF) も除去し、`<` / `>` の
+  文字列比較はUTF-16 code unit順になる。
   `normalize` とRegExp依存のmatch系は未実装。
 - `Number` instance methods: toFixed、toPrecision、toExponential、toString
   (radix 2..36の整数)、valueOf。digitsが範囲外なら `RangeError` にする。

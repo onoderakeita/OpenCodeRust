@@ -1558,9 +1558,10 @@ impl<'a> Interpreter<'a> {
             "Math.sin" => Ok(Value::Number(to_number(&argument(0)).sin())),
             "Math.cos" => Ok(Value::Number(to_number(&argument(0)).cos())),
             "Math.tan" => Ok(Value::Number(to_number(&argument(0)).tan())),
-            "Math.pow" => Ok(Value::Number(
-                to_number(&argument(0)).powf(to_number(&argument(1))),
-            )),
+            "Math.pow" => Ok(Value::Number(js_pow(
+                to_number(&argument(0)),
+                to_number(&argument(1)),
+            ))),
             "Math.max" => Ok(Value::Number(math_extreme(arguments, true))),
             "Math.min" => Ok(Value::Number(math_extreme(arguments, false))),
             "JSON.parse" => {
@@ -2562,9 +2563,11 @@ impl<'a> Interpreter<'a> {
             }
             "String.split" => {
                 let text = as_string(receiver, span)?;
+                // ECMAScript applies ToUint32 to the limit: NaN and Infinity
+                // become 0, and negative values wrap around.
                 let limit = match arguments.get(1) {
-                    Some(Value::Undefined) | None => usize::MAX,
-                    Some(value) => to_number(value).max(0.0) as usize,
+                    Some(Value::Undefined) | None => u32::MAX as usize,
+                    Some(value) => to_uint32(to_number(value)) as usize,
                 };
                 let pieces: Vec<String> = match arguments.first() {
                     None | Some(Value::Undefined) => vec![text],
@@ -5460,6 +5463,62 @@ fn format_console_table(data: Option<&Value>, columns: Option<&Value>) -> String
     lines.join("\n")
 }
 
+/// ECMAScript `Number::exponentiate`, including the special cases that Rust's
+/// `powf` does not share (notably `(+-1) ** Infinity === NaN` and signed zero).
+fn js_pow(base: f64, exponent: f64) -> f64 {
+    if exponent.is_nan() {
+        return f64::NAN;
+    }
+    if exponent == 0.0 {
+        return 1.0;
+    }
+    if base.is_nan() {
+        return f64::NAN;
+    }
+    if base.abs() == 1.0 && exponent.is_infinite() {
+        return f64::NAN;
+    }
+    if base.is_infinite() {
+        if base > 0.0 {
+            return if exponent > 0.0 { f64::INFINITY } else { 0.0 };
+        }
+        let odd = is_odd_integer(exponent);
+        if exponent > 0.0 {
+            return if odd {
+                f64::NEG_INFINITY
+            } else {
+                f64::INFINITY
+            };
+        }
+        return if odd { -0.0 } else { 0.0 };
+    }
+    if base == 0.0 {
+        let negative = base.is_sign_negative();
+        let odd = is_odd_integer(exponent);
+        if exponent > 0.0 {
+            return if negative && odd { -0.0 } else { 0.0 };
+        }
+        return if negative && odd {
+            f64::NEG_INFINITY
+        } else {
+            f64::INFINITY
+        };
+    }
+    if base < 0.0 && exponent.is_finite() && exponent.fract() != 0.0 {
+        return f64::NAN;
+    }
+    base.powf(exponent)
+}
+
+/// Finite integral values above 2^53 are all even, so only smaller integers can
+/// be odd. Saturating casts would otherwise report them as odd.
+fn is_odd_integer(value: f64) -> bool {
+    value.is_finite()
+        && value.fract() == 0.0
+        && value.abs() < 9_007_199_254_740_992.0
+        && (value as i64) % 2 != 0
+}
+
 fn to_int32(value: f64) -> i32 {
     if !value.is_finite() {
         return 0;
@@ -6297,6 +6356,26 @@ mod tests {
         assert_eq!(
             run_value("return String(new Date('2024-01-02T24:00:01Z'));"),
             string("Invalid Date")
+        );
+        assert_eq!(
+            run_value("return 'a,b'.split(',', -1).length;"),
+            number(2.0)
+        );
+        assert_eq!(
+            run_value("return 'a,b'.split(',', Infinity).length;"),
+            number(0.0)
+        );
+        assert_eq!(
+            run_value("return String(Math.pow(1, Infinity));"),
+            string("NaN")
+        );
+        assert_eq!(
+            run_value("return String(Math.pow(-Infinity, 3));"),
+            string("-Infinity")
+        );
+        assert_eq!(
+            run_value("return 'ab'.replaceAll('', (m, i) => i);"),
+            string("0a1b2")
         );
     }
 

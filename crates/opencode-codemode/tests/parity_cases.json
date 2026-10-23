@@ -1641,5 +1641,433 @@
   {
     "expr": "JSON.stringify({a:NaN})",
     "expected": "{\"a\":null}"
+  },
+  {
+    "expr": "[1,[2,[3]]].flat(Infinity)",
+    "expected": [
+      1,
+      2,
+      3
+    ]
+  },
+  {
+    "expr": "[1,[2]].flat(-1)",
+    "expected": [
+      1,
+      [
+        2
+      ]
+    ]
+  },
+  {
+    "expr": "[1,[2]].flat(0.9)",
+    "expected": [
+      1,
+      [
+        2
+      ]
+    ]
+  },
+  {
+    "expr": "[1,[2,[3]]].flat(1.9)",
+    "expected": [
+      1,
+      2,
+      [
+        3
+      ]
+    ]
+  },
+  {
+    "expr": "[1,2,1].lastIndexOf(1, NaN)",
+    "expected": 0
+  },
+  {
+    "expr": "[1,2,1].lastIndexOf(1, -2)",
+    "expected": 0
+  },
+  {
+    "expr": "[NaN].includes(NaN)",
+    "expected": true
+  },
+  {
+    "expr": "[1,2].push(3)",
+    "expected": 3
+  },
+  {
+    "expr": "[1,2].unshift(0)",
+    "expected": 3
+  },
+  {
+    "expr": "[1,2,3].splice(1, 1)",
+    "expected": [
+      2
+    ]
+  },
+  {
+    "expr": "[1,2,3].splice(-2, 1)",
+    "expected": [
+      2
+    ]
+  },
+  {
+    "expr": "[1,2,3].join(undefined)",
+    "expected": "1,2,3"
+  },
+  {
+    "expr": "[1,2,3].join(null)",
+    "expected": "1null2null3"
+  },
+  {
+    "expr": "[1].concat('ab', 2)",
+    "expected": [
+      1,
+      "ab",
+      2
+    ]
+  },
+  {
+    "expr": "[1,2,3].at(NaN)",
+    "expected": 1
+  },
+  {
+    "expr": "[1,2,3].slice(Infinity)",
+    "expected": []
+  },
+  {
+    "expr": "[1,2,3].slice(-Infinity)",
+    "expected": [
+      1,
+      2,
+      3
+    ]
+  },
+  {
+    "expr": "'a,b'.split(',', NaN).length",
+    "expected": 0
+  },
+  {
+    "expr": "'a,b'.split(',', -1).length",
+    "expected": 2
+  },
+  {
+    "expr": "'a,b'.split(',', Infinity).length",
+    "expected": 0
+  },
+  {
+    "expr": "'abc'.slice(NaN)",
+    "expected": "abc"
+  },
+  {
+    "expr": "'abc'.slice(Infinity)",
+    "expected": ""
+  },
+  {
+    "expr": "'abc'.slice(-Infinity)",
+    "expected": "abc"
+  },
+  {
+    "expr": "'abc'.substring(Infinity, 0)",
+    "expected": "abc"
+  },
+  {
+    "expr": "'abc'.at(Infinity) === undefined",
+    "expected": true
+  },
+  {
+    "expr": "'abc'.padStart(3)",
+    "expected": "abc"
+  },
+  {
+    "expr": "(10).toString(2.5)",
+    "expected": "1010"
+  },
+  {
+    "expr": "(10).toString(2.9)",
+    "expected": "1010"
+  },
+  {
+    "expr": "parseInt('0x10', 16)",
+    "expected": 16
+  },
+  {
+    "expr": "parseInt('10', 0)",
+    "expected": 10
+  },
+  {
+    "expr": "parseInt('08', 0)",
+    "expected": 8
+  },
+  {
+    "expr": "parseInt(' 0b11')",
+    "expected": 0
+  },
+  {
+    "expr": "Number('0x10')",
+    "expected": 16
+  },
+  {
+    "expr": "Number('0b10')",
+    "expected": 2
+  },
+  {
+    "expr": "String(Number('1_000'))",
+    "expected": "NaN"
+  },
+  {
+    "expr": "Number('+1')",
+    "expected": 1
+  },
+  {
+    "expr": "Number('.5')",
+    "expected": 0.5
+  },
+  {
+    "expr": "Number('5.')",
+    "expected": 5
+  },
+  {
+    "expr": "1/Math.max(-0, 0)",
+    "expected": null
+  },
+  {
+    "expr": "String(Math.hypot())",
+    "expected": "0"
+  },
+  {
+    "expr": "String(Math.hypot(NaN))",
+    "expected": "NaN"
+  },
+  {
+    "expr": "String(Math.hypot(Infinity, NaN))",
+    "expected": "Infinity"
+  },
+  {
+    "expr": "String(Math.pow(1, Infinity))",
+    "expected": "NaN"
+  },
+  {
+    "expr": "String(Math.pow(-1, Infinity))",
+    "expected": "NaN"
+  },
+  {
+    "expr": "String(Math.pow(NaN, 0))",
+    "expected": "1"
+  },
+  {
+    "expr": "Math.exp(-Infinity)",
+    "expected": 0
+  },
+  {
+    "expr": "String(Math.log(Infinity))",
+    "expected": "Infinity"
+  },
+  {
+    "expr": "String(Math.trunc(Infinity))",
+    "expected": "Infinity"
+  },
+  {
+    "expr": "String(Math.trunc(NaN))",
+    "expected": "NaN"
+  },
+  {
+    "expr": "String(Math.sign(NaN))",
+    "expected": "NaN"
+  },
+  {
+    "expr": "(() => { try { 'a'.padStart(Infinity); return 'no'; } catch (e) { return e.name; } })()",
+    "expected": "RangeError"
+  },
+  {
+    "expr": "(() => { try { 'a'.padEnd(Infinity); return 'no'; } catch (e) { return e.name; } })()",
+    "expected": "RangeError"
+  },
+  {
+    "expr": "(() => { try { 'a'.repeat(Infinity); return 'no'; } catch (e) { return e.name; } })()",
+    "expected": "RangeError"
+  },
+  {
+    "expr": "(() => { try { (1).toFixed(101); return 'no'; } catch (e) { return e.name; } })()",
+    "expected": "RangeError"
+  },
+  {
+    "expr": "(() => { try { (1).toPrecision(0); return 'no'; } catch (e) { return e.name; } })()",
+    "expected": "RangeError"
+  },
+  {
+    "expr": "(() => { try { (1).toString(37); return 'no'; } catch (e) { return e.name; } })()",
+    "expected": "RangeError"
+  },
+  {
+    "expr": "(() => { try { String.fromCodePoint(0x110000); return 'no'; } catch (e) { return e.name; } })()",
+    "expected": "RangeError"
+  },
+  {
+    "expr": "String.fromCharCode(0x110000).charCodeAt(0)",
+    "expected": 0
+  },
+  {
+    "expr": "JSON.stringify(new Date(NaN))",
+    "expected": "null"
+  },
+  {
+    "expr": "JSON.stringify({d: new Date(NaN)})",
+    "expected": "{\"d\":null}"
+  },
+  {
+    "expr": "JSON.stringify([{k:1,v:'a'},{k:1,v:'b'},{k:0,v:'c'}].sort((x,y)=>x.k-y.k).map(x=>x.v))",
+    "expected": "[\"c\",\"a\",\"b\"]"
+  },
+  {
+    "expr": "'ab'.replaceAll('', (m, i) => i)",
+    "expected": "0a1b2"
+  },
+  {
+    "expr": "'abc'.replace('b', () => 7)",
+    "expected": "a7c"
+  },
+  {
+    "expr": "'abc'.replaceAll('b', () => 7)",
+    "expected": "a7c"
+  },
+  {
+    "expr": "(0).toPrecision(3)",
+    "expected": "0.00"
+  },
+  {
+    "expr": "(0).toExponential(2)",
+    "expected": "0.00e+0"
+  },
+  {
+    "expr": "(-0).toPrecision(2)",
+    "expected": "0.0"
+  },
+  {
+    "expr": "(-0).toExponential()",
+    "expected": "0e+0"
+  },
+  {
+    "expr": "(1e21).toFixed()",
+    "expected": "1e+21"
+  },
+  {
+    "expr": "(123.456).toFixed(undefined)",
+    "expected": "123"
+  },
+  {
+    "expr": "(123.456).toPrecision()",
+    "expected": "123.456"
+  },
+  {
+    "expr": "(123.456).toPrecision(1.9)",
+    "expected": "1e+2"
+  },
+  {
+    "expr": "(123.456).toFixed(2.9)",
+    "expected": "123.46"
+  },
+  {
+    "expr": "(10).toString(16.9)",
+    "expected": "a"
+  },
+  {
+    "expr": "parseInt('10', 2.9)",
+    "expected": 2
+  },
+  {
+    "expr": "parseInt('10', NaN)",
+    "expected": 10
+  },
+  {
+    "expr": "'a,b'.split(',', 2.9).length",
+    "expected": 2
+  },
+  {
+    "expr": "'a,b'.split(',', 4294967297).length",
+    "expected": 1
+  },
+  {
+    "expr": "'a,b'.split(',', 0).length",
+    "expected": 0
+  },
+  {
+    "expr": "'\\uFEFF abc \\uFEFF'.trim()",
+    "expected": "abc"
+  },
+  {
+    "expr": "'  abc  '.trimStart()",
+    "expected": "abc  "
+  },
+  {
+    "expr": "'  abc  '.trimEnd()",
+    "expected": "  abc"
+  },
+  {
+    "expr": "'  abc  '.trimLeft()",
+    "expected": "abc  "
+  },
+  {
+    "expr": "'  abc  '.trimRight()",
+    "expected": "  abc"
+  },
+  {
+    "expr": "(() => { try { new Map(5); return 'no'; } catch (e) { return e.name; } })()",
+    "expected": "TypeError"
+  },
+  {
+    "expr": "(() => { try { new Set(5); return 'no'; } catch (e) { return e.name; } })()",
+    "expected": "TypeError"
+  },
+  {
+    "expr": "(() => { const seen = []; new Map([['a',1]]).forEach((v,k) => seen.push(k + v)); return seen.join(','); })()",
+    "expected": "a1"
+  },
+  {
+    "expr": "(() => { const seen = []; new Set([1,2]).forEach((v,k) => seen.push(v + ':' + k)); return seen.join(','); })()",
+    "expected": "1:1,2:2"
+  },
+  {
+    "expr": "JSON.stringify([1,2].push(3))",
+    "expected": "3"
+  },
+  {
+    "expr": "JSON.stringify([1,2].unshift(0))",
+    "expected": "3"
+  },
+  {
+    "expr": "JSON.stringify([1,2,3].splice(1, 1))",
+    "expected": "[2]"
+  },
+  {
+    "expr": "JSON.stringify((() => { const a = [1,2,3]; a.splice(1,1); return a; })())",
+    "expected": "[1,3]"
+  },
+  {
+    "expr": "String(Math.pow(-Infinity, 3))",
+    "expected": "-Infinity"
+  },
+  {
+    "expr": "String(Math.pow(-Infinity, 2))",
+    "expected": "Infinity"
+  },
+  {
+    "expr": "1/Math.pow(-Infinity, -3)",
+    "expected": null
+  },
+  {
+    "expr": "1/Math.pow(-0, 3)",
+    "expected": null
+  },
+  {
+    "expr": "1/Math.pow(-0, 2)",
+    "expected": null
+  },
+  {
+    "expr": "String(Math.pow(-2, 0.5))",
+    "expected": "NaN"
+  },
+  {
+    "expr": "String(Math.pow(1, -Infinity))",
+    "expected": "NaN"
   }
 ]
