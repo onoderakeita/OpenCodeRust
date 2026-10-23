@@ -56,7 +56,8 @@ upstreamは未対応構文を評価到達時に拒否する。`inspect_support` 
 - objectは挿入順を保持する。`__proto__`、`constructor`、`prototype` は
   境界で拒否する。
 - 深さ上限は upstream と同じ32で、超過は `DataError` として返す。
-- 境界通過時、`undefined` と非有限数は `null` になる。
+- 境界通過時、`undefined` と非有限数は `null` になる。整数値は整数として
+  直列化し、`-0` は `0` にする (`JSON.stringify` と同じ表記)。
 - 関数、promise、tool参照、sandbox classはデータ値ではない。評価器側の
   実行時値として扱い、この境界を通さない。
 

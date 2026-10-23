@@ -460,6 +460,32 @@ pub(crate) fn ordered_keys(object: &IndexMap<String, Value>) -> Vec<String> {
         .collect()
 }
 
+/// Converts a finite JavaScript number to a JSON number.
+///
+/// JavaScript has a single number type, so `JSON.stringify(1)` emits `1`
+/// rather than `1.0`, and `-0` becomes `0`. Integral values that fit an
+/// integer are therefore stored as integers; other values use the shortest
+/// round-trip float representation.
+fn json_number(value: f64) -> Option<serde_json::Number> {
+    if value == 0.0 {
+        return Some(serde_json::Number::from(0));
+    }
+    if value.fract() == 0.0 {
+        if (0.0..18_446_744_073_709_551_616.0).contains(&value) {
+            let integer = value as u64;
+            if integer as f64 == value {
+                return Some(serde_json::Number::from(integer));
+            }
+        } else if (-9_223_372_036_854_775_808.0..0.0).contains(&value) {
+            let integer = value as i64;
+            if integer as f64 == value {
+                return Some(serde_json::Number::from(integer));
+            }
+        }
+    }
+    serde_json::Number::from_f64(value)
+}
+
 impl Value {
     /// Creates an empty object.
     pub fn object() -> Self {
@@ -602,7 +628,7 @@ impl Value {
             Self::Undefined | Self::Null => JsonValue::Null,
             Self::Boolean(value) => JsonValue::Bool(*value),
             Self::Number(value) if value.is_finite() => {
-                serde_json::Number::from_f64(*value).map_or(JsonValue::Null, JsonValue::Number)
+                json_number(*value).map_or(JsonValue::Null, JsonValue::Number)
             }
             Self::Number(_) => JsonValue::Null,
             Self::String(value) => JsonValue::String(value.clone()),
@@ -935,6 +961,21 @@ mod tests {
     }
 
     #[test]
+    fn serializes_integral_numbers_and_negative_zero_like_javascript() {
+        assert_eq!(Value::Number(1.0).to_json().to_string(), "1");
+        assert_eq!(Value::Number(-0.0).to_json().to_string(), "0");
+        assert_eq!(Value::Number(1.5).to_json().to_string(), "1.5");
+        assert_eq!(
+            Value::Number(2f64.powi(63)).to_json().to_string(),
+            "9223372036854775808"
+        );
+        assert_eq!(
+            Value::Number(-(2f64.powi(63))).to_json().to_string(),
+            "-9223372036854775808"
+        );
+    }
+
+    #[test]
     fn preserves_object_insertion_order_internally() {
         let value = object(&[
             ("z", Value::Number(1.0)),
@@ -945,7 +986,7 @@ mod tests {
         let object = value.as_object().expect("object value");
         let keys: Vec<&str> = object.keys().map(String::as_str).collect();
         assert_eq!(keys, ["z", "a", "m"]);
-        assert_eq!(value.to_json().to_string(), r#"{"z":1.0,"a":2.0,"m":3.0}"#);
+        assert_eq!(value.to_json().to_string(), r#"{"z":1,"a":2,"m":3}"#);
     }
 
     #[test]
@@ -956,7 +997,7 @@ mod tests {
             ("1", Value::Number(3.0)),
         ]);
 
-        assert_eq!(value.to_json().to_string(), r#"{"1":3.0,"2":2.0,"b":1.0}"#);
+        assert_eq!(value.to_json().to_string(), r#"{"1":3,"2":2,"b":1}"#);
     }
 
     #[test]
