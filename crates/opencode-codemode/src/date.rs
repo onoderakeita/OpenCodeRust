@@ -151,8 +151,16 @@ pub fn parse_iso(text: &str) -> f64 {
 }
 
 fn parse_date_part(text: &str) -> Option<(i64, u32, u32)> {
-    let mut pieces = text.split('-');
-    let year = pieces.next()?.parse::<i64>().ok()?;
+    // Expanded years carry a sign (`-000001`, `+010000`), so the first `-`
+    // after the sign separates the year from the month.
+    let sign_len = usize::from(text.starts_with(['+', '-']));
+    let remainder = &text[sign_len..];
+    let (year_text, rest) = match remainder.find('-') {
+        Some(index) => (&text[..sign_len + index], &remainder[index + 1..]),
+        None => (text, ""),
+    };
+    let year = year_text.parse::<i64>().ok()?;
+    let mut pieces = rest.split('-');
     let month = match pieces.next() {
         Some(piece) => piece.parse::<u32>().ok()?,
         None => 1,
@@ -345,8 +353,26 @@ mod tests {
         assert_eq!(parse_iso("2024-01-02"), 1_704_153_600_000.0);
         assert_eq!(parse_iso("2024-01-02T03:04:05+09:00"), 1_704_132_245_000.0);
         assert_eq!(parse_iso("2024-01-02 03:04:05Z"), 1_704_164_645_000.0);
+        assert_eq!(parse_iso("2024-01-02T24:00:00.000Z"), 1_704_240_000_000.0);
         assert!(parse_iso("garbage").is_nan());
         assert!(parse_iso("2024-13-01").is_nan());
+        assert!(parse_iso("2024-01-02T24:00:01Z").is_nan());
+    }
+
+    #[test]
+    fn parses_and_formats_expanded_years() {
+        assert_eq!(
+            iso_string(parse_iso("-000001-01-01T00:00:00Z")).as_deref(),
+            Some("-000001-01-01T00:00:00.000Z")
+        );
+        assert_eq!(
+            iso_string(parse_iso("+010000-01-01T00:00:00Z")).as_deref(),
+            Some("+010000-01-01T00:00:00.000Z")
+        );
+        assert_eq!(
+            iso_string(parse_iso("2024-02-30T00:00:00Z")).as_deref(),
+            Some("2024-03-01T00:00:00.000Z")
+        );
     }
 
     #[test]
