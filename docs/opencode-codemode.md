@@ -180,6 +180,14 @@ shadowingできる。
   unshift、reverse、concat、flat、flatMap、sort、toSorted、toReversed、
   with、at、splice、fill、copyWithin、keys、values、entries。
   `keys` / `values` / `entries` はiteratorではなく配列を返す。
+  index系の引数 (`includes` のstart、`slice`、`at`、`with`、`splice`、
+  `fill`、`copyWithin`、`flat` のdepthなど) はupstreamと同じく
+  「省略またはnumber」だけを受け、文字列・nullなどは `TypeError` にする。
+  `join` は引数なしまたは文字列1個だけを受け、`splice()` は何も変更しない。
+  callbackの第3引数は呼び出し時snapshotの配列で、receiver自身ではない。
+  `sort` / `toSorted` のcomparatorは `undefined` かユーザー関数だけを受け、
+  builtin関数は `TypeError` にする。push/unshift/splice/fillはreceiverを
+  含む値の挿入を `InvalidDataValue` で拒否する。
   `includes` はSameValueZero、`indexOf` / `lastIndexOf` はstrict equalityで
   比較する。`sort` / `toSorted` の既定比較は `String(...)` のUTF-16 code
   unit順で、`undefined` は末尾に置く。`reverse` と `sort` はupstreamと同じく

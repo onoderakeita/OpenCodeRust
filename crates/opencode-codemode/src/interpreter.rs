@@ -2041,6 +2041,14 @@ impl<'a> Interpreter<'a> {
         comparator: Option<&Value>,
         span: Span,
     ) -> Result<(), RuntimeError> {
+        if let Some(comparator) = comparator {
+            if !comparator.is_undefined() && !matches!(comparator, Value::Function(_)) {
+                return Err(RuntimeError::type_error(
+                    "Array.sort expects an arrow function comparator.",
+                    span,
+                ));
+            }
+        }
         let undefined_count = items.iter().filter(|value| value.is_undefined()).count();
         if undefined_count > 0 {
             let mut defined = items
@@ -2112,9 +2120,32 @@ impl<'a> Interpreter<'a> {
         span: Span,
     ) -> Result<Value, RuntimeError> {
         let argument = |index: usize| arguments.get(index).cloned().unwrap_or(Value::Undefined);
+        // Upstream's `optNumber`: missing/undefined is absent, but any other
+        // non-number is rejected instead of being coerced. Index arguments are
+        // therefore stricter than ordinary JavaScript arithmetic.
+        let opt_number = |value: &Value, label: &str| -> Result<Option<f64>, RuntimeError> {
+            match value {
+                Value::Undefined => Ok(None),
+                Value::Number(value) => Ok(Some(*value)),
+                _ => Err(RuntimeError::type_error(
+                    format!("{method} expects {label} to be a number."),
+                    span,
+                )),
+            }
+        };
         match method {
             "Array.push" => {
                 let array = as_array_ref(receiver, span)?;
+                let target = Rc::as_ptr(&array) as *const () as usize;
+                for value in arguments {
+                    if contains_identity(value, target, &mut Vec::new()) {
+                        return Err(RuntimeError::new(
+                            RuntimeErrorKind::InvalidDataValue,
+                            "Array.push result contains a circular value.",
+                            span,
+                        ));
+                    }
+                }
                 let mut array = array.borrow_mut();
                 array.extend(arguments.iter().cloned());
                 Ok(Value::Number(array.len() as f64))
@@ -2135,6 +2166,16 @@ impl<'a> Interpreter<'a> {
             }
             "Array.unshift" => {
                 let array = as_array_ref(receiver, span)?;
+                let target = Rc::as_ptr(&array) as *const () as usize;
+                for value in arguments {
+                    if contains_identity(value, target, &mut Vec::new()) {
+                        return Err(RuntimeError::new(
+                            RuntimeErrorKind::InvalidDataValue,
+                            "Array.unshift result contains a circular value.",
+                            span,
+                        ));
+                    }
+                }
                 let mut array = array.borrow_mut();
                 for (index, value) in arguments.iter().cloned().enumerate() {
                     array.insert(index, value);
@@ -2152,12 +2193,15 @@ impl<'a> Interpreter<'a> {
             "Array.map" => {
                 let array = as_array_ref(receiver, span)?;
                 let items = array.borrow().clone();
+                // Upstream iterates a snapshot taken at call time and passes that
+                // snapshot as the callback's third argument.
+                let snapshot = Value::array(items.clone());
                 let mapper = argument(0);
                 let mut mapped = Vec::with_capacity(items.len());
                 for (index, item) in items.into_iter().enumerate() {
                     mapped.push(self.invoke_value(
                         &mapper,
-                        vec![item, Value::Number(index as f64), receiver.clone()],
+                        vec![item, Value::Number(index as f64), snapshot.clone()],
                         span,
                     )?);
                 }
@@ -2166,12 +2210,13 @@ impl<'a> Interpreter<'a> {
             "Array.filter" => {
                 let array = as_array_ref(receiver, span)?;
                 let items = array.borrow().clone();
+                let snapshot = Value::array(items.clone());
                 let predicate = argument(0);
                 let mut kept = Vec::new();
                 for (index, item) in items.into_iter().enumerate() {
                     let result = self.invoke_value(
                         &predicate,
-                        vec![item.clone(), Value::Number(index as f64), receiver.clone()],
+                        vec![item.clone(), Value::Number(index as f64), snapshot.clone()],
                         span,
                     )?;
                     if is_truthy(&result) {
@@ -2183,11 +2228,12 @@ impl<'a> Interpreter<'a> {
             "Array.forEach" => {
                 let array = as_array_ref(receiver, span)?;
                 let items = array.borrow().clone();
+                let snapshot = Value::array(items.clone());
                 let callback = argument(0);
                 for (index, item) in items.into_iter().enumerate() {
                     self.invoke_value(
                         &callback,
-                        vec![item, Value::Number(index as f64), receiver.clone()],
+                        vec![item, Value::Number(index as f64), snapshot.clone()],
                         span,
                     )?;
                 }
@@ -2196,6 +2242,7 @@ impl<'a> Interpreter<'a> {
             "Array.reduce" | "Array.reduceRight" => {
                 let array = as_array_ref(receiver, span)?;
                 let items = array.borrow().clone();
+                let snapshot = Value::array(items.clone());
                 let reducer = argument(0);
                 let right = method == "Array.reduceRight";
                 if right {
@@ -2217,7 +2264,7 @@ impl<'a> Interpreter<'a> {
                                 accumulator,
                                 items[index].clone(),
                                 Value::Number(index as f64),
-                                receiver.clone(),
+                                snapshot.clone(),
                             ],
                             span,
                         )?;
@@ -2242,7 +2289,7 @@ impl<'a> Interpreter<'a> {
                                 accumulator,
                                 item,
                                 Value::Number(index as f64),
-                                receiver.clone(),
+                                snapshot.clone(),
                             ],
                             span,
                         )?;
@@ -2258,6 +2305,7 @@ impl<'a> Interpreter<'a> {
             | "Array.every" => {
                 let array = as_array_ref(receiver, span)?;
                 let items = array.borrow().clone();
+                let snapshot = Value::array(items.clone());
                 let predicate = argument(0);
                 let reverse = matches!(method, "Array.findLast" | "Array.findLastIndex");
                 let mut indexed = items.into_iter().enumerate().collect::<Vec<_>>();
@@ -2268,7 +2316,7 @@ impl<'a> Interpreter<'a> {
                 for (index, item) in indexed {
                     let result = self.invoke_value(
                         &predicate,
-                        vec![item.clone(), Value::Number(index as f64), receiver.clone()],
+                        vec![item.clone(), Value::Number(index as f64), snapshot.clone()],
                         span,
                     )?;
                     let truthy = is_truthy(&result);
@@ -2293,10 +2341,18 @@ impl<'a> Interpreter<'a> {
                 })
             }
             "Array.join" => {
+                if arguments.len() > 1
+                    || (arguments.len() == 1 && !matches!(arguments[0], Value::String(_)))
+                {
+                    return Err(RuntimeError::type_error(
+                        "Array.join expects zero arguments or one string separator.",
+                        span,
+                    ));
+                }
                 let array = as_array_ref(receiver, span)?;
                 let separator = match arguments.first() {
-                    None | Some(Value::Undefined) => ",".to_owned(),
-                    Some(value) => to_js_string(value),
+                    Some(Value::String(separator)) => separator.clone(),
+                    _ => ",".to_owned(),
                 };
                 let mut seen = vec![Rc::as_ptr(&array) as *const () as usize];
                 let text = array
@@ -2317,8 +2373,14 @@ impl<'a> Interpreter<'a> {
                 let array = as_array_ref(receiver, span)?;
                 let items = array.borrow().clone();
                 let length = items.len() as i64;
-                let start = normalize_index(&argument(0), length, 0);
-                let end = normalize_index(&argument(1), length, length);
+                let start_number = opt_number(&argument(0), "start")?;
+                let end_number = opt_number(&argument(1), "end")?;
+                let start = start_number.map_or(0, |number| {
+                    normalize_index(&Value::Number(number), length, 0)
+                });
+                let end = end_number.map_or(length, |number| {
+                    normalize_index(&Value::Number(number), length, length)
+                });
                 let start = start.max(0) as usize;
                 let end = end.max(0) as usize;
                 let slice = if end > start && start < items.len() {
@@ -2329,10 +2391,20 @@ impl<'a> Interpreter<'a> {
                 Ok(Value::array(slice))
             }
             "Array.includes" | "Array.indexOf" => {
+                if method == "Array.includes" && (arguments.is_empty() || arguments.len() > 2) {
+                    return Err(RuntimeError::type_error(
+                        "Array.includes expects a value and optional start index.",
+                        span,
+                    ));
+                }
                 let array = as_array_ref(receiver, span)?;
                 let items = array.borrow().clone();
                 let needle = argument(0);
-                let from = normalize_index(&argument(1), items.len() as i64, 0).max(0) as usize;
+                let from = opt_number(&argument(1), "start index")?
+                    .map_or(0, |number| {
+                        normalize_index(&Value::Number(number), items.len() as i64, 0)
+                    })
+                    .max(0) as usize;
                 let position = items
                     .iter()
                     .enumerate()
@@ -2359,19 +2431,23 @@ impl<'a> Interpreter<'a> {
                 if length == 0 {
                     return Ok(Value::Number(-1.0));
                 }
-                let from = if arguments.len() > 1 {
-                    let number = to_number(&argument(1));
-                    if number.is_nan() {
-                        0
-                    } else {
-                        let mut index = number.trunc() as i64;
-                        if index < 0 {
-                            index = index.saturating_add(length);
+                let from = match arguments.get(1) {
+                    // Upstream treats an explicit `undefined` like an omitted
+                    // argument: search from the end.
+                    Some(value) if !value.is_undefined() => {
+                        let number = opt_number(value, "start index")?
+                            .expect("non-undefined values are numbers");
+                        if number.is_nan() {
+                            0
+                        } else {
+                            let mut index = number.trunc() as i64;
+                            if index < 0 {
+                                index = index.saturating_add(length);
+                            }
+                            index
                         }
-                        index
                     }
-                } else {
-                    length - 1
+                    _ => length - 1,
                 };
                 if from < 0 {
                     return Ok(Value::Number(-1.0));
@@ -2399,10 +2475,8 @@ impl<'a> Interpreter<'a> {
             }
             "Array.flat" => {
                 let array = as_array_ref(receiver, span)?;
-                let depth = match arguments.first() {
-                    Some(Value::Undefined) | None => 1,
-                    Some(value) => to_number(value).clamp(0.0, 64.0) as usize,
-                };
+                let depth = opt_number(&argument(0), "depth")?.unwrap_or(1.0);
+                let depth = depth.clamp(0.0, 64.0) as usize;
                 let mut flattened = Vec::new();
                 flatten_into(&array.borrow(), depth, &mut flattened);
                 Ok(Value::array(flattened))
@@ -2410,12 +2484,13 @@ impl<'a> Interpreter<'a> {
             "Array.flatMap" => {
                 let array = as_array_ref(receiver, span)?;
                 let items = array.borrow().clone();
+                let snapshot = Value::array(items.clone());
                 let mapper = argument(0);
                 let mut mapped = Vec::with_capacity(items.len());
                 for (index, item) in items.into_iter().enumerate() {
                     mapped.push(self.invoke_value(
                         &mapper,
-                        vec![item, Value::Number(index as f64), receiver.clone()],
+                        vec![item, Value::Number(index as f64), snapshot.clone()],
                         span,
                     )?);
                 }
@@ -2447,23 +2522,34 @@ impl<'a> Interpreter<'a> {
                 let array = as_array_ref(receiver, span)?;
                 let items = array.borrow().clone();
                 let length = items.len() as i64;
-                let index = normalize_index(&argument(0), length, 0);
-                if index < 0 || index >= length {
+                let index = opt_number(&argument(0), "index")?.unwrap_or(0.0);
+                let resolved = if index < 0.0 {
+                    length as f64 + index
+                } else {
+                    index
+                };
+                if resolved < 0.0 || resolved >= length as f64 {
                     return Err(RuntimeError::new(
                         RuntimeErrorKind::RangeError,
-                        "Invalid index.",
+                        "Array.with index is out of range.",
                         span,
                     ));
                 }
                 let mut replaced = items;
-                replaced[index as usize] = argument(1);
+                // Native `with` only writes a real element for integer indices;
+                // fractional/NaN indices become non-index properties, which do
+                // not appear in the returned array's contents.
+                if resolved.fract() == 0.0 {
+                    replaced[resolved as usize] = argument(1);
+                }
                 Ok(Value::array(replaced))
             }
             "Array.at" => {
                 let array = as_array_ref(receiver, span)?;
                 let items = array.borrow();
                 let length = items.len() as i64;
-                let index = normalize_index(&argument(0), length, 0);
+                let index = opt_number(&argument(0), "index")?.unwrap_or(0.0);
+                let index = normalize_index(&Value::Number(index), length, 0);
                 Ok(if index < 0 || index >= length {
                     Value::Undefined
                 } else {
@@ -2471,11 +2557,16 @@ impl<'a> Interpreter<'a> {
                 })
             }
             "Array.splice" => {
+                if arguments.is_empty() {
+                    return Ok(Value::array(Vec::new()));
+                }
                 let array = as_array_ref(receiver, span)?;
                 let length = array.borrow().len() as i64;
-                let start = normalize_index(&argument(0), length, 0).clamp(0, length) as usize;
+                let start_number = opt_number(&argument(0), "start")?.unwrap_or(0.0);
+                let start = normalize_index(&Value::Number(start_number), length, 0)
+                    .clamp(0, length) as usize;
                 let delete_count = if arguments.len() > 1 {
-                    let count = to_number(&argument(1));
+                    let count = opt_number(&argument(1), "delete count")?.unwrap_or(0.0);
                     if count.is_nan() {
                         0
                     } else {
@@ -2510,8 +2601,24 @@ impl<'a> Interpreter<'a> {
                 let array = as_array_ref(receiver, span)?;
                 let length = array.borrow().len() as i64;
                 let value = argument(0);
-                let start = normalize_index(&argument(1), length, 0).clamp(0, length) as usize;
-                let end = normalize_index(&argument(2), length, length).clamp(0, length) as usize;
+                let target = Rc::as_ptr(&array) as *const () as usize;
+                if contains_identity(&value, target, &mut Vec::new()) {
+                    return Err(RuntimeError::new(
+                        RuntimeErrorKind::InvalidDataValue,
+                        "Array.fill result contains a circular value.",
+                        span,
+                    ));
+                }
+                let start_number = opt_number(&argument(1), "start")?;
+                let end_number = opt_number(&argument(2), "end")?;
+                let start = start_number.map_or(0, |number| {
+                    normalize_index(&Value::Number(number), length, 0)
+                });
+                let end = end_number.map_or(length, |number| {
+                    normalize_index(&Value::Number(number), length, length)
+                });
+                let start = start.clamp(0, length) as usize;
+                let end = end.clamp(0, length) as usize;
                 let mut items = array.borrow_mut();
                 for item in items.iter_mut().take(end).skip(start) {
                     *item = value.clone();
@@ -2522,9 +2629,17 @@ impl<'a> Interpreter<'a> {
             "Array.copyWithin" => {
                 let array = as_array_ref(receiver, span)?;
                 let length = array.borrow().len() as i64;
-                let target = normalize_index(&argument(0), length, 0).clamp(0, length) as usize;
-                let start = normalize_index(&argument(1), length, 0).clamp(0, length) as usize;
-                let end = normalize_index(&argument(2), length, length).clamp(0, length) as usize;
+                let target_number = opt_number(&argument(0), "target index")?.unwrap_or(0.0);
+                let start_number = opt_number(&argument(1), "start")?.unwrap_or(0.0);
+                let end_number = opt_number(&argument(2), "end")?;
+                let target = normalize_index(&Value::Number(target_number), length, 0)
+                    .clamp(0, length) as usize;
+                let start = normalize_index(&Value::Number(start_number), length, 0)
+                    .clamp(0, length) as usize;
+                let end = end_number.map_or(length, |number| {
+                    normalize_index(&Value::Number(number), length, length)
+                });
+                let end = end.clamp(0, length) as usize;
                 let count = end.saturating_sub(start).min(length as usize - target);
                 let copied = {
                     let items = array.borrow();
@@ -6902,9 +7017,20 @@ mod tests {
 
     #[test]
     fn rejects_circular_results() {
-        let error =
-            run("const a = []; a.push(a); return a;").expect_err("should reject a circular result");
-        assert_eq!(error.kind(), super::RuntimeErrorKind::InvalidDataValue);
+        for source in [
+            "const a = []; a.push(a); return a;",
+            "const a = []; a.unshift(a); return a;",
+            "const a = []; a.fill(a); return a;",
+            "const a = []; a.push([a]); return a;",
+            "const a = []; a.splice(0, 0, { nested: a }); return a;",
+        ] {
+            let error = run(source).expect_err("should reject a circular insertion");
+            assert_eq!(
+                error.kind(),
+                super::RuntimeErrorKind::InvalidDataValue,
+                "{source}"
+            );
+        }
     }
 
     #[test]
@@ -7326,7 +7452,7 @@ mod tests {
         assert_eq!(run_value("return [1,2,1].lastIndexOf(1, 1);"), number(0.0));
         assert_eq!(
             run_value("return [1,2,1].lastIndexOf(1, undefined);"),
-            number(0.0)
+            number(2.0)
         );
         assert_eq!(run_value("return [1,2,1].lastIndexOf(1, -2);"), number(0.0));
         assert_eq!(run_value("return [1,2,3].lastIndexOf(4);"), number(-1.0));
@@ -7956,17 +8082,66 @@ mod tests {
         assert_eq!(run_value(r#"return parseInt("\uFEFF10");"#), number(10.0));
 
         assert_eq!(
-            run_value("const a = [1]; a.push(a); return a.join('-');"),
+            run_value("const a = [1]; a[1] = a; return a.join('-');"),
             string("1-")
         );
         assert_eq!(
-            run_value("const a = [1]; a.push(a); return String(a);"),
+            run_value("const a = [1]; a[1] = a; return String(a);"),
             string("1,")
         );
         assert_eq!(
-            run_value("const b = []; b.push([b]); return b.join();"),
+            run_value("const b = []; b[0] = [b]; return b.join();"),
             string("")
         );
+        for source in [
+            "return [1, 2].join(undefined);",
+            "return [1, 2].join(null);",
+            "return [1, 2].join('-', 'x');",
+        ] {
+            let error = run(source).expect_err("join only accepts a string separator");
+            assert_eq!(error.kind(), super::RuntimeErrorKind::TypeError, "{source}");
+        }
+        for source in [
+            "return [1].includes();",
+            "return [1].includes(1, 0, 2);",
+            "return [1].includes(1, '0');",
+            "return [1].indexOf(1, '0');",
+            "return [1].slice('0');",
+            "return [1].splice('0', 1);",
+            "return [1].fill(1, '0');",
+            "return [1].copyWithin('0');",
+            "return [1].at('0');",
+            "return [1].with('0', 2);",
+            "return [1].flat('1');",
+            "return [1].lastIndexOf(1, '0');",
+        ] {
+            let error = run(source).expect_err("array indices must be numbers");
+            assert_eq!(error.kind(), super::RuntimeErrorKind::TypeError, "{source}");
+        }
+        assert_eq!(
+            run_value("const a = [1, 2]; const r = a.splice(); return r.length + ':' + a.length;"),
+            string("0:2")
+        );
+        assert_eq!(
+            run_value(
+                "const a = [1, 2]; let first; const same = []; \
+                 a.map((v, i, snapshot) => { if (!first) first = snapshot; \
+                 same.push(snapshot === first); return v; }); \
+                 return [a[0] === first[0], same.join(',')].join(':');"
+            ),
+            string("true:true,true")
+        );
+        assert_eq!(
+            run_value("const a = [1]; const seen = []; a.map((v, i, s) => seen.push(s === a)); return seen[0];"),
+            Value::Boolean(false)
+        );
+        for source in [
+            "return [2, 1].sort(Math.max);",
+            "return [2, 1].toSorted(Math.max);",
+        ] {
+            let error = run(source).expect_err("sort comparators must be user functions");
+            assert_eq!(error.kind(), super::RuntimeErrorKind::TypeError, "{source}");
+        }
         assert_eq!(
             run_value("return [NaN].includes(NaN);"),
             Value::Boolean(true)
@@ -8002,7 +8177,7 @@ mod tests {
         let error = run(r#"return JSON.stringify({ a: 1 }, ["a"]);"#)
             .expect_err("replacer arrays are unsupported");
         assert_eq!(error.kind(), super::RuntimeErrorKind::UnsupportedSyntax);
-        let error = run("const a = []; a.push(a); return JSON.stringify(a);")
+        let error = run("const a = []; a[0] = a; return JSON.stringify(a);")
             .expect_err("circular JSON should fail");
         assert_eq!(error.kind(), super::RuntimeErrorKind::TypeError);
         assert!(error.message().contains("circular"));

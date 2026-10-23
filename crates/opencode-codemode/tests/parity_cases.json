@@ -1687,14 +1687,6 @@
     ]
   },
   {
-    "expr": "[1,2,3].join(undefined)",
-    "expected": "1,2,3"
-  },
-  {
-    "expr": "[1,2,3].join(null)",
-    "expected": "1null2null3"
-  },
-  {
     "expr": "[1].concat('ab', 2)",
     "expected": [
       1,
