@@ -2422,6 +2422,7 @@ impl<'a> Interpreter<'a> {
                 // snapshot as the callback's third argument.
                 let snapshot = Value::array(items.clone());
                 let mapper = argument(0);
+                ensure_collection_callback(&mapper, "Array.map", span)?;
                 let mut mapped = Vec::with_capacity(items.len());
                 for (index, item) in items.into_iter().enumerate() {
                     mapped.push(self.invoke_value(
@@ -2437,6 +2438,7 @@ impl<'a> Interpreter<'a> {
                 let items = array.borrow().clone();
                 let snapshot = Value::array(items.clone());
                 let predicate = argument(0);
+                ensure_collection_callback(&predicate, "Array.filter", span)?;
                 let mut kept = Vec::new();
                 for (index, item) in items.into_iter().enumerate() {
                     let result = self.invoke_value(
@@ -2455,6 +2457,7 @@ impl<'a> Interpreter<'a> {
                 let items = array.borrow().clone();
                 let snapshot = Value::array(items.clone());
                 let callback = argument(0);
+                ensure_collection_callback(&callback, "Array.forEach", span)?;
                 for (index, item) in items.into_iter().enumerate() {
                     self.invoke_value(
                         &callback,
@@ -2469,6 +2472,7 @@ impl<'a> Interpreter<'a> {
                 let items = array.borrow().clone();
                 let snapshot = Value::array(items.clone());
                 let reducer = argument(0);
+                ensure_collection_callback(&reducer, method, span)?;
                 let right = method == "Array.reduceRight";
                 if right {
                     let (mut accumulator, start) = if arguments.len() > 1 {
@@ -2532,6 +2536,7 @@ impl<'a> Interpreter<'a> {
                 let items = array.borrow().clone();
                 let snapshot = Value::array(items.clone());
                 let predicate = argument(0);
+                ensure_collection_callback(&predicate, method, span)?;
                 let reverse = matches!(method, "Array.findLast" | "Array.findLastIndex");
                 let mut indexed = items.into_iter().enumerate().collect::<Vec<_>>();
                 if reverse {
@@ -2711,6 +2716,7 @@ impl<'a> Interpreter<'a> {
                 let items = array.borrow().clone();
                 let snapshot = Value::array(items.clone());
                 let mapper = argument(0);
+                ensure_collection_callback(&mapper, "Array.flatMap", span)?;
                 let mut mapped = Vec::with_capacity(items.len());
                 for (index, item) in items.into_iter().enumerate() {
                     mapped.push(self.invoke_value(
@@ -3142,10 +3148,7 @@ impl<'a> Interpreter<'a> {
                 };
                 let replacement = argument(1);
                 let all = method == "String.replaceAll";
-                if matches!(
-                    replacement,
-                    Value::Function(_) | Value::Builtin(_) | Value::BoundMethod { .. }
-                ) {
+                if is_collection_callback(&replacement) {
                     return Ok(Value::String(self.replace_with_callback(
                         &text,
                         &search,
@@ -3295,6 +3298,7 @@ impl<'a> Interpreter<'a> {
             "Map.forEach" => {
                 let map = as_map_ref(receiver, span)?;
                 let callback = argument(0);
+                ensure_collection_callback(&callback, "Map.forEach", span)?;
                 for (key, value) in map.entries() {
                     self.invoke_value(&callback, vec![value, key, receiver.clone()], span)?;
                 }
@@ -3334,6 +3338,7 @@ impl<'a> Interpreter<'a> {
             "Set.forEach" => {
                 let set = as_set_ref(receiver, span)?;
                 let callback = argument(0);
+                ensure_collection_callback(&callback, "Set.forEach", span)?;
                 for value in set.values() {
                     self.invoke_value(
                         &callback,
@@ -5777,6 +5782,39 @@ fn format_console_value(value: &Value, seen: &mut Vec<usize>, depth: usize) -> S
     }
 }
 
+/// Upstream collection callbacks accept user functions plus the coercion and
+/// URI builtins; other callable objects (Math methods, namespace statics) are
+/// rejected before iteration starts.
+fn is_collection_callback(value: &Value) -> bool {
+    match value {
+        Value::Function(_) => true,
+        Value::Builtin(name) => matches!(
+            *name,
+            "Number"
+                | "String"
+                | "Boolean"
+                | "parseInt"
+                | "parseFloat"
+                | "encodeURI"
+                | "encodeURIComponent"
+                | "decodeURI"
+                | "decodeURIComponent"
+        ),
+        _ => false,
+    }
+}
+
+fn ensure_collection_callback(value: &Value, label: &str, span: Span) -> Result<(), RuntimeError> {
+    if is_collection_callback(value) {
+        Ok(())
+    } else {
+        Err(RuntimeError::type_error(
+            format!("{label} expects a function callback."),
+            span,
+        ))
+    }
+}
+
 /// Applies the upstream data checkpoint (`boundedData`) to an Object static
 /// argument. Sandbox values stay leaves; nested callables, promises, blocked
 /// members, cycles, and over-deep values become `InvalidDataValue`.
@@ -7995,6 +8033,38 @@ mod tests {
             run_value("return Object.hasOwn(new Map(), 'a');"),
             Value::Boolean(false)
         );
+    }
+
+    #[test]
+    fn restricts_collection_callbacks_like_upstream() {
+        assert_eq!(
+            run_value("return [1, 2].map(String).join(',');"),
+            string("1,2")
+        );
+        assert_eq!(
+            run_value("return [1, 2].map(encodeURIComponent).join(',');"),
+            string("1,2")
+        );
+        assert_eq!(
+            run_value("return [0, 1].filter(Boolean).length;"),
+            number(1.0)
+        );
+        for source in [
+            "return [1].map(Number.isFinite);",
+            "return [1].map(Math.abs);",
+            "return [1].filter(Number.isNaN);",
+            "return [1].forEach(Math.abs);",
+            "return [1].reduce(Number.isFinite);",
+            "return [1].find(Number.isFinite);",
+            "return [1].flatMap(Number.isFinite);",
+            "return new Map().forEach(Number.isFinite);",
+            "return new Set().forEach(Math.abs);",
+            "return 'abc'.replace('b', Math.abs);",
+            "return 'abc'.replace('b', 'x'.toUpperCase);",
+        ] {
+            let error = run(source).expect_err("callback must be supported");
+            assert_eq!(error.kind(), super::RuntimeErrorKind::TypeError, "{source}");
+        }
     }
 
     #[test]

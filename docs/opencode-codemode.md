@@ -200,6 +200,10 @@ shadowingできる。
   「省略またはnumber」だけを受け、文字列・nullなどは `TypeError` にする。
   `join` は引数なしまたは文字列1個だけを受け、`splice()` は何も変更しない。
   callbackの第3引数は呼び出し時snapshotの配列で、receiver自身ではない。
+  callbackはユーザー関数、または `Number` / `String` / `Boolean` /
+  `parseInt` / `parseFloat` / URI関数だけを受け、`Number.isFinite` や
+  `Math.*` などのbuiltinは反復前に `TypeError` にする。Map/Setの
+  `forEach` と `String.replace` のcallable replacerも同じ集合に従う。
   `sort` / `toSorted` のcomparatorは `undefined` かユーザー関数だけを受け、
   builtin関数は `TypeError` にする。push/unshift/splice/fillはreceiverを
   含む値の挿入を `InvalidDataValue` で拒否する。
@@ -216,8 +220,9 @@ shadowingできる。
   他型は `TypeError` にする。`split()` は引数なしのときだけ `[receiver]` を
   返し、明示的な `undefined` は拒否する。`replace` 系は
   `$$` / `$&` / ``$` `` / `$'` のreplacement patternを展開し、callableの
-  replacerは `(match, offset, input)` で呼ぶ (upstreamはstringのみだが、
-  Rust実装では拡張としてcallableも受ける)。offsetはUTF-16 code unitで
+  replacerは `(match, offset, input)` で呼ぶ。upstreamと同じくuser関数と
+  coercion/URI builtinだけをreplacerとして受け、それ以外のcallableは
+  `TypeError` にする。offsetはUTF-16 code unitで
   数える。`lastIndexOf` のpositionは絶対位置としてclampし、負数は0、`NaN` は
   文字列長として扱う。`indexOf` / `includes` / `startsWith` / `endsWith` も
   絶対位置で、負数は0になる。Arrayの検索系 (`indexOf` / `includes` /
