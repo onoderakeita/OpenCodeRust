@@ -7863,5 +7863,225 @@
   {
     "expr": "String('2' > 10)",
     "expected": "false"
+  },
+  {
+    "expr": "JSON.stringify(Object.keys({'4294967295':'x', '1':'y'}))",
+    "expected": "[\"1\",\"4294967295\"]"
+  },
+  {
+    "expr": "JSON.stringify(Object.keys({'01':'a','1':'b'}))",
+    "expected": "[\"1\",\"01\"]"
+  },
+  {
+    "expr": "JSON.stringify(Object.keys({'-1':'a','1':'b'}))",
+    "expected": "[\"1\",\"-1\"]"
+  },
+  {
+    "expr": "JSON.stringify(Object.keys({'1.5':'a','1':'b'}))",
+    "expected": "[\"1\",\"1.5\"]"
+  },
+  {
+    "expr": "JSON.stringify(Object.keys({'4294967294':'a','2':'b'}))",
+    "expected": "[\"2\",\"4294967294\"]"
+  },
+  {
+    "expr": "JSON.stringify(Object.keys({'9007199254740992':'a','1':'b'}))",
+    "expected": "[\"1\",\"9007199254740992\"]"
+  },
+  {
+    "expr": "JSON.stringify(Object.values({'4294967295':'x','1':'y'}))",
+    "expected": "[\"y\",\"x\"]"
+  },
+  {
+    "expr": "JSON.stringify(Object.entries({'01':'a','1':'b'}))",
+    "expected": "[[\"1\",\"b\"],[\"01\",\"a\"]]"
+  },
+  {
+    "expr": "JSON.stringify({'2':'b','1':'a','x':'c'})",
+    "expected": "{\"1\":\"a\",\"2\":\"b\",\"x\":\"c\"}"
+  },
+  {
+    "expr": "JSON.stringify({'01':'a','1':'b'})",
+    "expected": "{\"1\":\"b\",\"01\":\"a\"}"
+  },
+  {
+    "expr": "JSON.stringify(JSON.parse('{\"2\":1,\"1\":2}'))",
+    "expected": "{\"1\":2,\"2\":1}"
+  },
+  {
+    "expr": "JSON.stringify(Object.keys({'1':'a','3':'c','2':'b'}))",
+    "expected": "[\"1\",\"2\",\"3\"]"
+  },
+  {
+    "expr": "JSON.stringify(Object.keys({'b':1,'a':2,'2':3,'1':4}))",
+    "expected": "[\"1\",\"2\",\"b\",\"a\"]"
+  },
+  {
+    "expr": "JSON.stringify('abc'.replace('b', '[$&]'))",
+    "expected": "\"a[b]c\""
+  },
+  {
+    "expr": "JSON.stringify('abc'.replace('b', '$$'))",
+    "expected": "\"a$c\""
+  },
+  {
+    "expr": "JSON.stringify('abc'.replace('b', '$`'))",
+    "expected": "\"aac\""
+  },
+  {
+    "expr": "JSON.stringify('abc'.replace('b', \"$'\"))",
+    "expected": "\"acc\""
+  },
+  {
+    "expr": "JSON.stringify('abc'.replace('b', '$1'))",
+    "expected": "\"a$1c\""
+  },
+  {
+    "expr": "JSON.stringify('abc'.replace('b', '$<x>'))",
+    "expected": "\"a$<x>c\""
+  },
+  {
+    "expr": "JSON.stringify('abc'.replace('b', '$0'))",
+    "expected": "\"a$0c\""
+  },
+  {
+    "expr": "JSON.stringify('abc'.replace('b', '$$&'))",
+    "expected": "\"a$&c\""
+  },
+  {
+    "expr": "JSON.stringify('abc').replace('abc', '$$')",
+    "expected": "\"$\""
+  },
+  {
+    "expr": "JSON.stringify('abc'.replace('b', '$$$&'))",
+    "expected": "\"a$bc\""
+  },
+  {
+    "expr": "JSON.stringify('abc'.replace('b', 'x$'))",
+    "expected": "\"ax$c\""
+  },
+  {
+    "expr": "JSON.stringify('abc'.replace('', '[$&]'))",
+    "expected": "\"[]abc\""
+  },
+  {
+    "expr": "JSON.stringify('abcb'.replaceAll('b', '[$&]'))",
+    "expected": "\"a[b]c[b]\""
+  },
+  {
+    "expr": "JSON.stringify('abc'.replaceAll('b', '$`'))",
+    "expected": "\"aac\""
+  },
+  {
+    "expr": "JSON.stringify('abc'.replaceAll('b', \"$'\"))",
+    "expected": "\"acc\""
+  },
+  {
+    "expr": "JSON.stringify('abc'.replaceAll('b', '$$'))",
+    "expected": "\"a$c\""
+  },
+  {
+    "expr": "JSON.stringify('abc'.replaceAll('', '[$&]'))",
+    "expected": "\"[]a[]b[]c[]\""
+  },
+  {
+    "expr": "JSON.stringify([10, undefined, 2, null, 1].sort())",
+    "expected": "[1,10,2,null,null]"
+  },
+  {
+    "expr": "JSON.stringify([NaN, 1, undefined].sort())",
+    "expected": "[1,null,null]"
+  },
+  {
+    "expr": "JSON.stringify([true, false, 1, 0].sort())",
+    "expected": "[0,1,false,true]"
+  },
+  {
+    "expr": "JSON.stringify([{}, [], null].sort())",
+    "expected": "[[],{},null]"
+  },
+  {
+    "expr": "JSON.stringify([1,2,3].sort(() => undefined))",
+    "expected": "[1,2,3]"
+  },
+  {
+    "expr": "JSON.stringify([1,2,3].sort(() => 'x'))",
+    "expected": "[1,2,3]"
+  },
+  {
+    "expr": "JSON.stringify([1,2,3].sort(() => null))",
+    "expected": "[1,2,3]"
+  },
+  {
+    "expr": "JSON.stringify([1,2,3].sort(() => NaN))",
+    "expected": "[1,2,3]"
+  },
+  {
+    "expr": "JSON.stringify([new Date(1000), new Date(0)].sort())",
+    "expected": "[\"1970-01-01T00:00:00.000Z\",\"1970-01-01T00:00:01.000Z\"]"
+  },
+  {
+    "expr": "JSON.stringify(['10', 2, '1'].sort())",
+    "expected": "[\"1\",\"10\",2]"
+  },
+  {
+    "expr": "JSON.stringify([-1, -10, -2].sort())",
+    "expected": "[-1,-10,-2]"
+  },
+  {
+    "expr": "String(JSON.stringify(-0))",
+    "expected": "0"
+  },
+  {
+    "expr": "JSON.stringify({a:-0})",
+    "expected": "{\"a\":0}"
+  },
+  {
+    "expr": "JSON.stringify([-0])",
+    "expected": "[0]"
+  },
+  {
+    "expr": "String(JSON.stringify(0))",
+    "expected": "0"
+  },
+  {
+    "expr": "JSON.stringify(new Map())",
+    "expected": "{}"
+  },
+  {
+    "expr": "JSON.stringify(new Set([1,2]))",
+    "expected": "{}"
+  },
+  {
+    "expr": "JSON.stringify({a:undefined})",
+    "expected": "{}"
+  },
+  {
+    "expr": "JSON.stringify([undefined])",
+    "expected": "[null]"
+  },
+  {
+    "expr": "typeof JSON.stringify(undefined)",
+    "expected": "undefined"
+  },
+  {
+    "expr": "JSON.stringify({b:2,a:1}, null, 2)",
+    "expected": "{\n  \"b\": 2,\n  \"a\": 1\n}"
+  },
+  {
+    "expr": "JSON.stringify({a:[1,{b:2}]}, null, 1)",
+    "expected": "{\n \"a\": [\n  1,\n  {\n   \"b\": 2\n  }\n ]\n}"
+  },
+  {
+    "expr": "JSON.stringify({a:1,b:2}, null, '--')",
+    "expected": "{\n--\"a\": 1,\n--\"b\": 2\n}"
+  },
+  {
+    "expr": "JSON.stringify({a:1,b:2}, null, 11)",
+    "expected": "{\n          \"a\": 1,\n          \"b\": 2\n}"
+  },
+  {
+    "expr": "JSON.stringify({a:1,b:2}, null, 'abcdefghijklm')",
+    "expected": "{\nabcdefghij\"a\": 1,\nabcdefghij\"b\": 2\n}"
   }
 ]

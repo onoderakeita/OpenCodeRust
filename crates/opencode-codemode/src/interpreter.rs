@@ -6872,6 +6872,30 @@ mod tests {
     }
 
     #[test]
+    fn enumerates_error_properties_like_upstream_data_objects() {
+        assert_eq!(
+            run_value("return JSON.stringify(Object.keys(new Error('m')));"),
+            string("[\"name\",\"message\"]")
+        );
+        assert_eq!(
+            run_value("return JSON.stringify(Object.values(new Error('m')));"),
+            string("[\"Error\",\"m\"]")
+        );
+        assert_eq!(
+            run_value("return JSON.stringify(Object.entries(new TypeError('m')));"),
+            string("[[\"name\",\"TypeError\"],[\"message\",\"m\"]]")
+        );
+        assert_eq!(
+            run_value("return JSON.stringify(Object.assign({}, new Error('m')));"),
+            string("{\"name\":\"Error\",\"message\":\"m\"}")
+        );
+        assert_eq!(
+            run_value("return JSON.stringify({...new Error('m')});"),
+            string("{\"name\":\"Error\",\"message\":\"m\"}")
+        );
+    }
+
+    #[test]
     fn rejects_circular_splice_insertion() {
         let error = run("const a = [1]; a.splice(0, 0, [a]); return a;")
             .expect_err("should reject a circular insertion");
