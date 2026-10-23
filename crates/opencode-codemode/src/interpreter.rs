@@ -5087,6 +5087,12 @@ fn enumerable_keys(value: &Value, span: Span) -> Result<Vec<Value>, RuntimeError
         Value::Array(array) => Ok((0..array.borrow().len())
             .map(|index| Value::String(index.to_string()))
             .collect()),
+        // Upstream errors are null-prototype data objects whose `name` and
+        // `message` properties are enumerable, so `for...in` sees both.
+        Value::Error(_) => Ok(vec![
+            Value::String("name".to_owned()),
+            Value::String("message".to_owned()),
+        ]),
         _ => Err(RuntimeError::type_error(
             "for...in requires a plain object, array, or tools reference. \
              Use for...of for arrays/strings/Maps/Sets, or Object.keys(value).",
@@ -6853,6 +6859,16 @@ mod tests {
                 .message()
                 .contains("Use for...of for arrays/strings/Maps/Sets"));
         }
+    }
+
+    #[test]
+    fn for_in_enumerates_error_properties() {
+        assert_eq!(
+            run_value(
+                "const out = []; for (const key in new Error('m')) out.push(key); return JSON.stringify(out);"
+            ),
+            string("[\"name\",\"message\"]")
+        );
     }
 
     #[test]

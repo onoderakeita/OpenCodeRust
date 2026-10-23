@@ -7535,5 +7535,333 @@
   {
     "expr": "JSON.stringify([].fill(1, -1))",
     "expected": "[]"
+  },
+  {
+    "expr": "Number([])",
+    "expected": 0
+  },
+  {
+    "expr": "Number([1])",
+    "expected": 1
+  },
+  {
+    "expr": "String(Number([1,2]))",
+    "expected": "NaN"
+  },
+  {
+    "expr": "String(Number({}))",
+    "expected": "NaN"
+  },
+  {
+    "expr": "Number(new Date(0))",
+    "expected": 0
+  },
+  {
+    "expr": "Number(null)",
+    "expected": 0
+  },
+  {
+    "expr": "String(Number(undefined))",
+    "expected": "NaN"
+  },
+  {
+    "expr": "Number(true)",
+    "expected": 1
+  },
+  {
+    "expr": "String([])",
+    "expected": ""
+  },
+  {
+    "expr": "String([1,2])",
+    "expected": "1,2"
+  },
+  {
+    "expr": "String({})",
+    "expected": "[object Object]"
+  },
+  {
+    "expr": "Boolean([])",
+    "expected": true
+  },
+  {
+    "expr": "Boolean('')",
+    "expected": false
+  },
+  {
+    "expr": "String(parseInt([]))",
+    "expected": "NaN"
+  },
+  {
+    "expr": "parseInt([1])",
+    "expected": 1
+  },
+  {
+    "expr": "new Date(0) === 0",
+    "expected": false
+  },
+  {
+    "expr": "new Date(0) < 1",
+    "expected": true
+  },
+  {
+    "expr": "new Date(0) > -1",
+    "expected": true
+  },
+  {
+    "expr": "[] == 0",
+    "expected": true
+  },
+  {
+    "expr": "[1] == 1",
+    "expected": true
+  },
+  {
+    "expr": "({}) == '[object Object]'",
+    "expected": true
+  },
+  {
+    "expr": "[2] > 1",
+    "expected": true
+  },
+  {
+    "expr": "[] < 1",
+    "expected": true
+  },
+  {
+    "expr": "({}) < 1",
+    "expected": false
+  },
+  {
+    "expr": "0 in [1]",
+    "expected": true
+  },
+  {
+    "expr": "'length' in [1]",
+    "expected": true
+  },
+  {
+    "expr": "1 in [1]",
+    "expected": false
+  },
+  {
+    "expr": "'a' in {a:1}",
+    "expected": true
+  },
+  {
+    "expr": "[1]?.[0]",
+    "expected": 1
+  },
+  {
+    "expr": "String(null?.[0])",
+    "expected": "undefined"
+  },
+  {
+    "expr": "({a:{b:2}})?.a?.b",
+    "expected": 2
+  },
+  {
+    "expr": "String(({a:null})?.a?.b)",
+    "expected": "undefined"
+  },
+  {
+    "expr": "(() => { let called = false; const f = () => { called = true; return 2; }; const {a = f()} = {a:1}; return [a, called]; })()",
+    "expected": [
+      1,
+      false
+    ]
+  },
+  {
+    "expr": "Date.UTC(2024, 0.9, 1.9)",
+    "expected": 1704067200000
+  },
+  {
+    "expr": "Date.UTC(99.9, 0, 1)",
+    "expected": 915148800000
+  },
+  {
+    "expr": "String(Date.UTC(2024, NaN))",
+    "expected": "NaN"
+  },
+  {
+    "expr": "String(Date.UTC(2024, Infinity))",
+    "expected": "NaN"
+  },
+  {
+    "expr": "Date.UTC(-0, 0, 1)",
+    "expected": -2208988800000
+  },
+  {
+    "expr": "(() => { const m = new Map([['a',1],['b',2]]); m.delete('a'); m.set('a',3); return [...m.keys()]; })()",
+    "expected": [
+      "b",
+      "a"
+    ]
+  },
+  {
+    "expr": "(() => { const m = new Map([['a',1],['b',2]]); m.set('a',3); return [...m.entries()]; })()",
+    "expected": [
+      [
+        "a",
+        3
+      ],
+      [
+        "b",
+        2
+      ]
+    ]
+  },
+  {
+    "expr": "(() => { const s = new Set([1,2]); s.delete(1); s.add(1); return [...s]; })()",
+    "expected": [
+      2,
+      1
+    ]
+  },
+  {
+    "expr": "(() => { const s = new Set([1,2]); s.add(1); return [...s]; })()",
+    "expected": [
+      1,
+      2
+    ]
+  },
+  {
+    "expr": "(() => { const out = []; for (const k in {b:1, 2:2, a:3}) out.push(k); return out; })()",
+    "expected": [
+      "2",
+      "b",
+      "a"
+    ]
+  },
+  {
+    "expr": "(() => { const out = []; for (const k in [7,8]) out.push(k); return out; })()",
+    "expected": [
+      "0",
+      "1"
+    ]
+  },
+  {
+    "expr": "parseInt([12])",
+    "expected": 12
+  },
+  {
+    "expr": "parseFloat([1.5])",
+    "expected": 1.5
+  },
+  {
+    "expr": "Number([[]])",
+    "expected": 0
+  },
+  {
+    "expr": "String(Number([[]]))",
+    "expected": "0"
+  },
+  {
+    "expr": "+new Date(0)",
+    "expected": 0
+  },
+  {
+    "expr": "+[]",
+    "expected": 0
+  },
+  {
+    "expr": "+[1]",
+    "expected": 1
+  },
+  {
+    "expr": "String(+[1,2])",
+    "expected": "NaN"
+  },
+  {
+    "expr": "String(+({}))",
+    "expected": "NaN"
+  },
+  {
+    "expr": "1 / -''",
+    "expected": null
+  },
+  {
+    "expr": "~null",
+    "expected": -1
+  },
+  {
+    "expr": "~undefined",
+    "expected": -1
+  },
+  {
+    "expr": "~true",
+    "expected": -2
+  },
+  {
+    "expr": "![]",
+    "expected": false
+  },
+  {
+    "expr": "!0",
+    "expected": true
+  },
+  {
+    "expr": "5 & 3",
+    "expected": 1
+  },
+  {
+    "expr": "5 | 3",
+    "expected": 7
+  },
+  {
+    "expr": "5 ^ 3",
+    "expected": 6
+  },
+  {
+    "expr": "1 << 31",
+    "expected": -2147483648
+  },
+  {
+    "expr": "-8 >> 1",
+    "expected": -4
+  },
+  {
+    "expr": "-8 >>> 1",
+    "expected": 2147483644
+  },
+  {
+    "expr": "String(0.1 + 0.2 === 0.3)",
+    "expected": "false"
+  },
+  {
+    "expr": "String(2 ** 53 === 2 ** 53 + 1)",
+    "expected": "true"
+  },
+  {
+    "expr": "String(NaN < 1)",
+    "expected": "false"
+  },
+  {
+    "expr": "String(undefined < 1)",
+    "expected": "false"
+  },
+  {
+    "expr": "String(undefined > 1)",
+    "expected": "false"
+  },
+  {
+    "expr": "String(null <= 0)",
+    "expected": "true"
+  },
+  {
+    "expr": "String([] <= 0)",
+    "expected": "true"
+  },
+  {
+    "expr": "String([1] >= 1)",
+    "expected": "true"
+  },
+  {
+    "expr": "String('2' > '10')",
+    "expected": "true"
+  },
+  {
+    "expr": "String('2' > 10)",
+    "expected": "false"
   }
 ]

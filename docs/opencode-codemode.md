@@ -103,6 +103,8 @@ upstreamは未対応構文を評価到達時に拒否する。`inspect_support` 
   `Promise` を判定する。`Number` / `String` / `Boolean` は常に `false`
   (boxed値を作らないため)、未知の右辺は `TypeError` にする。
 - Error値は `name` と `message` を持ち、`{ name, message }` として直列化する。
+  `Object.keys` / `Object.values` / `Object.entries` / `for...in` でも
+  `name`、`message` の順に列挙する。
   `Object.keys` は `["name", "message"]` を返し、spreadするとbrandを失う。
 - 捕捉された実行時失敗は対応するbrandのError値になる。
 - 未対応: regexp/bigint literal、`void`/`delete`、Error/Map/Set/Date以外の
