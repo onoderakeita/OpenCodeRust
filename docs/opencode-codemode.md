@@ -132,11 +132,13 @@ shadowingできる。
 - `console.dir` は最初の引数のみを描画する。`console.table` はplain objectの
   配列を `(index)\t...` 形式に整形する。
 - `Math`: abs、cbrt、ceil、floor、round、trunc、max、min、pow、sqrt、hypot、
-  sign、log、log2、log10、exp、sin、cos、tan、PI、E、LN2、LN10、LOG2E、
-  LOG10E、SQRT2、SQRT1_2。`round` は `0 < x < 0.5` を `+0` にし、
-  `0.49999999999999994` の二重丸めを避ける。負のゼロは保持する。
-  `pow` は `(±1) ** ±Infinity` を `NaN`、`(-Infinity) ** 奇数` を
-  `-Infinity` にするなどECMAScriptの特殊caseに従う。
+  sign、log、log2、log10、exp、PI、E、LN2、LN10、LOG2E、LOG10E、SQRT2、
+  SQRT1_2。upstreamに合わせて提供された引数はすべてnumberでなければ
+  `TypeError` にし、引数なしは `NaN` として扱う。`sin` / `cos` / `tan` は
+  upstreamの `mathMethods` にないため公開しない。`round` は
+  `0 < x < 0.5` を `+0` にし、`0.49999999999999994` の二重丸めを避ける。
+  負のゼロは保持する。`pow` は `(±1) ** ±Infinity` を `NaN`、
+  `(-Infinity) ** 奇数` を `-Infinity` にするなどECMAScriptの特殊caseに従う。
 - `JSON`: parse、stringify。objectのkey順はECMAScriptと同じく配列indexの
   昇順、その後に挿入順で、parseでも入力順を保つ。`f64` を超える数値literal
   (`1e400` など) は `Infinity` / `-Infinity` としてparseする。stringifyは
@@ -147,8 +149,9 @@ shadowingできる。
   整形する。
 - `Number` statics: `Number.isNaN`、`isFinite`、`isInteger`、`isSafeInteger`、
   `parseInt`、`parseFloat`、定数 (`MAX_SAFE_INTEGER`、`MAX_VALUE`、
-  `MIN_VALUE` など)。`MIN_VALUE` は最小の正のsubnormal (`5e-324`) で、
-  `f64::MIN_POSITIVE` ではない。
+  `MIN_VALUE` など)。`parseInt` のradixはnumberまたは `undefined` だけを
+  受け、他型は `TypeError` にする。`MIN_VALUE` は最小の正のsubnormal
+  (`5e-324`) で、`f64::MIN_POSITIVE` ではない。
 - `String` statics: `String.fromCharCode`、`String.fromCodePoint`。
 - URI helpers: `encodeURI` / `encodeURIComponent` はUTF-8をpercent-encodeし、
   `decodeURI` / `decodeURIComponent` は厳密なUTF-8として復号する。
@@ -172,9 +175,10 @@ shadowingできる。
   `tools` 参照だけを受け、文字列・Map/Set・数値・nullは `TypeError` にする。
 - `Array`: isArray、of、from (array-like含む)。`from` は配列・文字列・
   Map/Set・数値lengthを持つobjectを変換し、それ以外 (数値、null、
-  lengthのないobjectなど) は空配列を返す。array-likeのlengthが上限を
-  超える場合は `TypeError` にする。第2引数のmap関数はupstreamに合わせて
-  `UnsupportedSyntax` にする。インスタンスmethodは map、filter、forEach、
+  lengthのないobject、文字列lengthなど) は `TypeError` にする。
+  array-likeのlengthが上限を超える場合は `TypeError` にする。第2引数の
+  map関数はupstreamに合わせて `UnsupportedSyntax` にする。インスタンスmethodは
+  map、filter、forEach、
   reduce、reduceRight、find、findIndex、findLast、findLastIndex、some、
   every、join、slice、includes、indexOf、lastIndexOf、push、pop、shift、
   unshift、reverse、concat、flat、flatMap、sort、toSorted、toReversed、
@@ -196,11 +200,14 @@ shadowingできる。
 - `String` instance methods: split、slice、substring、substr、indexOf、lastIndexOf、
   includes、startsWith、endsWith、trim系 (trimLeft/trimRight含む)、
   case変換、charAt、charCodeAt、codePointAt、at、padStart、padEnd、repeat、
-  replace、replaceAll、concat、toString、localeCompare。`replace` 系は
+  replace、replaceAll、concat、toString、localeCompare。upstreamに合わせて
+  検索語・separator・paddingはstring、位置・limit・countはnumberだけを受け、
+  他型は `TypeError` にする。`split()` は引数なしのときだけ `[receiver]` を
+  返し、明示的な `undefined` は拒否する。`replace` 系は
   `$$` / `$&` / ``$` `` / `$'` のreplacement patternを展開し、callableの
-  replacerは `(match, offset, input)` で呼ぶ。offsetはUTF-16 code unitで
-  数える。searchはstringのみを受け、それ以外は `TypeError` にする。
-  `lastIndexOf` のpositionは絶対位置としてclampし、負数は0、`NaN` は
+  replacerは `(match, offset, input)` で呼ぶ (upstreamはstringのみだが、
+  Rust実装では拡張としてcallableも受ける)。offsetはUTF-16 code unitで
+  数える。`lastIndexOf` のpositionは絶対位置としてclampし、負数は0、`NaN` は
   文字列長として扱う。`indexOf` / `includes` / `startsWith` / `endsWith` も
   絶対位置で、負数は0になる。Arrayの検索系 (`indexOf` / `includes` /
   `lastIndexOf`) は負数を末尾からの相対として扱う。
@@ -209,8 +216,10 @@ shadowingできる。
   文字列比較はUTF-16 code unit順になる。
   `normalize` とRegExp依存のmatch系は未実装。
 - `Number` instance methods: toFixed、toPrecision、toExponential、toString
-  (radix 2..36の整数)、valueOf。digitsが範囲外なら `RangeError` にする。
-  丸めはECMAScriptと同じround-half-away (0.5は0から遠い側) で行う。
+  (radix 2..36の整数)、valueOf。digits/radixはnumberまたは `undefined` だけを
+  受け、他型は `TypeError` にする。`toString(NaN)` はbase 10として扱い、
+  範囲外のradixは `RangeError` にする。digitsが範囲外なら `RangeError` に
+  する。丸めはECMAScriptと同じround-half-away (0.5は0から遠い側) で行う。
   `toPrecision` / `toExponential` は最短表記ではなく正確な10進展開から
   指数を決めるため、`(1e-7).toPrecision(17)` は `9.9999999999999995e-8`
   になる。

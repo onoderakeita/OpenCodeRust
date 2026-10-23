@@ -375,9 +375,6 @@ impl<'a> Interpreter<'a> {
             ("sign", Value::Builtin("Math.sign")),
             ("log", Value::Builtin("Math.log")),
             ("exp", Value::Builtin("Math.exp")),
-            ("sin", Value::Builtin("Math.sin")),
-            ("cos", Value::Builtin("Math.cos")),
-            ("tan", Value::Builtin("Math.tan")),
             ("PI", Value::Number(std::f64::consts::PI)),
             ("E", Value::Number(std::f64::consts::E)),
             ("LN2", Value::Number(std::f64::consts::LN_2)),
@@ -1487,10 +1484,19 @@ impl<'a> Interpreter<'a> {
                         && value.fract() == 0.0
                         && value.abs() <= 9_007_199_254_740_991.0)))
             }
-            "Number.parseInt" => Ok(Value::Number(parse_int(
-                &to_js_string(&argument(0)),
-                to_number(&argument(1)),
-            ))),
+            "Number.parseInt" => {
+                let radix = match arguments.get(1) {
+                    None | Some(Value::Undefined) => 0.0,
+                    Some(Value::Number(value)) => *value,
+                    Some(_) => {
+                        return Err(RuntimeError::type_error(
+                            "Number.parseInt expects a numeric radix.",
+                            _span,
+                        ))
+                    }
+                };
+                Ok(Value::Number(parse_int(&to_js_string(&argument(0)), radix)))
+            }
             "Number.parseFloat" => Ok(Value::Number(parse_float(&to_js_string(&argument(0))))),
             "String.fromCharCode" => {
                 let mut text = String::new();
@@ -1538,15 +1544,49 @@ impl<'a> Interpreter<'a> {
                 }
                 Ok(Value::String(text))
             }
-            "Math.abs" => Ok(Value::Number(to_number(&argument(0)).abs())),
-            "Math.cbrt" => Ok(Value::Number(to_number(&argument(0)).cbrt())),
-            "Math.hypot" => Ok(Value::Number(math_hypot(arguments))),
-            "Math.log2" => Ok(Value::Number(to_number(&argument(0)).log2())),
-            "Math.log10" => Ok(Value::Number(to_number(&argument(0)).log10())),
-            "Math.ceil" => Ok(Value::Number(to_number(&argument(0)).ceil())),
-            "Math.floor" => Ok(Value::Number(to_number(&argument(0)).floor())),
+            "Math.abs" => {
+                let numbers = math_numbers(arguments, name, _span)?;
+                Ok(Value::Number(
+                    numbers.first().copied().unwrap_or(f64::NAN).abs(),
+                ))
+            }
+            "Math.cbrt" => {
+                let numbers = math_numbers(arguments, name, _span)?;
+                Ok(Value::Number(
+                    numbers.first().copied().unwrap_or(f64::NAN).cbrt(),
+                ))
+            }
+            "Math.hypot" => {
+                let numbers = math_numbers(arguments, name, _span)?;
+                Ok(Value::Number(math_hypot(&numbers)))
+            }
+            "Math.log2" => {
+                let numbers = math_numbers(arguments, name, _span)?;
+                Ok(Value::Number(
+                    numbers.first().copied().unwrap_or(f64::NAN).log2(),
+                ))
+            }
+            "Math.log10" => {
+                let numbers = math_numbers(arguments, name, _span)?;
+                Ok(Value::Number(
+                    numbers.first().copied().unwrap_or(f64::NAN).log10(),
+                ))
+            }
+            "Math.ceil" => {
+                let numbers = math_numbers(arguments, name, _span)?;
+                Ok(Value::Number(
+                    numbers.first().copied().unwrap_or(f64::NAN).ceil(),
+                ))
+            }
+            "Math.floor" => {
+                let numbers = math_numbers(arguments, name, _span)?;
+                Ok(Value::Number(
+                    numbers.first().copied().unwrap_or(f64::NAN).floor(),
+                ))
+            }
             "Math.round" => {
-                let value = to_number(&argument(0));
+                let numbers = math_numbers(arguments, name, _span)?;
+                let value = numbers.first().copied().unwrap_or(f64::NAN);
                 // ECMAScript rounds x in (0, 0.5) to +0. The guard matters for
                 // 0.49999999999999994, where `x + 0.5` rounds up to 1.0.
                 let rounded = if value > 0.0 && value < 0.5 {
@@ -1560,20 +1600,51 @@ impl<'a> Interpreter<'a> {
                     rounded
                 }))
             }
-            "Math.trunc" => Ok(Value::Number(to_number(&argument(0)).trunc())),
-            "Math.sqrt" => Ok(Value::Number(to_number(&argument(0)).sqrt())),
-            "Math.sign" => Ok(Value::Number(math_sign(to_number(&argument(0))))),
-            "Math.log" => Ok(Value::Number(to_number(&argument(0)).ln())),
-            "Math.exp" => Ok(Value::Number(to_number(&argument(0)).exp())),
-            "Math.sin" => Ok(Value::Number(to_number(&argument(0)).sin())),
-            "Math.cos" => Ok(Value::Number(to_number(&argument(0)).cos())),
-            "Math.tan" => Ok(Value::Number(to_number(&argument(0)).tan())),
-            "Math.pow" => Ok(Value::Number(js_pow(
-                to_number(&argument(0)),
-                to_number(&argument(1)),
-            ))),
-            "Math.max" => Ok(Value::Number(math_extreme(arguments, true))),
-            "Math.min" => Ok(Value::Number(math_extreme(arguments, false))),
+            "Math.trunc" => {
+                let numbers = math_numbers(arguments, name, _span)?;
+                Ok(Value::Number(
+                    numbers.first().copied().unwrap_or(f64::NAN).trunc(),
+                ))
+            }
+            "Math.sqrt" => {
+                let numbers = math_numbers(arguments, name, _span)?;
+                Ok(Value::Number(
+                    numbers.first().copied().unwrap_or(f64::NAN).sqrt(),
+                ))
+            }
+            "Math.sign" => {
+                let numbers = math_numbers(arguments, name, _span)?;
+                Ok(Value::Number(math_sign(
+                    numbers.first().copied().unwrap_or(f64::NAN),
+                )))
+            }
+            "Math.log" => {
+                let numbers = math_numbers(arguments, name, _span)?;
+                Ok(Value::Number(
+                    numbers.first().copied().unwrap_or(f64::NAN).ln(),
+                ))
+            }
+            "Math.exp" => {
+                let numbers = math_numbers(arguments, name, _span)?;
+                Ok(Value::Number(
+                    numbers.first().copied().unwrap_or(f64::NAN).exp(),
+                ))
+            }
+            "Math.pow" => {
+                let numbers = math_numbers(arguments, name, _span)?;
+                Ok(Value::Number(js_pow(
+                    numbers.first().copied().unwrap_or(f64::NAN),
+                    numbers.get(1).copied().unwrap_or(f64::NAN),
+                )))
+            }
+            "Math.max" => {
+                let numbers = math_numbers(arguments, name, _span)?;
+                Ok(Value::Number(math_extreme(&numbers, true)))
+            }
+            "Math.min" => {
+                let numbers = math_numbers(arguments, name, _span)?;
+                Ok(Value::Number(math_extreme(&numbers, false)))
+            }
             "JSON.parse" => {
                 let Value::String(text) = argument(0) else {
                     return Err(RuntimeError::new(
@@ -1904,30 +1975,47 @@ impl<'a> Interpreter<'a> {
                     }
                     None => {}
                 }
-                // Like upstream, a value that is neither iterable nor
-                // array-like yields an empty array instead of an error.
+                // Upstream accepts arrays, strings, Map/Set, and objects with a
+                // numeric `length`; everything else is a TypeError rather than
+                // an empty array.
                 let items = match &source {
                     Value::Array(_) | Value::String(_) | Value::Map(_) | Value::Set(_) => {
                         spread_items(&source).unwrap_or_default()
                     }
                     Value::Object(object) => {
-                        // A numeric length is an array-like request; keep the
-                        // allocation guard instead of silently returning [].
-                        let oversized = match object.borrow().get("length") {
-                            Some(Value::Number(length)) if length.is_finite() && *length >= 0.0 => {
-                                length.trunc() > MAX_ARRAY_LIKE_LENGTH as f64
+                        let length = match object.borrow().get("length") {
+                            Some(Value::Number(length)) => *length,
+                            _ => {
+                                return Err(RuntimeError::type_error(
+                                    "Array.from expects an array, string, Map, Set, or array-like value.",
+                                    _span,
+                                ))
                             }
-                            _ => false,
                         };
-                        if oversized {
+                        let normalized = if length.is_nan() { 0.0 } else { length.trunc() };
+                        if !normalized.is_finite() || normalized > MAX_ARRAY_LIKE_LENGTH as f64 {
                             return Err(RuntimeError::type_error(
                                 "Array.from array-like length exceeds the supported limit.",
                                 _span,
                             ));
                         }
-                        array_like_items(&source).unwrap_or_default()
+                        let length = normalized.max(0.0) as usize;
+                        let object = object.borrow();
+                        (0..length)
+                            .map(|index| {
+                                object
+                                    .get(&index.to_string())
+                                    .cloned()
+                                    .unwrap_or(Value::Undefined)
+                            })
+                            .collect()
                     }
-                    _ => Vec::new(),
+                    _ => {
+                        return Err(RuntimeError::type_error(
+                            "Array.from expects an array, string, Map, Set, or array-like value.",
+                            _span,
+                        ))
+                    }
                 };
                 Ok(Value::array(items))
             }
@@ -2129,6 +2217,46 @@ impl<'a> Interpreter<'a> {
                 Value::Number(value) => Ok(Some(*value)),
                 _ => Err(RuntimeError::type_error(
                     format!("{method} expects {label} to be a number."),
+                    span,
+                )),
+            }
+        };
+        // String methods use the upstream `str`/`num`/`optNum`/`optStr`
+        // contracts: arguments are not coerced from other primitive types.
+        let string_arg = |index: usize| -> Result<String, RuntimeError> {
+            match arguments.get(index) {
+                Some(Value::String(value)) => Ok(value.clone()),
+                _ => Err(RuntimeError::type_error(
+                    format!("{method} expects argument {} to be a string.", index + 1),
+                    span,
+                )),
+            }
+        };
+        let number_arg = |index: usize| -> Result<f64, RuntimeError> {
+            match arguments.get(index) {
+                Some(Value::Number(value)) => Ok(*value),
+                _ => Err(RuntimeError::type_error(
+                    format!("{method} expects argument {} to be a number.", index + 1),
+                    span,
+                )),
+            }
+        };
+        let optional_number_arg = |index: usize| -> Result<Option<f64>, RuntimeError> {
+            match arguments.get(index) {
+                None | Some(Value::Undefined) => Ok(None),
+                Some(Value::Number(value)) => Ok(Some(*value)),
+                Some(_) => Err(RuntimeError::type_error(
+                    format!("{method} expects argument {} to be a number.", index + 1),
+                    span,
+                )),
+            }
+        };
+        let optional_string_arg = |index: usize| -> Result<Option<String>, RuntimeError> {
+            match arguments.get(index) {
+                None | Some(Value::Undefined) => Ok(None),
+                Some(Value::String(value)) => Ok(Some(value.clone())),
+                Some(_) => Err(RuntimeError::type_error(
+                    format!("{method} expects argument {} to be a string.", index + 1),
                     span,
                 )),
             }
@@ -2679,22 +2807,20 @@ impl<'a> Interpreter<'a> {
             }
             "String.split" => {
                 let text = as_string(receiver, span)?;
+                if arguments.is_empty() {
+                    return Ok(Value::array(vec![Value::String(text)]));
+                }
+                let separator = string_arg(0)?;
                 // ECMAScript applies ToUint32 to the limit: NaN and Infinity
                 // become 0, and negative values wrap around.
-                let limit = match arguments.get(1) {
-                    Some(Value::Undefined) | None => u32::MAX as usize,
-                    Some(value) => to_uint32(to_number(value)) as usize,
-                };
-                let pieces: Vec<String> = match arguments.first() {
-                    None | Some(Value::Undefined) => vec![text],
-                    Some(Value::String(separator)) if separator.is_empty() => text
-                        .chars()
+                let limit = optional_number_arg(1)?
+                    .map_or(u32::MAX as usize, |number| to_uint32(number) as usize);
+                let pieces: Vec<String> = if separator.is_empty() {
+                    text.chars()
                         .map(|character| character.to_string())
-                        .collect(),
-                    Some(separator) => {
-                        let separator = to_js_string(separator);
-                        text.split(&separator).map(str::to_owned).collect()
-                    }
+                        .collect()
+                } else {
+                    text.split(&separator).map(str::to_owned).collect()
                 };
                 Ok(Value::array(
                     pieces.into_iter().take(limit).map(Value::String).collect(),
@@ -2704,16 +2830,12 @@ impl<'a> Interpreter<'a> {
                 let text = as_string(receiver, span)?;
                 let characters: Vec<char> = text.chars().collect();
                 let length = characters.len() as i64;
-                let start_argument = argument(0);
-                let end_argument = argument(1);
+                let start_argument = optional_number_arg(0)?;
+                let end_argument = optional_number_arg(1)?;
                 let (start, end) = match method {
                     "String.substring" => {
-                        let start = clamp_index(to_number(&start_argument), length);
-                        let end = if end_argument.is_undefined() {
-                            length
-                        } else {
-                            clamp_index(to_number(&end_argument), length)
-                        };
+                        let start = clamp_index(start_argument.unwrap_or(0.0), length);
+                        let end = clamp_index(end_argument.unwrap_or(length as f64), length);
                         if start <= end {
                             (start, end)
                         } else {
@@ -2721,17 +2843,22 @@ impl<'a> Interpreter<'a> {
                         }
                     }
                     "String.substr" => {
-                        let start = normalize_index(&start_argument, length, 0).max(0);
-                        let count = if end_argument.is_undefined() {
-                            length
-                        } else {
-                            to_number(&end_argument).max(0.0) as i64
-                        };
+                        let start = normalize_index(
+                            &Value::Number(start_argument.unwrap_or(0.0)),
+                            length,
+                            0,
+                        )
+                        .max(0);
+                        let count = end_argument.unwrap_or(length as f64).max(0.0) as i64;
                         (start, start.saturating_add(count))
                     }
                     _ => (
-                        normalize_index(&start_argument, length, 0),
-                        normalize_index(&end_argument, length, length),
+                        normalize_index(&Value::Number(start_argument.unwrap_or(0.0)), length, 0),
+                        normalize_index(
+                            &Value::Number(end_argument.unwrap_or(length as f64)),
+                            length,
+                            length,
+                        ),
                     ),
                 };
                 let start = start.max(0).min(length) as usize;
@@ -2745,16 +2872,16 @@ impl<'a> Interpreter<'a> {
             }
             "String.indexOf" | "String.lastIndexOf" => {
                 let text = as_string(receiver, span)?;
-                let needle: Vec<char> = to_js_string(&argument(0)).chars().collect();
+                let needle: Vec<char> = string_arg(0)?.chars().collect();
                 let characters: Vec<char> = text.chars().collect();
                 let length = characters.len() as i64;
+                let position = optional_number_arg(1)?;
                 let from = if method == "String.lastIndexOf" {
                     // lastIndexOf takes an absolute position: negatives clamp to
                     // 0 and NaN defaults to the end of the string.
-                    match arguments.get(1) {
-                        None | Some(Value::Undefined) => length,
-                        Some(value) => {
-                            let number = to_number(value);
+                    match position {
+                        None => length,
+                        Some(number) => {
                             if number.is_nan() {
                                 length
                             } else {
@@ -2763,7 +2890,7 @@ impl<'a> Interpreter<'a> {
                         }
                     }
                 } else {
-                    absolute_index(&argument(1), length, 0)
+                    position.map_or(0, |number| clamp_index(number, length))
                 } as usize;
                 let matches = (0..=characters.len().saturating_sub(needle.len()))
                     .filter(|index| characters[*index..].starts_with(&needle))
@@ -2777,7 +2904,7 @@ impl<'a> Interpreter<'a> {
             }
             "String.includes" | "String.startsWith" | "String.endsWith" => {
                 let text = as_string(receiver, span)?;
-                let needle: Vec<char> = to_js_string(&argument(0)).chars().collect();
+                let needle: Vec<char> = string_arg(0)?.chars().collect();
                 let characters: Vec<char> = text.chars().collect();
                 let length = characters.len();
                 let default = if method == "String.endsWith" {
@@ -2785,7 +2912,9 @@ impl<'a> Interpreter<'a> {
                 } else {
                     0
                 };
-                let position = absolute_index(&argument(1), length as i64, default) as usize;
+                let position = optional_number_arg(1)?
+                    .map_or(default, |number| clamp_index(number, length as i64))
+                    as usize;
                 let result = match method {
                     "String.endsWith" => {
                         position >= needle.len()
@@ -2823,7 +2952,7 @@ impl<'a> Interpreter<'a> {
             "String.toLowerCase" => Ok(Value::String(as_string(receiver, span)?.to_lowercase())),
             "String.localeCompare" => {
                 let text = as_string(receiver, span)?;
-                let other = to_js_string(&argument(0));
+                let other = string_arg(0)?;
                 Ok(Value::Number(match text.cmp(&other) {
                     std::cmp::Ordering::Less => -1.0,
                     std::cmp::Ordering::Equal => 0.0,
@@ -2832,15 +2961,17 @@ impl<'a> Interpreter<'a> {
             }
             "String.charAt" => {
                 let text = as_string(receiver, span)?;
+                let index = optional_number_arg(0)?.unwrap_or(0.0);
                 let character =
-                    string_index(&argument(0)).and_then(|index| text.chars().nth(index));
+                    string_index(&Value::Number(index)).and_then(|index| text.chars().nth(index));
                 Ok(Value::String(
                     character.map_or_else(String::new, |character| character.to_string()),
                 ))
             }
             "String.charCodeAt" | "String.codePointAt" => {
                 let text = as_string(receiver, span)?;
-                let code = string_index(&argument(0))
+                let index = optional_number_arg(0)?.unwrap_or(0.0);
+                let code = string_index(&Value::Number(index))
                     .and_then(|index| text.chars().nth(index))
                     .map(u32::from);
                 Ok(match (method, code) {
@@ -2853,7 +2984,8 @@ impl<'a> Interpreter<'a> {
                 let text = as_string(receiver, span)?;
                 let characters: Vec<char> = text.chars().collect();
                 let length = characters.len() as i64;
-                let index = normalize_index(&argument(0), length, 0);
+                let index = optional_number_arg(0)?.unwrap_or(0.0);
+                let index = normalize_index(&Value::Number(index), length, 0);
                 Ok(if index < 0 || index >= length {
                     Value::Undefined
                 } else {
@@ -2862,7 +2994,7 @@ impl<'a> Interpreter<'a> {
             }
             "String.padStart" | "String.padEnd" => {
                 let text = as_string(receiver, span)?;
-                let number = to_number(&argument(0));
+                let number = number_arg(0)?;
                 if number == f64::INFINITY || number > MAX_STRING_LENGTH as f64 {
                     return Err(RuntimeError::new(
                         RuntimeErrorKind::RangeError,
@@ -2875,10 +3007,7 @@ impl<'a> Interpreter<'a> {
                 } else {
                     number.max(0.0).trunc() as usize
                 };
-                let padding = match arguments.get(1) {
-                    Some(Value::Undefined) | None => " ".to_owned(),
-                    Some(value) => to_js_string(value),
-                };
+                let padding = optional_string_arg(1)?.unwrap_or_else(|| " ".to_owned());
                 Ok(Value::String(pad_string(
                     &text,
                     target,
@@ -2888,7 +3017,7 @@ impl<'a> Interpreter<'a> {
             }
             "String.repeat" => {
                 let text = as_string(receiver, span)?;
-                let number = to_number(&argument(0));
+                let number = number_arg(0)?;
                 let count = if number.is_nan() { 0.0 } else { number.trunc() };
                 if count < 0.0 || count == f64::INFINITY {
                     return Err(RuntimeError::new(
@@ -2929,18 +3058,24 @@ impl<'a> Interpreter<'a> {
                         span,
                     )?));
                 }
+                let Value::String(replacement) = replacement else {
+                    return Err(RuntimeError::type_error(
+                        format!("{method} expects argument 2 to be a string."),
+                        span,
+                    ));
+                };
                 Ok(Value::String(replace_string(
                     &text,
                     &search,
-                    &to_js_string(&replacement),
+                    &replacement,
                     all,
                 )))
             }
             "String.toString" => Ok(Value::String(as_string(receiver, span)?)),
             "String.concat" => {
                 let mut text = as_string(receiver, span)?;
-                for argument in arguments {
-                    text.push_str(&to_js_string(argument));
+                for index in 0..arguments.len() {
+                    text.push_str(&string_arg(index)?);
                 }
                 Ok(Value::String(text))
             }
@@ -2974,9 +3109,9 @@ impl<'a> Interpreter<'a> {
                 let number = as_number(receiver, span)?;
                 let radix = match arguments.first() {
                     None | Some(Value::Undefined) => 10,
-                    Some(value) => {
-                        let number = to_number(value);
-                        let radix = if number.is_nan() { 0.0 } else { number.trunc() };
+                    Some(Value::Number(value)) if value.is_nan() => 10,
+                    Some(Value::Number(value)) => {
+                        let radix = value.trunc();
                         if !(2.0..=36.0).contains(&radix) {
                             return Err(RuntimeError::new(
                                 RuntimeErrorKind::RangeError,
@@ -2985,6 +3120,12 @@ impl<'a> Interpreter<'a> {
                             ));
                         }
                         radix as u32
+                    }
+                    Some(_) => {
+                        return Err(RuntimeError::type_error(
+                            "Number.toString expects a number argument.",
+                            span,
+                        ))
                     }
                 };
                 Ok(Value::String(number_to_string(number, radix)))
@@ -4138,22 +4279,8 @@ fn normalize_index(value: &Value, length: i64, fallback: i64) -> i64 {
     }
 }
 
-/// Absolute position clamp used by String search methods. Unlike Array search
-/// methods, negative positions clamp to 0 instead of counting from the end.
-fn absolute_index(value: &Value, length: i64, fallback: i64) -> i64 {
-    match value {
-        Value::Undefined => fallback,
-        _ => {
-            let number = to_number(value);
-            if number.is_nan() {
-                0
-            } else {
-                (number.trunc() as i64).clamp(0, length)
-            }
-        }
-    }
-}
-
+/// Absolute position clamp used by String search methods. Negative positions
+/// clamp to 0 instead of counting from the end.
 fn clamp_index(number: f64, length: i64) -> i64 {
     if number.is_nan() {
         0
@@ -4294,11 +4421,23 @@ fn expand_replacement(replacement: &str, matched: &str, prefix: &str, suffix: &s
     output
 }
 
-fn math_hypot(arguments: &[Value]) -> f64 {
-    let values = arguments.iter().map(to_number).collect::<Vec<_>>();
+fn math_numbers(arguments: &[Value], method: &str, span: Span) -> Result<Vec<f64>, RuntimeError> {
+    arguments
+        .iter()
+        .map(|value| match value {
+            Value::Number(number) => Ok(*number),
+            _ => Err(RuntimeError::type_error(
+                format!("{method} expects number arguments."),
+                span,
+            )),
+        })
+        .collect()
+}
+
+fn math_hypot(values: &[f64]) -> f64 {
     let mut maximum = 0.0f64;
     let mut any_nan = false;
-    for value in &values {
+    for value in values {
         if value.is_infinite() {
             return f64::INFINITY;
         }
@@ -4324,19 +4463,18 @@ fn math_hypot(arguments: &[Value]) -> f64 {
             .sqrt()
 }
 
-fn math_extreme(arguments: &[Value], maximum: bool) -> f64 {
+fn math_extreme(values: &[f64], maximum: bool) -> f64 {
     let mut result = if maximum {
         f64::NEG_INFINITY
     } else {
         f64::INFINITY
     };
-    for value in arguments {
-        let number = to_number(value);
+    for number in values {
         if number.is_nan() {
             return f64::NAN;
         }
-        if (maximum && number > result) || (!maximum && number < result) {
-            result = number;
+        if (maximum && *number > result) || (!maximum && *number < result) {
+            result = *number;
         }
     }
     result
@@ -4447,32 +4585,6 @@ fn string_to_number(text: &str) -> f64 {
 /// Upper bound for `Array.from` array-like materialization, guarding against
 /// one-shot allocation that the timeout cannot interrupt.
 const MAX_ARRAY_LIKE_LENGTH: usize = 1_000_000;
-
-fn array_like_items(value: &Value) -> Option<Vec<Value>> {
-    let Value::Object(object) = value else {
-        return None;
-    };
-    let length = match object.borrow().get("length") {
-        Some(Value::Number(length)) if length.is_finite() && *length >= 0.0 => {
-            length.trunc() as usize
-        }
-        _ => return None,
-    };
-    if length > MAX_ARRAY_LIKE_LENGTH {
-        return None;
-    }
-    let object = object.borrow();
-    Some(
-        (0..length)
-            .map(|index| {
-                object
-                    .get(&index.to_string())
-                    .cloned()
-                    .unwrap_or(Value::Undefined)
-            })
-            .collect(),
-    )
-}
 
 enum CoercionIssue {
     NonData,
@@ -4868,7 +4980,12 @@ fn optional_digits(
     if value.is_undefined() {
         return Ok(None);
     }
-    let number = to_number(value);
+    let Value::Number(number) = value else {
+        return Err(RuntimeError::type_error(
+            format!("Number.{method} expects a number argument."),
+            span,
+        ));
+    };
     let digits = if number.is_nan() { 0.0 } else { number.trunc() };
     if digits < minimum as f64 || digits > maximum as f64 {
         return Err(RuntimeError::new(
@@ -6474,14 +6591,16 @@ mod tests {
             run_value("return 'abc'.lastIndexOf('', undefined);"),
             number(3.0)
         );
-        assert_eq!(
-            run_value("return JSON.stringify(Array.from(5));"),
-            string("[]")
-        );
-        assert_eq!(
-            run_value("return JSON.stringify(Array.from(undefined));"),
-            string("[]")
-        );
+        for source in [
+            "return Array.from(5);",
+            "return Array.from(undefined);",
+            "return Array.from(null);",
+            "return Array.from({});",
+            "return Array.from({ length: '2' });",
+        ] {
+            let error = run(source).expect_err("non-array-like input is rejected");
+            assert_eq!(error.kind(), super::RuntimeErrorKind::TypeError, "{source}");
+        }
         assert_eq!(
             run_value("return String(Number.MIN_VALUE);"),
             string("5e-324")
@@ -7583,6 +7702,74 @@ mod tests {
         let error = run(r#"return Array.from({ length: 1000001 });"#)
             .expect_err("oversized array-like should fail");
         assert_eq!(error.kind(), super::RuntimeErrorKind::TypeError);
+    }
+
+    #[test]
+    fn matches_upstream_string_argument_types() {
+        for source in [
+            r#"return "abc".split(undefined);"#,
+            r#"return "abc".split("b", "1");"#,
+            r#"return "abc".includes();"#,
+            r#"return "abc".includes(1);"#,
+            r#"return "abc".startsWith();"#,
+            r#"return "abc".endsWith(null);"#,
+            r#"return "abc".indexOf();"#,
+            r#"return "abc".lastIndexOf(1);"#,
+            r#"return "abc".slice("0");"#,
+            r#"return "abc".substring(0, "1");"#,
+            r#"return "abc".substr("0");"#,
+            r#"return "abc".repeat("2");"#,
+            r#"return "abc".padStart("5");"#,
+            r#"return "abc".padStart(5, 1);"#,
+            r#"return "abc".charAt("0");"#,
+            r#"return "abc".charCodeAt("0");"#,
+            r#"return "abc".codePointAt("0");"#,
+            r#"return "abc".at("0");"#,
+            r#"return "abc".concat(1);"#,
+            r#"return "abc".localeCompare(1);"#,
+            r#"return "abc".replace("a", 1);"#,
+        ] {
+            let error = run(source).expect_err("argument must have the upstream type");
+            assert_eq!(error.kind(), super::RuntimeErrorKind::TypeError, "{source}");
+        }
+        assert_eq!(
+            run_value(r#"return JSON.stringify("abc".split());"#),
+            string(r#"["abc"]"#)
+        );
+    }
+
+    #[test]
+    fn matches_upstream_math_and_number_argument_types() {
+        for source in [
+            r#"return Math.abs("1");"#,
+            r#"return Math.abs(undefined);"#,
+            r#"return Math.max(1, "2");"#,
+            r#"return Math.pow("2", 3);"#,
+            r#"return Math.hypot(1, null);"#,
+            r#"return Number.parseInt("10", "2");"#,
+            r#"return (255).toString("2");"#,
+            r#"return (1.23).toFixed("2");"#,
+            r#"return (1.23).toPrecision("2");"#,
+            r#"return (1.23).toExponential("2");"#,
+        ] {
+            let error = run(source).expect_err("argument must have the upstream type");
+            assert_eq!(error.kind(), super::RuntimeErrorKind::TypeError, "{source}");
+        }
+        assert_eq!(
+            run_value("return Number.isNaN(Math.abs());"),
+            Value::Boolean(true)
+        );
+        assert_eq!(
+            run_value("return Number.isNaN(Math.max());"),
+            Value::Boolean(false)
+        );
+        assert_eq!(run_value("return typeof Math.sin;"), string("undefined"));
+        assert_eq!(run_value("return (255).toString(NaN);"), string("255"));
+        assert_eq!(run_value("return (255).toString(2.9);"), string("11111111"));
+        assert_eq!(
+            run_value("return Number.parseInt('10', undefined);"),
+            number(10.0)
+        );
     }
 
     #[test]

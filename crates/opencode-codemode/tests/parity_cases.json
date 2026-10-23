@@ -94,10 +94,6 @@
     ]
   },
   {
-    "expr": "'abc'.concat('d', 1)",
-    "expected": "abcd1"
-  },
-  {
     "expr": "'b'.localeCompare('a')",
     "expected": 1
   },
@@ -552,12 +548,6 @@
     "expected": 0
   },
   {
-    "expr": "'abc'.split(undefined)",
-    "expected": [
-      "abc"
-    ]
-  },
-  {
     "expr": "'abc'.concat()",
     "expected": "abc"
   },
@@ -732,10 +722,6 @@
   },
   {
     "expr": "Array.from('')",
-    "expected": []
-  },
-  {
-    "expr": "Array.from(5)",
     "expected": []
   },
   {
