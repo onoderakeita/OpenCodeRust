@@ -132,8 +132,12 @@ shadowingできる。
 - consoleは境界JSONではなくdebugger形式で値を描画する。DateはISO、Map/Setは
   `Map(n) [...]` / `Set(n) [...]`、関数とtool参照は `[CodeMode reference]`、
   循環は `[Circular]`、深さ超過は `...` になる。
-- `console.dir` は最初の引数のみを描画する。`console.table` はplain objectの
-  配列を `(index)\t...` 形式に整形する。
+- `console.dir` は最初の引数のみを描画する。`console.table` はupstreamと
+  同じく配列またはobjectをrowsに展開し、`(index)` 行と列keyをタブ区切りで
+  描画する。primitiveやArray/Date/Map/Setの要素は `Value` 列に入り、
+  columns配列を渡すと各要素を `String(column)` にした列だけを表示する。
+  入力にcallable/tool/Promiseが含まれる場合は表全体を
+  `[CodeMode reference]` にし、`undefined` は `undefined` を返す。
 - `Math`: abs、cbrt、ceil、floor、round、trunc、max、min、pow、sqrt、hypot、
   sign、log、log2、log10、exp、PI、E、LN2、LN10、LOG2E、LOG10E、SQRT2、
   SQRT1_2。upstreamに合わせて提供された引数はすべてnumberでなければ

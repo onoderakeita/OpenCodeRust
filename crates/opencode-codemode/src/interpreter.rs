@@ -5686,54 +5686,179 @@ fn format_console_value(value: &Value, seen: &mut Vec<usize>, depth: usize) -> S
 }
 
 /// Renders `console.table` for an array of plain objects.
-fn format_console_table(data: Option<&Value>, columns: Option<&Value>) -> String {
-    let Some(Value::Array(rows)) = data else {
-        return match data {
-            Some(value) => format_console_argument(value),
-            None => "undefined".to_owned(),
-        };
-    };
-    let rows = rows.borrow();
-
-    let mut names = Vec::new();
-    if let Some(Value::Array(columns)) = columns {
-        for column in columns.borrow().iter() {
-            if let Value::String(name) = column {
-                names.push(name.clone());
+/// Upstream's `console.table` rejects opaque runtime references anywhere in
+/// its input instead of printing the marker for the whole table.
+fn console_contains_runtime_reference(value: &Value, seen: &mut Vec<usize>) -> bool {
+    match value {
+        Value::Function(_)
+        | Value::Builtin(_)
+        | Value::BoundMethod { .. }
+        | Value::ToolRef(_)
+        | Value::Promise(_) => true,
+        Value::Array(array) => {
+            let pointer = Rc::as_ptr(array) as *const () as usize;
+            if seen.contains(&pointer) {
+                return false;
             }
+            seen.push(pointer);
+            let found = array
+                .borrow()
+                .iter()
+                .any(|item| console_contains_runtime_reference(item, seen));
+            seen.pop();
+            found
+        }
+        Value::Object(object) => {
+            let pointer = Rc::as_ptr(object) as *const () as usize;
+            if seen.contains(&pointer) {
+                return false;
+            }
+            seen.push(pointer);
+            let found = object
+                .borrow()
+                .values()
+                .any(|item| console_contains_runtime_reference(item, seen));
+            seen.pop();
+            found
+        }
+        Value::Error(_) => false,
+        _ => false,
+    }
+}
+
+fn console_table_columns(value: Option<&Value>) -> Option<Vec<String>> {
+    let value = value?;
+    if value.is_undefined() || console_contains_runtime_reference(value, &mut Vec::new()) {
+        return None;
+    }
+    match value {
+        Value::Array(items) => Some(items.borrow().iter().map(to_js_string).collect()),
+        _ => None,
+    }
+}
+
+fn console_table_object_entries(object: &IndexMap<String, Value>) -> IndexMap<String, Value> {
+    ordered_keys(object)
+        .into_iter()
+        .map(|key| {
+            let value = object.get(&key).cloned().unwrap_or(Value::Undefined);
+            (key, value)
+        })
+        .collect()
+}
+
+fn console_error_entries(error: &crate::value::ErrorValue) -> IndexMap<String, Value> {
+    let mut entries = IndexMap::new();
+    entries.insert(
+        "name".to_owned(),
+        Value::String(error.kind.name().to_owned()),
+    );
+    entries.insert("message".to_owned(), Value::String(error.message.clone()));
+    entries
+}
+
+fn console_table_select(
+    entries: &IndexMap<String, Value>,
+    columns: Option<&[String]>,
+) -> IndexMap<String, Value> {
+    match columns {
+        Some(columns) => columns
+            .iter()
+            .map(|column| {
+                (
+                    column.clone(),
+                    entries.get(column).cloned().unwrap_or(Value::Undefined),
+                )
+            })
+            .collect(),
+        None => entries.clone(),
+    }
+}
+
+fn console_table_values(value: &Value, columns: Option<&[String]>) -> IndexMap<String, Value> {
+    match value {
+        Value::Object(object) => {
+            console_table_select(&console_table_object_entries(&object.borrow()), columns)
+        }
+        Value::Error(error) => console_table_select(&console_error_entries(error), columns),
+        _ => {
+            let mut values = IndexMap::new();
+            values.insert("Value".to_owned(), value.clone());
+            values
         }
     }
-    if names.is_empty() {
-        for row in rows.iter() {
-            if let Value::Object(object) = row {
-                for key in object.borrow().keys() {
+}
+
+fn format_console_table_cell(value: &Value) -> String {
+    if value.is_undefined() {
+        String::new()
+    } else if let Value::String(text) = value {
+        text.clone()
+    } else {
+        format_console_value(value, &mut Vec::new(), 0)
+    }
+}
+
+fn format_console_table(data: Option<&Value>, columns: Option<&Value>) -> String {
+    let Some(data) = data else {
+        return "undefined".to_owned();
+    };
+    if data.is_undefined() {
+        return "undefined".to_owned();
+    }
+    if console_contains_runtime_reference(data, &mut Vec::new()) {
+        return "[CodeMode reference]".to_owned();
+    }
+    let columns = console_table_columns(columns);
+    let mut rows: Vec<(String, IndexMap<String, Value>)> = Vec::new();
+    match data {
+        Value::Array(items) => {
+            for (index, item) in items.borrow().iter().enumerate() {
+                rows.push((
+                    index.to_string(),
+                    console_table_values(item, columns.as_deref()),
+                ));
+            }
+        }
+        Value::Object(object) => {
+            for (key, item) in console_table_object_entries(&object.borrow()) {
+                rows.push((key, console_table_values(&item, columns.as_deref())));
+            }
+        }
+        Value::Error(error) => {
+            for (key, item) in console_error_entries(error) {
+                rows.push((key, console_table_values(&item, columns.as_deref())));
+            }
+        }
+        _ => {
+            rows.push((
+                "0".to_owned(),
+                console_table_values(data, columns.as_deref()),
+            ));
+        }
+    }
+
+    let names = match columns {
+        Some(columns) => columns,
+        None => {
+            let mut names = Vec::new();
+            for (_, values) in &rows {
+                for key in values.keys() {
                     if !names.contains(key) {
                         names.push(key.clone());
                     }
                 }
             }
+            names
         }
-    }
-    if names.is_empty() {
-        return data.map_or_else(|| "undefined".to_owned(), format_console_argument);
-    }
+    };
 
     let mut lines = Vec::with_capacity(rows.len() + 1);
     lines.push(format!("(index)\t{}", names.join("\t")));
-    for (index, row) in rows.iter().enumerate() {
+    for (index, values) in rows {
         let cells = names
             .iter()
-            .map(|name| {
-                let value = match row {
-                    Value::Object(object) => object
-                        .borrow()
-                        .get(name)
-                        .cloned()
-                        .unwrap_or(Value::Undefined),
-                    _ => Value::Undefined,
-                };
-                format_console_value(&value, &mut Vec::new(), 0)
-            })
+            .map(|name| format_console_table_cell(values.get(name).unwrap_or(&Value::Undefined)))
             .collect::<Vec<_>>()
             .join("\t");
         lines.push(format!("{index}\t{cells}"));
@@ -7690,6 +7815,44 @@ mod tests {
                 "[error] e",
                 r#"{"nested":[1]}"#,
                 "(index)\twhen\tn\n0\t1970-01-01T00:00:00.000Z\tNaN",
+            ]
+        );
+    }
+
+    #[test]
+    fn formats_console_tables_like_upstream() {
+        let allocator = Allocator::default();
+        let program = parse_program(
+            &allocator,
+            r#"
+            console.table([1, "x", null]);
+            console.table({ a: 1, b: "x" });
+            console.table([{ a: 1, b: 2 }, { b: 3, c: 4 }]);
+            console.table([{ a: 1, b: 2 }], ["b", "z"]);
+            console.table([{ a: 1 }], [1]);
+            console.table([{ f: () => 1 }]);
+            console.table([{ a: 1 }], [() => 1]);
+            console.table(new Map([["a", 1]]));
+            console.table(new TypeError("bad"));
+            console.table();
+        "#,
+        )
+        .expect("fixture should parse");
+        let mut interpreter = Interpreter::new();
+        interpreter.run(&program).expect("program should run");
+        assert_eq!(
+            interpreter.logs(),
+            [
+                "(index)\tValue\n0\t1\n1\tx\n2\tnull",
+                "(index)\tValue\na\t1\nb\tx",
+                "(index)\ta\tb\tc\n0\t1\t2\t\n1\t\t3\t4",
+                "(index)\tb\tz\n0\t2\t",
+                "(index)\t1\n0\t",
+                "[CodeMode reference]",
+                "(index)\ta\n0\t1",
+                "(index)\tValue\n0\tMap(1) [[\"a\",1]]",
+                "(index)\tValue\nname\tTypeError\nmessage\tbad",
+                "undefined",
             ]
         );
     }
