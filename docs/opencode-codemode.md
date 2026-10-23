@@ -83,6 +83,8 @@ upstreamは未対応構文を評価到達時に拒否する。`inspect_support` 
   arrow/function、assignment (compound/logical)、await (通過)、
   binary/logical/unary、call、conditional、member、optional chain、update。
 - 配列とobjectは共有参照で、代入はaliasし、`===` は参照同一性で比較する。
+  配列要素またはobject propertyへの代入でreceiverを含む値 (直接・間接) を
+  書き込むと、upstreamと同じく `InvalidDataValue` にする。
 - 文字列連結時のobjectは `[object Object]`、配列は要素のカンマ結合になる。
   `+` と関係比較はoperandをcoerceしてから評価し、NaNを含む関係比較は
   すべてfalseになる。`Date` は `+` でISO文字列、関係比較と `==` では

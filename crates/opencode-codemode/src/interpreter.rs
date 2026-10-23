@@ -3830,11 +3830,27 @@ impl<'a> Interpreter<'a> {
         }
         match object {
             Value::Object(object) => {
+                let target = Rc::as_ptr(object) as *const () as usize;
+                if contains_identity(&value, target, &mut Vec::new()) {
+                    return Err(RuntimeError::new(
+                        RuntimeErrorKind::InvalidDataValue,
+                        "Object assignment result contains a circular value.",
+                        span,
+                    ));
+                }
                 object.borrow_mut().insert(key.to_owned(), value);
                 Ok(())
             }
             Value::Array(array) => match key.parse::<usize>() {
                 Ok(index) => {
+                    let target = Rc::as_ptr(array) as *const () as usize;
+                    if contains_identity(&value, target, &mut Vec::new()) {
+                        return Err(RuntimeError::new(
+                            RuntimeErrorKind::InvalidDataValue,
+                            "Array assignment result contains a circular value.",
+                            span,
+                        ));
+                    }
                     let mut array = array.borrow_mut();
                     if index >= array.len() {
                         array.resize(index + 1, Value::Undefined);
@@ -3842,8 +3858,9 @@ impl<'a> Interpreter<'a> {
                     array[index] = value;
                     Ok(())
                 }
-                Err(_) => Err(RuntimeError::type_error(
-                    "Array property name must be an index or 'length'.",
+                Err(_) => Err(RuntimeError::new(
+                    RuntimeErrorKind::InvalidDataValue,
+                    "Array assignment index must be a non-negative integer.",
                     span,
                 )),
             },
@@ -7142,6 +7159,12 @@ mod tests {
             "const a = []; a.fill(a); return a;",
             "const a = []; a.push([a]); return a;",
             "const a = []; a.splice(0, 0, { nested: a }); return a;",
+            "const a = []; a[0] = a; return a;",
+            "const a = []; a[0] = [a]; return a;",
+            "const o = {}; o.self = o; return o;",
+            "const o = {}; o.self = { nested: o }; return o;",
+            "const a = []; a[-1] = 1; return a;",
+            "const a = []; a[1.5] = 1; return a;",
         ] {
             let error = run(source).expect_err("should reject a circular insertion");
             assert_eq!(
@@ -8268,18 +8291,6 @@ mod tests {
         assert_eq!(run_value(r#"return parseFloat("\uFEFF1.5");"#), number(1.5));
         assert_eq!(run_value(r#"return parseInt("\uFEFF10");"#), number(10.0));
 
-        assert_eq!(
-            run_value("const a = [1]; a[1] = a; return a.join('-');"),
-            string("1-")
-        );
-        assert_eq!(
-            run_value("const a = [1]; a[1] = a; return String(a);"),
-            string("1,")
-        );
-        assert_eq!(
-            run_value("const b = []; b[0] = [b]; return b.join();"),
-            string("")
-        );
         for source in [
             "return [1, 2].join(undefined);",
             "return [1, 2].join(null);",
@@ -8365,8 +8376,8 @@ mod tests {
             .expect_err("replacer arrays are unsupported");
         assert_eq!(error.kind(), super::RuntimeErrorKind::UnsupportedSyntax);
         let error = run("const a = []; a[0] = a; return JSON.stringify(a);")
-            .expect_err("circular JSON should fail");
-        assert_eq!(error.kind(), super::RuntimeErrorKind::TypeError);
+            .expect_err("circular assignment should fail");
+        assert_eq!(error.kind(), super::RuntimeErrorKind::InvalidDataValue);
         assert!(error.message().contains("circular"));
 
         for source in [
