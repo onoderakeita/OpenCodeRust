@@ -150,8 +150,8 @@ shadowingできる。
   昇順、その後に挿入順で、parseでも入力順を保つ。`f64` を超える数値literal
   (`1e400` など) は `Infinity` / `-Infinity` としてparseする。stringifyは
   `undefined` をobjectから省略、arrayでは `null` にする。関数・callable・
-  未await Promiseは `InvalidDataValue`、循環参照と深すぎる値は `TypeError`
-  にする。第3引数のindent (数値0..10または先頭10文字の文字列) を受け付ける。
+  未await Promise・循環参照・深すぎる値は `InvalidDataValue` にする。
+  第3引数のindent (数値0..10または先頭10文字の文字列) を受け付ける。
   replacerの配列・関数は `UnsupportedSyntax` にする。Errorはindent指定時も
   整形する。
 - `Number` statics: `Number.isNaN`、`isFinite`、`isInteger`、`isSafeInteger`、

@@ -1674,12 +1674,14 @@ impl<'a> Interpreter<'a> {
                 match stringify_json_with_indent(&argument(0), &indent) {
                     Ok(Some(text)) => Ok(Value::String(text)),
                     Ok(None) => Ok(Value::Undefined),
-                    Err(JsonStringifyError::Circular) => Err(RuntimeError::type_error(
-                        "Converting circular structure to JSON.",
+                    Err(JsonStringifyError::Circular) => Err(RuntimeError::new(
+                        RuntimeErrorKind::InvalidDataValue,
+                        "JSON.stringify value contains a circular value.",
                         _span,
                     )),
-                    Err(JsonStringifyError::TooDeep) => Err(RuntimeError::type_error(
-                        "Value is too deep to serialize as JSON.",
+                    Err(JsonStringifyError::TooDeep) => Err(RuntimeError::new(
+                        RuntimeErrorKind::InvalidDataValue,
+                        "JSON.stringify value exceeds the maximum value depth.",
                         _span,
                     )),
                     Err(JsonStringifyError::NonData) => Err(RuntimeError::new(
@@ -7265,6 +7267,11 @@ mod tests {
             .expect_err("nested un-awaited promise serialization");
         assert_eq!(error.kind(), super::RuntimeErrorKind::InvalidDataValue);
         assert!(error.message().contains("un-awaited Promise"));
+
+        let error = run("let v = 1; for (let i = 0; i < 70; i += 1) { v = [v]; } \
+             return JSON.stringify(v);")
+        .expect_err("over-deep serialization");
+        assert_eq!(error.kind(), super::RuntimeErrorKind::InvalidDataValue);
 
         assert_eq!(
             run_value("return typeof Promise.resolve(1);"),
