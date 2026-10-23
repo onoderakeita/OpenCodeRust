@@ -4753,7 +4753,11 @@ fn optional_digits(
 /// and exponential selection rules of `Number.prototype.toPrecision`.
 /// Decimal exponent of a positive, finite, non-zero value.
 fn decimal_exponent(value: f64) -> i32 {
-    format!("{value:e}")
+    // Use a high-precision expansion instead of the shortest representation.
+    // The double nearest 1e-7 is slightly below it, so its exact exponent is
+    // -8 even though Rust's `{:e}` prints `1e-7`. `toPrecision` and
+    // `toExponential` must round against the exact value.
+    format!("{value:.40e}")
         .split_once('e')
         .and_then(|(_, exponent)| exponent.parse().ok())
         .unwrap_or(0)
@@ -6376,6 +6380,18 @@ mod tests {
         assert_eq!(
             run_value("return 'ab'.replaceAll('', (m, i) => i);"),
             string("0a1b2")
+        );
+        assert_eq!(
+            run_value("return (1e-7).toPrecision(17);"),
+            string("9.9999999999999995e-8")
+        );
+        assert_eq!(
+            run_value("return (1e-7).toPrecision(21);"),
+            string("9.99999999999999954748e-8")
+        );
+        assert_eq!(
+            run_value("return (1e-7).toExponential(20);"),
+            string("9.99999999999999954748e-8")
         );
     }
 

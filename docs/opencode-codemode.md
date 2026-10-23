@@ -197,6 +197,9 @@ shadowingできる。
 - `Number` instance methods: toFixed、toPrecision、toExponential、toString
   (radix 2..36の整数)、valueOf。digitsが範囲外なら `RangeError` にする。
   丸めはECMAScriptと同じround-half-away (0.5は0から遠い側) で行う。
+  `toPrecision` / `toExponential` は最短表記ではなく正確な10進展開から
+  指数を決めるため、`(1e-7).toPrecision(17)` は `9.9999999999999995e-8`
+  になる。
 - 数値の文字列化はECMAScriptの `Number::toString` に合わせ、指数が -6 未満または
   20 超のとき指数表記 (`1e+21`、`1e-7`) を使う。
 - `Map`: `new Map(entries | Map)`、get、set、has、delete、clear、forEach、
