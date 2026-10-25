@@ -125,10 +125,17 @@ pub fn parse_iso(text: &str) -> f64 {
         return f64::NAN;
     }
 
-    let (date_text, time_text) = match text.find(['T', ' ']) {
-        Some(index) => (&text[..index], Some(&text[index + 1..])),
-        None => (text, None),
+    let (date_text, time_text, iso_time) = match text.find(['T', 't', ' ']) {
+        Some(index) => (
+            &text[..index],
+            Some(&text[index + 1..]),
+            matches!(text.as_bytes()[index], b'T' | b't'),
+        ),
+        None => (text, None, false),
     };
+    if iso_time && !iso_date_width(date_text) {
+        return f64::NAN;
+    }
 
     let Some((year, month, day)) = parse_date_part(date_text) else {
         return f64::NAN;
@@ -151,6 +158,25 @@ pub fn parse_iso(text: &str) -> f64 {
         + seconds as f64 * 1_000.0
         + milliseconds as f64;
     clip(local_ms - offset_minutes as f64 * 60_000.0)
+}
+
+fn iso_date_width(text: &str) -> bool {
+    let sign_len = usize::from(text.starts_with(['+', '-']));
+    let rest = &text[sign_len..];
+    let mut pieces = rest.split('-');
+    let year = pieces.next().unwrap_or("");
+    let year_width = if sign_len == 1 { 6 } else { 4 };
+    if year.len() != year_width || !year.bytes().all(|byte| byte.is_ascii_digit()) {
+        return false;
+    }
+    let (Some(month), Some(day)) = (pieces.next(), pieces.next()) else {
+        return false;
+    };
+    pieces.next().is_none()
+        && month.len() == 2
+        && day.len() == 2
+        && month.bytes().all(|byte| byte.is_ascii_digit())
+        && day.bytes().all(|byte| byte.is_ascii_digit())
 }
 
 fn parse_date_part(text: &str) -> Option<(i64, u32, u32)> {
@@ -181,8 +207,8 @@ fn parse_date_part(text: &str) -> Option<(i64, u32, u32)> {
 fn parse_time_part(text: &str) -> Option<(u32, u32, u32, u32, i32)> {
     let (time_text, offset_minutes) = split_offset(text)?;
     let mut pieces = time_text.split(':');
-    let hours = pieces.next()?.parse::<u32>().ok()?;
-    let minutes = pieces.next()?.parse::<u32>().ok()?;
+    let hours = two_digits(pieces.next()?)?;
+    let minutes = two_digits(pieces.next()?)?;
     let (seconds, milliseconds) = match pieces.next() {
         Some(piece) => parse_seconds(piece)?,
         None => (0, 0),
@@ -205,7 +231,7 @@ fn parse_seconds(text: &str) -> Option<(u32, u32)> {
         Some(index) => (&text[..index], Some(&text[index + 1..])),
         None => (text, None),
     };
-    let seconds = seconds.parse::<u32>().ok()?;
+    let seconds = two_digits(seconds)?;
     let milliseconds = match fraction {
         Some(fraction) => {
             if fraction.is_empty() || !fraction.bytes().all(|byte| byte.is_ascii_digit()) {
@@ -238,16 +264,29 @@ fn split_offset(text: &str) -> Option<(&str, i32)> {
     let sign = if offset.starts_with('-') { -1 } else { 1 };
     let offset = &offset[1..];
     let (hours, minutes) = match offset.find(':') {
-        Some(colon) => (&offset[..colon], &offset[colon + 1..]),
-        None if offset.len() == 4 => (&offset[..2], &offset[2..]),
-        None => (offset, "0"),
+        Some(colon) => {
+            let hours = two_digits(&offset[..colon])?;
+            let minutes = two_digits(&offset[colon + 1..])?;
+            (hours as i32, minutes as i32)
+        }
+        None if offset.len() == 4 => (
+            two_digits(&offset[..2])? as i32,
+            two_digits(&offset[2..])? as i32,
+        ),
+        None => return None,
     };
-    let hours = hours.parse::<i32>().ok()?;
-    let minutes = minutes.parse::<i32>().ok()?;
     if hours > 23 || minutes > 59 {
         return None;
     }
     Some((time, sign * (hours * 60 + minutes)))
+}
+
+fn two_digits(text: &str) -> Option<u32> {
+    if text.len() == 2 && text.bytes().all(|byte| byte.is_ascii_digit()) {
+        text.parse::<u32>().ok()
+    } else {
+        None
+    }
 }
 
 /// Builds a time value from `Date` component arguments.
@@ -357,6 +396,17 @@ mod tests {
         assert_eq!(parse_iso("2024-01-02T03:04:05+09:00"), 1_704_132_245_000.0);
         assert_eq!(parse_iso("2024-01-02 03:04:05Z"), 1_704_164_645_000.0);
         assert_eq!(parse_iso("2024-01-02T24:00:00.000Z"), 1_704_240_000_000.0);
+        assert_eq!(parse_iso("2024-01-02t03:04:05z"), 1_704_164_645_000.0);
+        assert_eq!(parse_iso("2024-01-02T03:04:05+0900"), 1_704_132_245_000.0);
+        assert!(parse_iso("2024-01-02T3:04:05Z").is_nan());
+        assert!(parse_iso("2024-01-02T03:4:05Z").is_nan());
+        assert!(parse_iso("2024-01-02T03:04:5Z").is_nan());
+        assert!(parse_iso("2024-01-02T03:04:05+09").is_nan());
+        assert!(parse_iso("2024-01-02T03:04:05+9:00").is_nan());
+        assert!(parse_iso("2024-01-02T03:04:05+09:0").is_nan());
+        assert!(parse_iso("2024-1-2T03:04:05Z").is_nan());
+        assert!(parse_iso("2024-01T03:04:05Z").is_nan());
+        assert_eq!(parse_iso("2024-1-2 03:04:05Z"), 1_704_164_645_000.0);
         assert!(parse_iso("garbage").is_nan());
         assert!(parse_iso("2024-13-01").is_nan());
         assert!(parse_iso("2024-01-02T24:00:01Z").is_nan());

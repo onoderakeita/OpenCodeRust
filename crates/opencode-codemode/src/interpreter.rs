@@ -669,6 +669,13 @@ impl<'a> Interpreter<'a> {
                 )
             }
             Statement::ForOfStatement(statement) => {
+                if statement.r#await {
+                    return Err(RuntimeError::new(
+                        RuntimeErrorKind::ExecutionFailure,
+                        "for await...of is not supported.",
+                        statement.span,
+                    ));
+                }
                 let value = self.eval_expression(&statement.right)?;
                 let items = match &value {
                     Value::Array(array) => ForEachSource::Array(Rc::clone(array)),
@@ -6850,6 +6857,10 @@ mod tests {
             ),
             string("1,2,3")
         );
+        let error = run("async function f() { for await (const x of []) {} } return f();")
+            .expect_err("for await is unsupported");
+        assert_eq!(error.kind(), super::RuntimeErrorKind::ExecutionFailure);
+        assert!(error.message().contains("for await"));
     }
 
     #[test]

@@ -279,10 +279,12 @@ shadowingできる。
   扱い、`getTimezoneOffset()` は有効日付で `0` を返す。これはhost timezone
   非依存を優先した意図的な差分である。
 - `Date.parse` はISO 8601のsubset (`YYYY`、`YYYY-MM`、`YYYY-MM-DD`、
-  符号付き拡張年 `-000001` / `+010000`、`T`またはspace区切り、
+  符号付き拡張年 `-000001` / `+010000`、`T`/`t`/space区切り、
   `Z` / `±HH:MM` / `±HHMM`) を受理し、zone省略時はUTCとする。
-  `24:00:00.000` は翌日として受理するが、hour 24で分秒以降が非ゼロなら
-  `NaN`。月日の範囲外はrolloverし、月0・日0・不正なoffsetは `NaN`。
+  `T`区切りでは日付と時刻の各componentを2桁で要求し、space区切りの
+  緩いdate部だけは1桁も受理する。`24:00:00.000` は翌日として受理するが、
+  hour 24で分秒以降が非ゼロなら `NaN`。月日の範囲外はrolloverし、
+  月0・日0・不正なoffsetは `NaN`。
 - 文字列化と境界直列化はISO形式、無効日付は `toString()` が
   `Invalid Date`、境界では `null` になる。`toISOString()` は無効日付で
   `RangeError` を投げる。
