@@ -213,8 +213,9 @@ shadowingできる。
   入力はdata境界で深く検証し、ネストしたcallable/Promiseは
   `InvalidDataValue` にする。array-likeのlengthは `ToLength` と同じく
   NaNと負数を0、小数を切り捨てとして扱い、`+Infinity` と上限
-  (1,000,000) を超える値は `RangeError` にする。第2引数の
-  map関数はupstreamに合わせて `UnsupportedSyntax` にする。インスタンスmethodは
+  (1,000,000) を超える値は `RangeError` にする。第2引数のmap関数は
+  user functionまたはcoercion/URI builtinを受け、`(element, index)` で呼ぶ。
+  インスタンスmethodは
   map、filter、forEach、
   reduce、reduceRight、find、findIndex、findLast、findLastIndex、some、
   every、join、slice、includes、indexOf、lastIndexOf、push、pop、shift、

@@ -2639,10 +2639,14 @@ impl<'a> Interpreter<'a> {
                 Ok(value)
             }
             "Array.from" => {
-                if arguments.len() > 1 {
-                    return Err(RuntimeError::unsupported("Array.from map function", _span));
-                }
                 let source = argument(0);
+                let mapper = if arguments.len() > 1 && !arguments[1].is_undefined() {
+                    let mapper = arguments[1].clone();
+                    ensure_collection_callback(&mapper, "Array.from", _span)?;
+                    Some(mapper)
+                } else {
+                    None
+                };
                 check_data_argument(&source, "Array.from input", _span)?;
                 // Upstream accepts arrays, strings, Map/Set, and objects with a
                 // numeric `length`; everything else is a TypeError rather than
@@ -2692,6 +2696,19 @@ impl<'a> Interpreter<'a> {
                             _span,
                         ))
                     }
+                };
+                let items = if let Some(mapper) = mapper {
+                    let mut mapped = Vec::with_capacity(items.len());
+                    for (index, item) in items.into_iter().enumerate() {
+                        mapped.push(self.invoke_value(
+                            &mapper,
+                            vec![item, Value::Number(index as f64)],
+                            _span,
+                        )?);
+                    }
+                    mapped
+                } else {
+                    items
                 };
                 let value = Value::array(items);
                 check_data_argument(&value, "Array.from result", _span)?;
@@ -10365,9 +10382,28 @@ mod tests {
             run_value(r#"return Array.from({ length: 3, 0: "a", 2: "c" }).join(",");"#),
             string("a,,c")
         );
-        let error = run(r#"return Array.from({ length: 2, 0: 1, 1: 2 }, (x) => x + 1);"#)
-            .expect_err("Array.from map functions are unsupported");
-        assert_eq!(error.kind(), super::RuntimeErrorKind::UnsupportedSyntax);
+        assert_eq!(
+            run_value(
+                r#"return Array.from({ length: 2, 0: 1, 1: 2 }, (x, index) => x + index).join(",");"#
+            ),
+            string("1,3")
+        );
+        assert_eq!(
+            run_value(r#"return Array.from("ab", (x) => x.toUpperCase()).join(",");"#),
+            string("A,B")
+        );
+        assert_eq!(
+            run_value(
+                r#"return JSON.stringify(Array.from(new Map([["a", 1]]), (pair) => pair[0] + pair[1]));"#
+            ),
+            string(r#"["a1"]"#)
+        );
+        assert_eq!(
+            run_value(r#"return Array.from([1, 2], undefined).join(",");"#),
+            string("1,2")
+        );
+        let error = run("return Array.from([1], 42);").expect_err("invalid mapper");
+        assert_eq!(error.kind(), super::RuntimeErrorKind::TypeError);
         let error = run(r#"return Array.from({ length: 1000001 });"#)
             .expect_err("oversized array-like should fail");
         assert_eq!(error.kind(), super::RuntimeErrorKind::RangeError);
