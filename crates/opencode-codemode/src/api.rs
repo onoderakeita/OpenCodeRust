@@ -153,6 +153,19 @@ pub fn execute_code(
     host: Option<Box<dyn ToolHost>>,
     limits: &ExecutionLimits,
 ) -> CodeModeResult {
+    if code.trim().is_empty() {
+        return CodeModeResult::Failure(Failure {
+            error: Diagnostic {
+                kind: DiagnosticKind::ParseError,
+                message: "Code cannot be empty.".to_owned(),
+                location: None,
+                suggestions: Vec::new(),
+            },
+            logs: Vec::new(),
+            truncated: false,
+            tool_calls: Vec::new(),
+        });
+    }
     let allocator = oxc_allocator::Allocator::default();
     let program = match parse_program(&allocator, code) {
         Ok(program) => program,
@@ -423,11 +436,17 @@ mod tests {
 
     #[test]
     fn reports_parse_failures() {
-        let failure = failure(execute_code("const = ;", None, &ExecutionLimits::default()));
-        assert_eq!(failure.error.kind, DiagnosticKind::ParseError);
-        assert!(!failure.error.message.is_empty());
-        assert!(failure.error.location.is_none());
-        assert!(failure.tool_calls.is_empty());
+        let syntax = failure(execute_code("const = ;", None, &ExecutionLimits::default()));
+        assert_eq!(syntax.error.kind, DiagnosticKind::ParseError);
+        assert!(!syntax.error.message.is_empty());
+        assert!(syntax.error.location.is_none());
+        assert!(syntax.tool_calls.is_empty());
+
+        let empty = failure(execute_code(" \n\t", None, &ExecutionLimits::default()));
+        assert_eq!(empty.error.kind, DiagnosticKind::ParseError);
+        assert_eq!(empty.error.message, "Code cannot be empty.");
+        assert!(empty.logs.is_empty());
+        assert!(empty.tool_calls.is_empty());
     }
 
     #[test]

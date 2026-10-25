@@ -715,26 +715,76 @@ impl<'a> Interpreter<'a> {
         let saved = Rc::clone(&self.scope);
         self.scope = Rc::new(RefCell::new(Scope::child(saved.clone())));
         let result = (|| {
-            if let Some(init) = &statement.init {
-                match init {
-                    ForStatementInit::VariableDeclaration(declaration) => {
-                        self.eval_variable_declaration(declaration)?;
-                    }
-                    _ => {
-                        if let Some(expression) = init.as_expression() {
-                            self.eval_expression(expression)?;
+            let per_iteration = match &statement.init {
+                Some(ForStatementInit::VariableDeclaration(declaration))
+                    if declaration.kind != VariableDeclarationKind::Var =>
+                {
+                    self.eval_variable_declaration(declaration)?;
+                    self.scope
+                        .borrow()
+                        .bindings
+                        .keys()
+                        .cloned()
+                        .collect::<Vec<_>>()
+                }
+                Some(init) => {
+                    match init {
+                        ForStatementInit::VariableDeclaration(declaration) => {
+                            self.eval_variable_declaration(declaration)?;
+                        }
+                        _ => {
+                            if let Some(expression) = init.as_expression() {
+                                self.eval_expression(expression)?;
+                            }
                         }
                     }
+                    Vec::new()
                 }
-            }
+                None => Vec::new(),
+            };
             loop {
+                self.check_timeout(statement.span)?;
                 if let Some(test) = &statement.test {
                     let value = self.eval_expression(test)?;
                     if !is_truthy(&value) {
                         return Ok(Flow::Normal);
                     }
                 }
-                match self.eval_statement(&statement.body)? {
+                // `let`/`const` loop bindings are copied into a fresh scope per
+                // iteration so closures capture that iteration's values; after a
+                // normal/continue completion they are copied back for the update
+                // expression, matching the upstream per-iteration scope.
+                let iteration_scope = if per_iteration.is_empty() {
+                    None
+                } else {
+                    let outer = Rc::clone(&self.scope);
+                    let mut scope = Scope::child(Rc::clone(&outer));
+                    {
+                        let outer_scope = outer.borrow();
+                        for name in &per_iteration {
+                            if let Some(binding) = outer_scope.bindings.get(name) {
+                                scope.bindings.insert(name.clone(), binding.clone());
+                            }
+                        }
+                    }
+                    let iteration = Rc::new(RefCell::new(scope));
+                    self.scope = Rc::clone(&iteration);
+                    Some((iteration, outer))
+                };
+                let flow = self.eval_statement(&statement.body);
+                if let Some((iteration, outer)) = iteration_scope {
+                    self.scope = Rc::clone(&outer);
+                    if matches!(&flow, Ok(Flow::Normal) | Ok(Flow::Continue)) {
+                        let iteration = iteration.borrow();
+                        let mut outer_scope = outer.borrow_mut();
+                        for name in &per_iteration {
+                            if let Some(binding) = iteration.bindings.get(name) {
+                                outer_scope.bindings.insert(name.clone(), binding.clone());
+                            }
+                        }
+                    }
+                }
+                match flow? {
                     Flow::Normal | Flow::Continue => {}
                     Flow::Break => return Ok(Flow::Normal),
                     Flow::Return(value) => return Ok(Flow::Return(value)),
@@ -793,7 +843,25 @@ impl<'a> Interpreter<'a> {
         &mut self,
         statement: &'a oxc_ast::ast::SwitchStatement<'a>,
     ) -> Result<Flow, RuntimeError> {
+        let saved = Rc::clone(&self.scope);
+        self.scope = Rc::new(RefCell::new(Scope::child(saved.clone())));
+        let result = self.eval_switch_inner(statement);
+        self.scope = saved;
+        result
+    }
+
+    fn eval_switch_inner(
+        &mut self,
+        statement: &'a oxc_ast::ast::SwitchStatement<'a>,
+    ) -> Result<Flow, RuntimeError> {
         let discriminant = self.eval_expression(&statement.discriminant)?;
+        if contains_opaque_reference(&discriminant, &mut Vec::new()) {
+            return Err(RuntimeError::new(
+                RuntimeErrorKind::InvalidDataValue,
+                "Switch discriminants must be data values in CodeMode.",
+                statement.discriminant.span(),
+            ));
+        }
         let mut matched = None;
         let mut default = None;
         for (index, case) in statement.cases.iter().enumerate() {
@@ -3174,17 +3242,16 @@ impl<'a> Interpreter<'a> {
             "String.repeat" => {
                 let text = as_string(receiver, span)?;
                 let number = number_arg(0)?;
-                // ToIntegerOrInfinity: NaN becomes 0, fractions truncate; only
-                // a negative or infinite count is a RangeError.
-                let count = if number.is_nan() { 0.0 } else { number.trunc() };
-                if count < 0.0 || count.is_infinite() {
+                // Upstream pre-validates the raw argument: NaN/Infinity and
+                // negative counts are RangeError before native truncation.
+                if !number.is_finite() || number < 0.0 {
                     return Err(RuntimeError::new(
                         RuntimeErrorKind::RangeError,
                         "String.repeat expects a finite non-negative count.",
                         span,
                     ));
                 }
-                let count = count as usize;
+                let count = number.trunc() as usize;
                 if text.len().saturating_mul(count) > MAX_STRING_LENGTH {
                     return Err(RuntimeError::new(
                         RuntimeErrorKind::RangeError,
@@ -6432,6 +6499,20 @@ mod tests {
             return total;
         "#;
         assert_eq!(run_value(source), number(18.0));
+        assert_eq!(
+            run_value(
+                "const fns = []; for (let i = 0; i < 3; i += 1) { fns.push(() => i); } \
+                 return fns.map((f) => f()).join(',');"
+            ),
+            string("0,1,2")
+        );
+        assert_eq!(
+            run_value(
+                "let sum = 0; for (let i = 0; i < 3; i += 1) { i += 1; sum += i; } \
+                 return sum;"
+            ),
+            number(4.0)
+        );
     }
 
     #[test]
@@ -6516,6 +6597,17 @@ mod tests {
             return result;
         "#;
         assert_eq!(run_value(source), string("bc"));
+        assert_eq!(
+            run_value(
+                "let out = ''; for (let i = 0; i < 2; i += 1) { \
+                 switch (i) { case 0: let a = 1; out += a; break; default: out += 'd'; } } \
+                 return out;"
+            ),
+            string("1d")
+        );
+        let error = run("switch (Promise.resolve(1)) { case 1: return 1; } return 0;")
+            .expect_err("opaque switch discriminant");
+        assert_eq!(error.kind(), super::RuntimeErrorKind::InvalidDataValue);
     }
 
     #[test]
@@ -8626,9 +8718,14 @@ mod tests {
             string("2.5e-1")
         );
         assert_eq!(run_value("return 'a'.repeat(2.9);"), string("aa"));
-        assert_eq!(run_value("return 'a'.repeat(-0.5);"), string(""));
-        let error = run("return 'a'.repeat(-1);").expect_err("negative repeat");
-        assert_eq!(error.kind(), super::RuntimeErrorKind::RangeError);
+        for source in ["return 'a'.repeat(-0.5);", "return 'a'.repeat(-1);"] {
+            let error = run(source).expect_err("negative repeat");
+            assert_eq!(
+                error.kind(),
+                super::RuntimeErrorKind::RangeError,
+                "{source}"
+            );
+        }
         let error = run("return 'a'.repeat(Infinity);").expect_err("infinite repeat");
         assert_eq!(error.kind(), super::RuntimeErrorKind::RangeError);
         assert_eq!(
@@ -9047,7 +9144,8 @@ mod tests {
         assert_eq!(run_value("return [0].includes(-0);"), Value::Boolean(true));
         assert_eq!(run_value("return [0].indexOf(-0);"), number(0.0));
         assert_eq!(run_value("return 'ab'.repeat(3);"), string("ababab"));
-        assert_eq!(run_value("return 'x'.repeat(NaN);"), string(""));
+        let error = run("return 'x'.repeat(NaN);").expect_err("NaN repeat");
+        assert_eq!(error.kind(), super::RuntimeErrorKind::RangeError);
         assert_eq!(run_value("return 'x'.padStart(5, 'ab');"), string("ababx"));
         assert_eq!(run_value("return 'x'.padStart(Infinity, '');"), string("x"));
         assert_eq!(run_value("return 'x'.padEnd(0);"), string("x"));
@@ -9083,6 +9181,8 @@ mod tests {
         for source in [
             "return 'x'.repeat(Infinity);",
             "return 'x'.repeat(-Infinity);",
+            "return 'x'.repeat(NaN);",
+            "return 'x'.repeat(-0.5);",
             "return 'x'.repeat(-1);",
             "return 'x'.padStart(Infinity);",
         ] {

@@ -243,10 +243,11 @@ shadowingできる。
   絶対位置で、負数は0になる。Arrayの検索系 (`indexOf` / `includes` /
   `lastIndexOf`) は負数を末尾からの相対として扱う。
   `split` のlimitはToUint32で変換し、`NaN` / `Infinity` は0、負数は
-  2^32のmoduloになる。`repeat` はToIntegerOrInfinityで `NaN` を0、小数を
-  切り捨てとして扱い、負数と `Infinity` は `RangeError` にする。
-  `padStart` / `padEnd` は空のpaddingならreceiverをそのまま返し、非空で
-  長さ上限を超える場合は `RangeError` にする。trim系はBOM
+  2^32のmoduloになる。`repeat` はupstreamと同じくraw値が有限かつ非負で
+  あることを要求し、`NaN` / `Infinity` / 負数 (-0.5を含む) は `RangeError`
+  にし、正の小数は切り捨てる。`padStart` / `padEnd` は空のpaddingなら
+  receiverをそのまま返し、非空で長さ上限を超える場合は `RangeError` に
+  する。trim系はBOM
   (U+FEFF) も除去し、`<` / `>` の文字列比較はUTF-16 code unit順になる。
   `normalize` とRegExp依存のmatch系は未実装。
 - `Number` instance methods: toFixed、toPrecision、toExponential、toString
@@ -321,6 +322,8 @@ shadowingできる。
 `execute_code(code, host, limits)` は upstream `CodeMode.execute` に相当する
 入口で、parse、評価、limit適用、data境界の正規化をまとめて行う。
 
+- 空文字または空白のみのcodeは、parse前に `ParseError` ("Code cannot be empty.")
+  として失敗する。
 - 成功は `CodeModeResult::Success` で、`value` (JSON)、`logs`、`truncated`、
   `tool_calls` を返す。`value` は `to_json` で正規化し、`NaN` / `Infinity` は
   `null` になる。
