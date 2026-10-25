@@ -102,11 +102,13 @@ upstreamは未対応構文を評価到達時に拒否する。`inspect_support` 
   Rustの評価frameがJavaScriptより大きいための固定上限である。
 - `new` は `Error`、`TypeError`、`RangeError`、`SyntaxError`、
   `ReferenceError`、`EvalError`、`URIError`、`AggregateError` のconstructorと
-  `Object` / `Map` / `Set` / `Date` を許可する。
+  `Object` / `Array` / `Map` / `Set` / `Date` を許可する。
   `Error(...)` は `new` なしでも同じ値を作り、`Map` / `Set` / `Date` は
   `new` なしでは `TypeError` にする。`Object(...)` は `new` なしでも動き、
   object/array/Error/Map/Set/Date/Promise/callableは同一値を返し、引数なし・
   null・undefinedは新しい空object、primitiveは `TypeError` にする。
+  `Array(...)` / `new Array(...)` は単一numberをlengthとして扱い
+  (0..1,000,000)、それ以外は要素配列を返す。
   `AggregateError(errors, message)` は
   `errors` iterableと任意messageを受け、`errors` propertyはnon-enumerable。
 - `instanceof` はError brandと `Map` / `Set` / `Date` / `Array` / `Object` /
@@ -418,6 +420,9 @@ shadowingできる。
 - TypeScriptの型消去・transpile parity
 - 非同期tool実行と未await rejectionの診断
 - 同期host呼び出しを中断するtimeout
+- `Array(n)` はRustのdense arrayとして全indexに `undefined` を持つ。
+  JavaScriptのhole (sparse array) とは `in`、`Object.keys`、callbackの
+  訪問範囲が異なる。最大lengthは安全上限1,000,000。
 - `Math` / `JSON` / `console` / `Object` / `Array` / `Date` / `Map` / `Set` の
   未知メンバーは、upstreamのGlobalMethodReference (typeof `function`) ではなく
   `undefined` になる。呼び出しはどちらも失敗する。また `Math` / `JSON` /

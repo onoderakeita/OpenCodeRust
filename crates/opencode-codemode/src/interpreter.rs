@@ -1288,6 +1288,7 @@ impl<'a> Interpreter<'a> {
                 let arguments = self.eval_arguments(&expression.arguments)?;
                 match callee {
                     Value::Builtin("Object") => construct_object(&arguments, expression.span),
+                    Value::Builtin("Array") => construct_array(&arguments, expression.span),
                     Value::Builtin("Map") => construct_map(arguments.first(), expression.span),
                     Value::Builtin("Set") => construct_set(arguments.first(), expression.span),
                     Value::Builtin("Date") => Ok(construct_date(&arguments)),
@@ -1916,7 +1917,8 @@ impl<'a> Interpreter<'a> {
                 _span,
             )),
             "Object" => construct_object(arguments, _span),
-            "Array" | "Promise" => Err(RuntimeError::new(
+            "Array" => construct_array(arguments, _span),
+            "Promise" => Err(RuntimeError::new(
                 RuntimeErrorKind::ExecutionFailure,
                 "Only tools are callable in CodeMode.",
                 _span,
@@ -5677,6 +5679,26 @@ fn construct_date(arguments: &[Value]) -> Value {
     Value::date(time_ms)
 }
 
+fn construct_array(arguments: &[Value], span: Span) -> Result<Value, RuntimeError> {
+    if arguments.len() == 1 {
+        if let Value::Number(length) = arguments[0] {
+            if !length.is_finite()
+                || length.fract() != 0.0
+                || length < 0.0
+                || length > MAX_ARRAY_LIKE_LENGTH as f64
+            {
+                return Err(RuntimeError::new(
+                    RuntimeErrorKind::RangeError,
+                    "Invalid array length.",
+                    span,
+                ));
+            }
+            return Ok(Value::array(vec![Value::Undefined; length as usize]));
+        }
+    }
+    Ok(Value::array(arguments.to_vec()))
+}
+
 fn construct_object(arguments: &[Value], span: Span) -> Result<Value, RuntimeError> {
     match arguments.first() {
         None | Some(Value::Undefined) | Some(Value::Null) => Ok(Value::object()),
@@ -9142,14 +9164,34 @@ mod tests {
 
     #[test]
     fn rejects_calling_namespace_objects() {
-        for source in ["return Array();", "return Promise();"] {
-            let error = run(source).expect_err("namespaces are not callable");
+        let error = run("return Promise();").expect_err("Promise namespace is not callable");
+        assert_eq!(error.kind(), super::RuntimeErrorKind::ExecutionFailure);
+        assert!(error.message().contains("Only tools are callable"));
+    }
+
+    #[test]
+    fn evaluates_array_constructor() {
+        assert_eq!(run_value("return Array().length;"), number(0.0));
+        assert_eq!(run_value("return Array(3).length;"), number(3.0));
+        assert_eq!(
+            run_value("return new Array(2, 3).join(',');"),
+            string("2,3")
+        );
+        assert_eq!(run_value("return Array('3').join(',');"), string("3"));
+        assert_eq!(run_value("return Array(undefined).length;"), number(1.0));
+        for source in [
+            "return Array(-1);",
+            "return Array(1.5);",
+            "return Array(NaN);",
+            "return Array(Infinity);",
+            "return new Array(1000001);",
+        ] {
+            let error = run(source).expect_err("invalid array length");
             assert_eq!(
                 error.kind(),
-                super::RuntimeErrorKind::ExecutionFailure,
+                super::RuntimeErrorKind::RangeError,
                 "{source}"
             );
-            assert!(error.message().contains("Only tools are callable"));
         }
     }
 
