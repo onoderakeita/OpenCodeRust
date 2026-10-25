@@ -142,8 +142,9 @@ shadowingできる。
   sign、log、log2、log10、exp、PI、E、LN2、LN10、LOG2E、LOG10E、SQRT2、
   SQRT1_2。upstreamに合わせて提供された引数はすべてnumberでなければ
   `TypeError` にし、引数なしは `NaN` として扱う。`sin` / `cos` / `tan` は
-  upstreamの `mathMethods` にないため公開しない。`round` は
-  `0 < x < 0.5` を `+0` にし、`0.49999999999999994` の二重丸めを避ける。
+  upstreamの `mathMethods` にないため公開しない。`max` は +0、`min` は
+  -0 を優先し、`round` は`0 < x < 0.5` を `+0` にし、
+  `0.49999999999999994` の二重丸めを避ける。
   負のゼロは保持する。`pow` は `(±1) ** ±Infinity` を `NaN`、
   `(-Infinity) ** 奇数` を `-Infinity` にするなどECMAScriptの特殊caseに従う。
 - `JSON`: parse、stringify。objectのkey順はECMAScriptと同じく配列indexの
@@ -151,7 +152,8 @@ shadowingできる。
   (`1e400` など) は `Infinity` / `-Infinity` としてparseする。stringifyは
   `undefined` をobjectから省略、arrayでは `null` にする。関数・callable・
   未await Promise・循環参照・深すぎる値は `InvalidDataValue` にする。
-  parse結果もdata境界を通すため、深すぎるネストは `InvalidDataValue` になる。
+  parse結果もdata境界を通すが、upstreamと同じくparse内の失敗として扱い、
+  深すぎるネストやblocked propertyは `SyntaxError` になる。
   第3引数のindent (数値0..10または先頭10文字の文字列) を受け付ける。
   replacerの配列・関数は `UnsupportedSyntax` にする。Errorはindent指定時も
   整形する。
@@ -291,7 +293,8 @@ shadowingできる。
 - 引数は深さ32、循環、関数、禁止メンバーを拒否する。検証はcallの記録より
   先に行うため、拒否された呼び出しは `maxToolCalls` を消費しない。
 - 結果は同じ境界を通す。hostの失敗は `message` と任意の `data` を持つ
-  objectとしてthrowし、`try`/`catch` で捕捉できる。
+  objectとしてthrowし、`try`/`catch` で捕捉できる。結果がdata境界に
+  違反した場合は `InvalidToolOutput` の診断になる。
 - `maxToolCalls` は `set_limits` / `set_tool_call_limit` で適用し、超過は
   `ToolCallLimitExceeded` を返す。
 - `Promise.resolve`、`Promise.reject`、`Promise.all`、`Promise.allSettled`、

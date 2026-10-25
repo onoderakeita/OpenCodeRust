@@ -235,6 +235,7 @@ fn map_runtime_kind(kind: RuntimeErrorKind) -> DiagnosticKind {
         RuntimeErrorKind::UnsupportedSyntax => DiagnosticKind::UnsupportedSyntax,
         RuntimeErrorKind::InvalidDataValue => DiagnosticKind::InvalidDataValue,
         RuntimeErrorKind::ToolCallLimitExceeded => DiagnosticKind::ToolCallLimitExceeded,
+        RuntimeErrorKind::InvalidToolOutput => DiagnosticKind::InvalidToolOutput,
         RuntimeErrorKind::Timeout => DiagnosticKind::TimeoutExceeded,
         RuntimeErrorKind::ToolFailure => DiagnosticKind::ToolFailure,
         RuntimeErrorKind::ReferenceError
@@ -313,6 +314,26 @@ mod tests {
         ) -> Result<JsonValue, ToolError> {
             self.calls.push(path.join("."));
             Ok(arguments.first().cloned().unwrap_or(JsonValue::Null))
+        }
+    }
+
+    struct BlockedHost;
+
+    impl ToolHost for BlockedHost {
+        fn keys(&self, path: &[String]) -> Vec<String> {
+            if path.is_empty() {
+                vec!["bad".to_owned()]
+            } else {
+                Vec::new()
+            }
+        }
+
+        fn invoke(
+            &mut self,
+            _path: &[String],
+            _arguments: Vec<JsonValue>,
+        ) -> Result<JsonValue, ToolError> {
+            Ok(serde_json::json!({ "__proto__": { "polluted": true } }))
         }
     }
 
@@ -398,6 +419,17 @@ mod tests {
             Some(super::Location { line: 2, column: 8 })
         );
         assert_eq!(failure.logs, ["before"]);
+    }
+
+    #[test]
+    fn reports_invalid_tool_outputs() {
+        let failure = failure(execute_code(
+            "return tools.bad();",
+            Some(Box::new(BlockedHost)),
+            &ExecutionLimits::default(),
+        ));
+        assert_eq!(failure.error.kind, DiagnosticKind::InvalidToolOutput);
+        assert_eq!(failure.tool_calls, ["bad"]);
     }
 
     #[test]

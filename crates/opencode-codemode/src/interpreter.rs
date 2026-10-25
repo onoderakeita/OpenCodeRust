@@ -60,6 +60,8 @@ pub enum RuntimeErrorKind {
     Timeout,
     /// The configured tool-call budget was exhausted.
     ToolCallLimitExceeded,
+    /// A host tool returned a value outside the plain-data contract.
+    InvalidToolOutput,
     /// A host tool failed.
     ToolFailure,
     /// Any other execution failure.
@@ -78,6 +80,7 @@ impl Display for RuntimeErrorKind {
             Self::UnsupportedSyntax => "UnsupportedSyntax",
             Self::Timeout => "Timeout",
             Self::ToolCallLimitExceeded => "ToolCallLimitExceeded",
+            Self::InvalidToolOutput => "InvalidToolOutput",
             Self::ToolFailure => "ToolFailure",
             Self::ExecutionFailure => "ExecutionFailure",
         })
@@ -1664,8 +1667,24 @@ impl<'a> Interpreter<'a> {
                             _span,
                         )
                     })?;
-                let value = json_to_value_with_overflow(&json, _span, repaired.is_some())?;
-                check_data_argument(&value, "JSON.parse result", _span)?;
+                let value = json_to_value_with_overflow(&json, _span, repaired.is_some()).map_err(
+                    |error| {
+                        RuntimeError::new(
+                            RuntimeErrorKind::SyntaxError,
+                            format!("JSON.parse received invalid JSON: {}", error.message()),
+                            _span,
+                        )
+                    },
+                )?;
+                // Upstream runs copyIn inside the same try block, so blocked
+                // properties and over-deep results surface as SyntaxError too.
+                check_data(&value, "JSON.parse result").map_err(|error| {
+                    RuntimeError::new(
+                        RuntimeErrorKind::SyntaxError,
+                        format!("JSON.parse received invalid JSON: {error}"),
+                        _span,
+                    )
+                })?;
                 Ok(value)
             }
             "JSON.stringify" => {
@@ -3399,9 +3418,19 @@ impl<'a> Interpreter<'a> {
         let arguments = arguments.iter().map(Value::to_json).collect();
         match host.invoke(path.as_slice(), arguments) {
             Ok(json) => {
-                let value = json_to_value(&json, span)?;
+                let value = json_to_value(&json, span).map_err(|error| {
+                    RuntimeError::new(
+                        RuntimeErrorKind::InvalidToolOutput,
+                        format!("Invalid output from tool '{name}': {}", error.message()),
+                        span,
+                    )
+                })?;
                 check_data(&value, &format!("tool '{name}' result")).map_err(|error| {
-                    RuntimeError::new(RuntimeErrorKind::InvalidDataValue, error.to_string(), span)
+                    RuntimeError::new(
+                        RuntimeErrorKind::InvalidToolOutput,
+                        format!("Invalid output from tool '{name}': {error}"),
+                        span,
+                    )
                 })?;
                 Ok(value)
             }
@@ -4597,7 +4626,20 @@ fn math_extreme(values: &[f64], maximum: bool) -> f64 {
         if number.is_nan() {
             return f64::NAN;
         }
-        if (maximum && *number > result) || (!maximum && *number < result) {
+        // ECMAScript Math.max prefers +0 and Math.min prefers -0 when both
+        // signs of zero are present; a plain comparison keeps the first seen.
+        let prefer = if maximum {
+            *number == 0.0
+                && result == 0.0
+                && number.is_sign_positive()
+                && result.is_sign_negative()
+        } else {
+            *number == 0.0
+                && result == 0.0
+                && number.is_sign_negative()
+                && result.is_sign_positive()
+        };
+        if (maximum && *number > result) || (!maximum && *number < result) || prefer {
             result = *number;
         }
     }
@@ -6627,7 +6669,7 @@ mod tests {
     #[test]
     fn rejects_blocked_tool_results() {
         let error = run_with_host("return tools.unsafe();").expect_err("should fail");
-        assert_eq!(error.kind(), super::RuntimeErrorKind::InvalidDataValue);
+        assert_eq!(error.kind(), super::RuntimeErrorKind::InvalidToolOutput);
     }
 
     #[test]
@@ -6885,6 +6927,22 @@ mod tests {
         assert_eq!(
             run_value("return Math.round(0.49999999999999994);"),
             number(0.0)
+        );
+        assert_eq!(
+            run_value("return String(1 / Math.max(-0, 0));"),
+            string("Infinity")
+        );
+        assert_eq!(
+            run_value("return String(1 / Math.min(0, -0));"),
+            string("-Infinity")
+        );
+        assert_eq!(
+            run_value("return String(1 / Math.max(-0, -0));"),
+            string("-Infinity")
+        );
+        assert_eq!(
+            run_value("return String(1 / Math.min(0, 0));"),
+            string("Infinity")
         );
         assert_eq!(
             run_value("return new Date('2024-01-02T24:00:00Z').toISOString();"),
@@ -7364,7 +7422,11 @@ mod tests {
              return JSON.parse(s);",
         )
         .expect_err("over-deep parse result");
-        assert_eq!(error.kind(), super::RuntimeErrorKind::InvalidDataValue);
+        assert_eq!(error.kind(), super::RuntimeErrorKind::SyntaxError);
+
+        let error =
+            run("return JSON.parse('{\"__proto__\": 1}');").expect_err("blocked parse result");
+        assert_eq!(error.kind(), super::RuntimeErrorKind::SyntaxError);
 
         assert_eq!(
             run_value("return typeof Promise.resolve(1);"),
