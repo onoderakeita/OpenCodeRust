@@ -101,14 +101,17 @@ upstreamは未対応構文を評価到達時に拒否する。`inspect_support` 
 - 関数呼び出しの深さと文・式の評価深さは、それぞれ64で `RangeError` にする。
   Rustの評価frameがJavaScriptより大きいための固定上限である。
 - `new` は `Error`、`TypeError`、`RangeError`、`SyntaxError`、
-  `ReferenceError`、`EvalError`、`URIError` のconstructorと
+  `ReferenceError`、`EvalError`、`URIError`、`AggregateError` のconstructorと
   `Map` / `Set` / `Date` を許可する。
   `Error(...)` は `new` なしでも同じ値を作り、`Map` / `Set` / `Date` は
-  `new` なしでは `TypeError` にする。
+  `new` なしでは `TypeError` にする。`AggregateError(errors, message)` は
+  `errors` iterableと任意messageを受け、`errors` propertyはnon-enumerable。
 - `instanceof` はError brandと `Map` / `Set` / `Date` / `Array` / `Object` /
   `Promise` を判定する。`Number` / `String` / `Boolean` は常に `false`
   (boxed値を作らないため)、未知の右辺は `TypeError` にする。
 - Error値は `name` と `message` を持ち、`{ name, message }` として直列化する。
+  `AggregateError` はnon-enumerableな `errors` propertyも持ち、Promise.anyの
+  全reject理由を配列で公開する。
   `Object.keys` / `Object.values` / `Object.entries` / `for...in` でも
   `name`、`message` の順に列挙する。
   `Object.keys` は `["name", "message"]` を返し、spreadするとbrandを失う。
@@ -340,8 +343,10 @@ shadowingできる。
 - `maxToolCalls` は `set_limits` / `set_tool_call_limit` で適用し、超過は
   `ToolCallLimitExceeded` を返す。
 - `Promise.resolve`、`Promise.reject`、`Promise.all`、`Promise.allSettled`、
-  `Promise.race`、`Promise.try` は同期的に評価する。組み合わせ関数は配列に
-  加えて文字列・Map・Setも受け、Mapはentryの配列に展開する。`Promise.try` は
+  `Promise.race`、`Promise.any`、`Promise.try` は同期的に評価する。組み合わせ関数は配列に
+  加えて文字列・Map・Setも受け、Mapはentryの配列に展開する。`Promise.any` は
+  最初のfulfilled値で解決し、全reject時は `errors` に理由を並べた
+  `AggregateError` でrejectする。`Promise.try` は
   callbackを残り引数で呼び、throwをreject、返却Promiseをadoptする。
   `await` はfulfilled値を取り出し、rejected理由をthrowする。空の
   `Promise.race` はエラーにする。

@@ -501,6 +501,7 @@ impl<'a> Interpreter<'a> {
             ("ReferenceError", Value::Builtin("ReferenceError")),
             ("EvalError", Value::Builtin("EvalError")),
             ("URIError", Value::Builtin("URIError")),
+            ("AggregateError", Value::Builtin("AggregateError")),
             ("Map", Value::Builtin("Map")),
             ("Set", Value::Builtin("Set")),
             ("Date", Value::Builtin("Date")),
@@ -1274,7 +1275,7 @@ impl<'a> Interpreter<'a> {
                     Value::Builtin("Set") => construct_set(arguments.first(), expression.span),
                     Value::Builtin("Date") => Ok(construct_date(&arguments)),
                     Value::Builtin(name) if ErrorKind::from_name(name).is_some() => {
-                        Ok(make_error(name, &arguments))
+                        construct_error_value(name, &arguments, expression.span)
                     }
                     _ => Err(RuntimeError::unsupported("new", expression.span)),
                 }
@@ -1841,7 +1842,9 @@ impl<'a> Interpreter<'a> {
                 })
             }
             "Error" | "TypeError" | "RangeError" | "SyntaxError" | "ReferenceError"
-            | "EvalError" | "URIError" => Ok(make_error(name, arguments)),
+            | "EvalError" | "URIError" | "AggregateError" => {
+                construct_error_value(name, arguments, _span)
+            }
             "Date" => Ok(Value::String(
                 crate::date::iso_string(crate::date::now_ms())
                     .unwrap_or_else(|| "Invalid Date".to_owned()),
@@ -2248,7 +2251,7 @@ impl<'a> Interpreter<'a> {
                     }
                 }
             }
-            "Promise.all" | "Promise.allSettled" | "Promise.race" => {
+            "Promise.all" | "Promise.allSettled" | "Promise.race" | "Promise.any" => {
                 let source = argument(0);
                 // Upstream accepts arrays plus the spreadable sandbox values
                 // (strings, Maps, Sets), materializing Map entries as pairs.
@@ -2281,6 +2284,19 @@ impl<'a> Interpreter<'a> {
                             }
                         }
                         Ok(Value::promise_fulfilled(Value::array(values)))
+                    }
+                    "Promise.any" => {
+                        let mut reasons = Vec::new();
+                        for item in &items {
+                            match settle_promise(item) {
+                                Ok(value) => return Ok(Value::promise_fulfilled(value)),
+                                Err(reason) => reasons.push(reason),
+                            }
+                        }
+                        Ok(Value::promise_rejected(Value::aggregate_error(
+                            reasons,
+                            "All promises were rejected",
+                        )))
                     }
                     _ => {
                         let mut settled = Vec::new();
@@ -4942,7 +4958,7 @@ impl<'a> Interpreter<'a> {
                 if *name == "Promise"
                     && !matches!(
                         key,
-                        "resolve" | "reject" | "all" | "allSettled" | "race" | "try"
+                        "resolve" | "reject" | "all" | "allSettled" | "race" | "any" | "try"
                     )
                 {
                     return Err(RuntimeError::new(
@@ -4974,6 +4990,10 @@ impl<'a> Interpreter<'a> {
             Value::Error(error) => Ok(match key {
                 "name" => Value::String(error.kind.name().to_owned()),
                 "message" => Value::String(error.message.clone()),
+                "errors" => error
+                    .errors
+                    .as_ref()
+                    .map_or(Value::Undefined, |errors| Value::array(errors.clone())),
                 "toString" => bound_method(object, Some("Error.toString")),
                 _ => bound_method(object, object_prototype_method(key)),
             }),
@@ -5203,6 +5223,33 @@ fn make_error(name: &str, arguments: &[Value]) -> Value {
     Value::error(kind, message)
 }
 
+fn construct_error_value(
+    name: &str,
+    arguments: &[Value],
+    span: Span,
+) -> Result<Value, RuntimeError> {
+    if name != "AggregateError" {
+        return Ok(make_error(name, arguments));
+    }
+    let source = arguments.first().ok_or_else(|| {
+        RuntimeError::type_error(
+            "new AggregateError(...) expects a synchronous iterable of errors.",
+            span,
+        )
+    })?;
+    let errors = spread_items(source).ok_or_else(|| {
+        RuntimeError::type_error(
+            "new AggregateError(...) expects a synchronous iterable of errors.",
+            span,
+        )
+    })?;
+    let message = match arguments.get(1) {
+        None | Some(Value::Undefined) => String::new(),
+        Some(value) => to_js_string(value),
+    };
+    Ok(Value::aggregate_error(errors, message))
+}
+
 fn instance_of(left: &Value, right: &Value, span: Span) -> Result<bool, RuntimeError> {
     let Value::Builtin(name) = right else {
         return Err(RuntimeError::type_error(
@@ -5289,6 +5336,7 @@ fn builtin_property(name: &str, key: &str) -> Value {
         ("Promise", "reject") => Value::Builtin("Promise.reject"),
         ("Promise", "all") => Value::Builtin("Promise.all"),
         ("Promise", "allSettled") => Value::Builtin("Promise.allSettled"),
+        ("Promise", "any") => Value::Builtin("Promise.any"),
         ("Promise", "race") => Value::Builtin("Promise.race"),
         ("Promise", "try") => Value::Builtin("Promise.try"),
         ("Date", "now") => Value::Builtin("Date.now"),
@@ -5341,7 +5389,9 @@ fn object_has_own(value: &Value, key: &str) -> bool {
                     .parse::<usize>()
                     .is_ok_and(|index| index < array.borrow().len())
         }
-        Value::Error(_) => key == "name" || key == "message",
+        Value::Error(error) => {
+            key == "name" || key == "message" || (key == "errors" && error.errors.is_some())
+        }
         Value::Date(_) => key == "time",
         Value::Map(_) => key == "map",
         Value::Set(_) => key == "set",
@@ -9572,6 +9622,56 @@ mod tests {
         );
         let error = run("return Promise.try(1);").expect_err("non-function callback");
         assert_eq!(error.kind(), super::RuntimeErrorKind::TypeError);
+    }
+
+    #[test]
+    fn evaluates_aggregate_errors_and_promise_any() {
+        assert_eq!(
+            run_value(
+                "const e = new AggregateError([1, 2], 'm'); \
+                 return [e.name, e.message, e.errors.join(','), e instanceof AggregateError, \
+                 e instanceof Error, e.toString(), Object.keys(e).join(',')].join('|');"
+            ),
+            string("AggregateError|m|1,2|true|true|AggregateError: m|name,message")
+        );
+        assert_eq!(
+            run_value(
+                "const e = AggregateError([1]); return [e.name, e.errors.join(',')].join('|');"
+            ),
+            string("AggregateError|1")
+        );
+        assert_eq!(
+            run_value("return JSON.stringify(new AggregateError([1], 'm'));"),
+            string(r#"{"name":"AggregateError","message":"m"}"#)
+        );
+        let error = run("return new AggregateError();").expect_err("errors are required");
+        assert_eq!(error.kind(), super::RuntimeErrorKind::TypeError);
+        let error = run("return new AggregateError(1);").expect_err("errors must be iterable");
+        assert_eq!(error.kind(), super::RuntimeErrorKind::TypeError);
+
+        assert_eq!(
+            run_value("return await Promise.any([Promise.reject(1), Promise.resolve(2)]);"),
+            number(2.0)
+        );
+        assert_eq!(
+            run_value("return await Promise.any([Promise.reject(1), 2]);"),
+            number(2.0)
+        );
+        assert_eq!(
+            run_value(
+                "try { await Promise.any([Promise.reject(1), Promise.reject(2)]); return 'no'; } \
+                 catch (e) { return [e.name, e.errors.join(','), e instanceof AggregateError, \
+                 e instanceof Error].join('|'); }"
+            ),
+            string("AggregateError|1,2|true|true")
+        );
+        assert_eq!(
+            run_value(
+                "try { await Promise.any([]); return 'no'; } \
+                 catch (e) { return [e.name, e.errors.length].join('|'); }"
+            ),
+            string("AggregateError|0")
+        );
     }
 
     #[test]

@@ -71,6 +71,8 @@ pub enum ErrorKind {
     EvalError,
     /// `URIError`.
     URIError,
+    /// `AggregateError`, carrying multiple rejection reasons.
+    AggregateError,
 }
 
 impl ErrorKind {
@@ -84,6 +86,7 @@ impl ErrorKind {
             Self::ReferenceError => "ReferenceError",
             Self::EvalError => "EvalError",
             Self::URIError => "URIError",
+            Self::AggregateError => "AggregateError",
         }
     }
 
@@ -97,6 +100,7 @@ impl ErrorKind {
             "ReferenceError" => Some(Self::ReferenceError),
             "EvalError" => Some(Self::EvalError),
             "URIError" => Some(Self::URIError),
+            "AggregateError" => Some(Self::AggregateError),
             _ => None,
         }
     }
@@ -109,6 +113,8 @@ pub struct ErrorValue {
     pub kind: ErrorKind,
     /// Human-readable message.
     pub message: String,
+    /// AggregateError rejection reasons; `None` for ordinary errors.
+    pub errors: Option<Vec<Value>>,
 }
 
 /// Shared reference to an error value.
@@ -520,6 +526,16 @@ impl Value {
         Self::Error(Rc::new(ErrorValue {
             kind,
             message: message.into(),
+            errors: None,
+        }))
+    }
+
+    /// Creates an `AggregateError` with its enumerated rejection reasons.
+    pub fn aggregate_error(errors: Vec<Value>, message: impl Into<String>) -> Self {
+        Self::Error(Rc::new(ErrorValue {
+            kind: ErrorKind::AggregateError,
+            message: message.into(),
+            errors: Some(errors),
         }))
     }
 
