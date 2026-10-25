@@ -60,6 +60,9 @@ upstreamは未対応構文を評価到達時に拒否する。`inspect_support` 
   直列化し、`-0` は `0` にする (`JSON.stringify` と同じ表記)。
 - 関数、promise、tool参照、sandbox classはデータ値ではない。評価器側の
   実行時値として扱い、この境界を通さない。
+- template literalの補間も同じ境界を通す。callable/Promise/ToolRefは
+  `InvalidDataValue` になり、DateはISO、Map/Setは `[object Map]` /
+  `[object Set]` として補間される。
 
 ## Execution limits
 
@@ -350,6 +353,11 @@ shadowingできる。
   `console` は内部ではplain objectなので、`for...in` で列挙でき、consoleには
   objectとして描画される (upstreamはopaque reference扱い)。
 - `localeCompare` はhost ICUではなくコードポイント順で比較する
+- `$codemode.search` のdiscovery toolとcatalog/instructions APIは未実装
+- Rustの `String` はlone surrogateを保持できないため、`String.fromCharCode(0xD800)` /
+  `String.fromCodePoint(0xD800)`、サロゲートを分割するindex操作や
+  `split("")` / `replaceAll("")` の境界はJavaScriptと一致しない
+- `Number.toString(radix)` の非整数値はbase 10表記にフォールバックする
 - `Error` は `name` / `message` を持つbranded valueで、upstreamのplain object
   のように任意propertyを追加・変更できない
 - upstream parity test suiteの完全移植 (依存不要な差分コーパスは実装済み)

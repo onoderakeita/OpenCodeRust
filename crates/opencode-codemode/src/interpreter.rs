@@ -949,8 +949,10 @@ impl<'a> Interpreter<'a> {
                     if let Some(cooked) = &quasi.value.cooked {
                         output.push_str(cooked.as_str());
                     }
-                    if let Some(value) = literal.expressions.get(index) {
-                        let value = self.eval_expression(value)?;
+                    if let Some(expression) = literal.expressions.get(index) {
+                        let span = expression.span();
+                        let value = self.eval_expression(expression)?;
+                        check_data_argument(&value, "Template interpolation", span)?;
                         output.push_str(&to_js_string(&value));
                     }
                 }
@@ -1730,6 +1732,11 @@ impl<'a> Interpreter<'a> {
             | "EvalError" | "URIError" => Ok(make_error(name, arguments)),
             "Map" | "Set" | "Date" => Err(RuntimeError::type_error(
                 format!("Constructor {name} requires 'new'."),
+                _span,
+            )),
+            "Object" | "Array" | "Promise" => Err(RuntimeError::new(
+                RuntimeErrorKind::ExecutionFailure,
+                "Only tools are callable in CodeMode.",
                 _span,
             )),
             "Date.now" => Ok(Value::Number(crate::date::now_ms())),
@@ -5788,6 +5795,7 @@ fn has_property(value: &Value, key: &str) -> bool {
         Value::Map(_) => key == "map",
         Value::Set(_) => key == "set",
         Value::Date(_) => key == "time",
+        Value::ToolRef(_) => key == "path",
         _ => false,
     }
 }
@@ -7075,6 +7083,19 @@ mod tests {
                 super::RuntimeErrorKind::InvalidDataValue,
                 "{source}"
             );
+        }
+    }
+
+    #[test]
+    fn rejects_calling_namespace_objects() {
+        for source in ["return Object();", "return Array();", "return Promise();"] {
+            let error = run(source).expect_err("namespaces are not callable");
+            assert_eq!(
+                error.kind(),
+                super::RuntimeErrorKind::ExecutionFailure,
+                "{source}"
+            );
+            assert!(error.message().contains("Only tools are callable"));
         }
     }
 
@@ -8722,6 +8743,9 @@ mod tests {
             "return Array.from(new Set([() => 1]));",
             "return Object.fromEntries(new Map([['a', () => 1]]));",
             "return Object.fromEntries(new Map([['a', Promise.resolve(1)]]));",
+            "return `${() => 1}`;",
+            "return `${Promise.resolve(1)}`;",
+            "return `${tools}`;",
         ] {
             let error = run(source).expect_err("nested opaque data must be rejected");
             assert_eq!(
@@ -8733,6 +8757,11 @@ mod tests {
         assert_eq!(
             run_value("return Array.of(new Map([['a', () => 1]])).length;"),
             number(1.0)
+        );
+        assert_eq!(run_value("return `${new Map()}`;"), string("[object Map]"));
+        assert_eq!(
+            run_value("return `${new Date(0)}`;"),
+            string("1970-01-01T00:00:00.000Z")
         );
     }
 
