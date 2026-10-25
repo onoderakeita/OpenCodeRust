@@ -147,10 +147,11 @@ shadowingできる。
   入力にcallable/tool/Promiseが含まれる場合は表全体を
   `[CodeMode reference]` にし、`undefined` は `undefined` を返す。
 - `Math`: abs、cbrt、ceil、floor、round、trunc、max、min、pow、sqrt、hypot、
-  sign、log、log2、log10、exp、PI、E、LN2、LN10、LOG2E、LOG10E、SQRT2、
-  SQRT1_2。upstreamに合わせて提供された引数はすべてnumberでなければ
-  `TypeError` にし、引数なしは `NaN` として扱う。`sin` / `cos` / `tan` は
-  upstreamの `mathMethods` にないため公開しない。`max` は +0、`min` は
+  sign、log、log1p、log2、log10、exp、expm1、acos、acosh、asin、asinh、atan、
+  atan2、atanh、cos、cosh、sin、sinh、tan、tanh、fround、clz32、imul、
+  random、PI、E、LN2、LN10、LOG2E、LOG10E、SQRT2、SQRT1_2。
+  提供された引数はすべてnumberでなければ `TypeError` にし、引数なしは
+  `NaN` として扱う (baseline 941e71dの型検査を維持)。`max` は +0、`min` は
   -0 を優先し、`round` は`0 < x < 0.5` を `+0` にし、
   `0.49999999999999994` の二重丸めを避ける。
   負のゼロは保持する。`pow` は `(±1) ** ±Infinity` を `NaN`、
@@ -167,11 +168,13 @@ shadowingできる。
   整形する。
 - `Number` statics: `Number.isNaN`、`isFinite`、`isInteger`、`isSafeInteger`、
   `parseInt`、`parseFloat`、定数 (`MAX_SAFE_INTEGER`、`MAX_VALUE`、
-  `MIN_VALUE` など)。`parseInt` のradixはnumberまたは `undefined` だけを
-  受け、他型は `TypeError` にする。`POSITIVE_INFINITY` / `NEGATIVE_INFINITY` /
-  `NaN` などallowlistにないmemberの読み取りは `InvalidDataValue` になる。`MIN_VALUE` は最小の正のsubnormal
+  `MIN_VALUE`、`EPSILON`、`NaN`、`POSITIVE_INFINITY`、`NEGATIVE_INFINITY`)。
+  `parseInt` のradixはnumberまたは `undefined` だけを受け、他型は
+  `TypeError` にする。`MIN_VALUE` は最小の正のsubnormal
   (`5e-324`) で、`f64::MIN_POSITIVE` ではない。
-- `String` statics: `String.fromCharCode`、`String.fromCodePoint`。
+- `String` statics: `String.fromCharCode`、`String.fromCodePoint`、`String.raw`。
+  `String.raw` は `raw` 配列/objectとsubstitutionを文字列化し、rawの
+  最終要素の後に余分なsubstitutionを付けない。
 - URI helpers: `encodeURI` / `encodeURIComponent` はUTF-8をpercent-encodeし、
   `decodeURI` / `decodeURIComponent` は厳密なUTF-8として復号する。
   `decodeURI` はreserved文字のescapeを元の表記のまま残す。壊れた `%XX` と
@@ -182,7 +185,9 @@ shadowingできる。
   `InvalidDataValue` にする。
   `parseInt` のradixはnumberまたは `undefined` だけを受け、他型は
   `TypeError` にする。Date/Map/Set/Errorはdataとしてcoercionする。
-- `Object`: keys、values、entries、hasOwn、fromEntries (配列とMap)、assign。
+- `Object`: keys、values、entries、hasOwn、is、groupBy、fromEntries (配列とMap)、
+  assign。`is` はSameValue (`NaN`同士はtrue、`+0`/`-0`はfalse)。
+  `groupBy` はiterableをcallbackの戻り値キーでObjectへまとめ、値は配列。
   `keys` はdata objectと配列を受け、Date/Map/Setでは空配列を返す。
   `values` / `entries` / `hasOwn` は配列とprimitiveを `TypeError` にし、
   Date/Map/Setでは `values` / `entries` が空配列、`hasOwn` が `false` を
@@ -209,14 +214,14 @@ shadowingできる。
   reduce、reduceRight、find、findIndex、findLast、findLastIndex、some、
   every、join、slice、includes、indexOf、lastIndexOf、push、pop、shift、
   unshift、reverse、concat、flat、flatMap、sort、toSorted、toReversed、
-  with、at、splice、fill、copyWithin、keys、values、entries。
+  with、at、splice、toSpliced、toString、fill、copyWithin、keys、values、entries。
+  `toSpliced` はreceiverを変更せず、`splice()` は何も変更しない。
   `keys` / `values` / `entries` はiteratorではなく配列を返す。
   index系の引数 (`includes` のstart、`slice`、`at`、`with`、`splice`、
   `fill`、`copyWithin`、`flat` のdepthなど) はupstreamと同じく
   「省略またはnumber」だけを受け、文字列・nullなどは `TypeError` にする。
   `join` は引数なしまたは文字列1個だけを受け、receiverをdata境界で
-  深く検証するためネストしたcallable/Promiseは `InvalidDataValue` にし、
-  `splice()` は何も変更しない。
+  深く検証するためネストしたcallable/Promiseは `InvalidDataValue` にする。
   callbackの第3引数は呼び出し時snapshotの配列で、receiver自身ではない。
   callbackはユーザー関数、または `Number` / `String` / `Boolean` /
   `parseInt` / `parseFloat` / URI関数だけを受け、`Number.isFinite` や
@@ -265,10 +270,15 @@ shadowingできる。
 - 数値の文字列化はECMAScriptの `Number::toString` に合わせ、指数が -6 未満または
   20 超のとき指数表記 (`1e+21`、`1e-7`) を使う。
 - `Map`: `new Map(entries | Map)`、get、set、has、delete、clear、forEach、
-  keys、values、entries、size。keyはSameValueZeroで比較し、`NaN` は同一key、
-  objectは参照同一性で区別する。`keys` / `values` / `entries` は配列を返す。
+  keys、values、entries、size、groupBy。keyはSameValueZeroで比較し、`NaN` は
+  同一key、objectは参照同一性で区別する。`keys` / `values` / `entries` は
+  配列を返す。`groupBy` はiterableをcallbackの戻り値キーでMapへまとめ、
+  値は配列。
 - `Set`: `new Set(array | Set | string)`、add、has、delete、clear、forEach、
-  keys、values、entries、size。membershipはSameValueZero。
+  keys、values、entries、size、union、intersection、difference、
+  symmetricDifference、isSubsetOf、isSupersetOf、isDisjointFrom。
+  membershipはSameValueZero。集合演算はSet/Mapまたは`size`・`has`・`keys`を
+  持つSet-like objectを受け、結果は新しいSetを返す。
 - Map/Setはspreadとfor-ofで反復でき、Mapは `[key, value]`、Setは値を返す。
   実データ境界では `{}` に直列化する。
 - `Date`: `new Date()`、`new Date(ms)`、`new Date(isoString)`、
@@ -351,7 +361,7 @@ shadowingできる。
 
 - 現行実装はbaseline `941e71d` に合わせている。最新 `dev` (`5be4b16`) の
   test262準拠強化、RegExp/URL/Web API、generator/for-await、iterator helpers、
-  bytes、Number定数の再追加などは未追随。
+  bytesなどは未追随 (一部の追加APIは個別に取り込み済み)。
 - RegExp、URL、`String.normalize`
 - TypeScriptの型消去・transpile parity
 - 非同期tool実行と未await rejectionの診断

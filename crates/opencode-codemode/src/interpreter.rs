@@ -9,6 +9,7 @@
 use std::cell::RefCell;
 use std::fmt::{self, Display, Formatter};
 use std::rc::Rc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
 use indexmap::IndexMap;
@@ -268,6 +269,13 @@ impl ForEachSource {
     }
 }
 
+/// View over a Set-like argument used by the ES2025 Set methods.
+enum SetLikeView {
+    Set(crate::value::SetRef),
+    Map(crate::value::MapRef),
+    Custom { size: f64, has: Value, keys: Value },
+}
+
 /// Completion produced by evaluating a statement.
 #[derive(Debug, Clone)]
 enum Flow {
@@ -425,6 +433,25 @@ impl<'a> Interpreter<'a> {
         let math = Value::from_entries([
             ("abs", Value::Builtin("Math.abs")),
             ("cbrt", Value::Builtin("Math.cbrt")),
+            ("acos", Value::Builtin("Math.acos")),
+            ("acosh", Value::Builtin("Math.acosh")),
+            ("asin", Value::Builtin("Math.asin")),
+            ("asinh", Value::Builtin("Math.asinh")),
+            ("atan", Value::Builtin("Math.atan")),
+            ("atan2", Value::Builtin("Math.atan2")),
+            ("atanh", Value::Builtin("Math.atanh")),
+            ("cos", Value::Builtin("Math.cos")),
+            ("cosh", Value::Builtin("Math.cosh")),
+            ("sin", Value::Builtin("Math.sin")),
+            ("sinh", Value::Builtin("Math.sinh")),
+            ("tan", Value::Builtin("Math.tan")),
+            ("tanh", Value::Builtin("Math.tanh")),
+            ("log1p", Value::Builtin("Math.log1p")),
+            ("expm1", Value::Builtin("Math.expm1")),
+            ("fround", Value::Builtin("Math.fround")),
+            ("clz32", Value::Builtin("Math.clz32")),
+            ("imul", Value::Builtin("Math.imul")),
+            ("random", Value::Builtin("Math.random")),
             ("hypot", Value::Builtin("Math.hypot")),
             ("log2", Value::Builtin("Math.log2")),
             ("log10", Value::Builtin("Math.log10")),
@@ -1906,6 +1933,73 @@ impl<'a> Interpreter<'a> {
                 }
                 Ok(Value::String(text))
             }
+            "String.raw" => {
+                let template = argument(0);
+                let raw = match &template {
+                    Value::Object(object) => object
+                        .borrow()
+                        .get("raw")
+                        .cloned()
+                        .unwrap_or(Value::Undefined),
+                    _ => Value::Undefined,
+                };
+                let count = match &raw {
+                    Value::Array(items) => items.borrow().len() as f64,
+                    Value::Object(object) => to_number(
+                        &object
+                            .borrow()
+                            .get("length")
+                            .cloned()
+                            .unwrap_or(Value::Undefined),
+                    ),
+                    _ => {
+                        return Err(RuntimeError::type_error(
+                            "String.raw expects a template object with a raw array.",
+                            _span,
+                        ))
+                    }
+                };
+                let count = if count.is_nan() { 0.0 } else { count.trunc() };
+                if count > MAX_ARRAY_LIKE_LENGTH as f64 {
+                    return Err(RuntimeError::new(
+                        RuntimeErrorKind::RangeError,
+                        "String.raw template is too large.",
+                        _span,
+                    ));
+                }
+                let count = count.max(0.0) as usize;
+                let mut output = String::new();
+                for index in 0..count {
+                    let part = match &raw {
+                        Value::Array(items) => items
+                            .borrow()
+                            .get(index)
+                            .cloned()
+                            .unwrap_or(Value::Undefined),
+                        Value::Object(object) => object
+                            .borrow()
+                            .get(&index.to_string())
+                            .cloned()
+                            .unwrap_or(Value::Undefined),
+                        _ => Value::Undefined,
+                    };
+                    check_data_argument(&part, "String.raw part", _span)?;
+                    output.push_str(&to_js_string(&part));
+                    if index + 1 < count && index + 1 < arguments.len() {
+                        let substitution = &arguments[index + 1];
+                        check_data_argument(substitution, "String.raw substitution", _span)?;
+                        output.push_str(&to_js_string(substitution));
+                    }
+                    if output.len() > MAX_STRING_LENGTH {
+                        return Err(RuntimeError::new(
+                            RuntimeErrorKind::RangeError,
+                            "Invalid string length.",
+                            _span,
+                        ));
+                    }
+                }
+                Ok(Value::String(output))
+            }
             "Math.abs" => {
                 let numbers = math_numbers(arguments, name, _span)?;
                 Ok(Value::Number(
@@ -1918,6 +2012,42 @@ impl<'a> Interpreter<'a> {
                     numbers.first().copied().unwrap_or(f64::NAN).cbrt(),
                 ))
             }
+            "Math.acos" | "Math.acosh" | "Math.asin" | "Math.asinh" | "Math.atan"
+            | "Math.atanh" | "Math.cos" | "Math.cosh" | "Math.sin" | "Math.sinh" | "Math.tan"
+            | "Math.tanh" | "Math.log1p" | "Math.expm1" | "Math.fround" | "Math.clz32" => {
+                let numbers = math_numbers(arguments, name, _span)?;
+                let value = numbers.first().copied().unwrap_or(f64::NAN);
+                let result = match name {
+                    "Math.acos" => value.acos(),
+                    "Math.acosh" => value.acosh(),
+                    "Math.asin" => value.asin(),
+                    "Math.asinh" => value.asinh(),
+                    "Math.atan" => value.atan(),
+                    "Math.atanh" => value.atanh(),
+                    "Math.cos" => value.cos(),
+                    "Math.cosh" => value.cosh(),
+                    "Math.sin" => value.sin(),
+                    "Math.sinh" => value.sinh(),
+                    "Math.tan" => value.tan(),
+                    "Math.tanh" => value.tanh(),
+                    "Math.log1p" => value.ln_1p(),
+                    "Math.expm1" => value.exp_m1(),
+                    "Math.fround" => f64::from(value as f32),
+                    "Math.clz32" => f64::from(to_uint32(value).leading_zeros()),
+                    _ => f64::NAN,
+                };
+                Ok(Value::Number(result))
+            }
+            "Math.atan2" | "Math.imul" => {
+                let numbers = math_numbers(arguments, name, _span)?;
+                let left = numbers.first().copied().unwrap_or(f64::NAN);
+                let right = numbers.get(1).copied().unwrap_or(f64::NAN);
+                Ok(Value::Number(match name {
+                    "Math.atan2" => left.atan2(right),
+                    _ => f64::from(to_int32(left).wrapping_mul(to_int32(right))),
+                }))
+            }
+            "Math.random" => Ok(Value::Number(math_random())),
             "Math.hypot" => {
                 let numbers = math_numbers(arguments, name, _span)?;
                 Ok(Value::Number(math_hypot(&numbers)))
@@ -2146,6 +2276,59 @@ impl<'a> Interpreter<'a> {
                         }
                         Ok(Value::promise_fulfilled(Value::array(settled)))
                     }
+                }
+            }
+            "Object.is" => Ok(Value::Boolean(same_value(&argument(0), &argument(1)))),
+            "Object.groupBy" | "Map.groupBy" => {
+                let source = argument(0);
+                let items = spread_items(&source).ok_or_else(|| {
+                    RuntimeError::type_error("groupBy expects an iterable collection.", _span)
+                })?;
+                let callback = argument(1);
+                ensure_collection_callback(&callback, name, _span)?;
+                if name == "Map.groupBy" {
+                    let map = MapValue::new();
+                    for (index, item) in items.into_iter().enumerate() {
+                        let key = self.invoke_value(
+                            &callback,
+                            vec![item.clone(), Value::Number(index as f64)],
+                            _span,
+                        )?;
+                        match map.get(&key) {
+                            Some(Value::Array(group)) => group.borrow_mut().push(item),
+                            _ => {
+                                map.insert(key, Value::array(vec![item]));
+                            }
+                        }
+                    }
+                    Ok(Value::Map(Rc::new(map)))
+                } else {
+                    let mut object = IndexMap::new();
+                    for (index, item) in items.into_iter().enumerate() {
+                        let key_value = self.invoke_value(
+                            &callback,
+                            vec![item.clone(), Value::Number(index as f64)],
+                            _span,
+                        )?;
+                        let key = if matches!(key_value, Value::Promise(_)) {
+                            to_js_string(&key_value)
+                        } else if contains_opaque_reference(&key_value, &mut Vec::new()) {
+                            return Err(RuntimeError::new(
+                                RuntimeErrorKind::InvalidDataValue,
+                                "Object.groupBy callback must return a data value.",
+                                _span,
+                            ));
+                        } else {
+                            to_js_string(&key_value)
+                        };
+                        match object.get_mut(&key) {
+                            Some(Value::Array(group)) => group.borrow_mut().push(item),
+                            _ => {
+                                object.insert(key, Value::array(vec![item]));
+                            }
+                        }
+                    }
+                    Ok(Value::Object(Rc::new(RefCell::new(object))))
                 }
             }
             "Object.keys" => {
@@ -2670,6 +2853,193 @@ impl<'a> Interpreter<'a> {
             }
         }
         Ok(())
+    }
+
+    fn load_set_like(
+        &mut self,
+        value: &Value,
+        label: &str,
+        span: Span,
+    ) -> Result<SetLikeView, RuntimeError> {
+        match value {
+            Value::Set(set) => Ok(SetLikeView::Set(Rc::clone(set))),
+            Value::Map(map) => Ok(SetLikeView::Map(Rc::clone(map))),
+            Value::Object(_) => {
+                let size = to_number(&self.get_property(value, "size", span)?);
+                if size.is_nan() {
+                    return Err(RuntimeError::type_error(
+                        format!("{label} received a Set-like object with an invalid size."),
+                        span,
+                    ));
+                }
+                let has = self.get_property(value, "has", span)?;
+                let keys = self.get_property(value, "keys", span)?;
+                if !is_collection_callback(&has) || !is_collection_callback(&keys) {
+                    return Err(RuntimeError::type_error(
+                        format!("{label} expects callable 'has' and 'keys' methods."),
+                        span,
+                    ));
+                }
+                Ok(SetLikeView::Custom {
+                    size: size.max(0.0).trunc(),
+                    has,
+                    keys,
+                })
+            }
+            _ => Err(RuntimeError::type_error(
+                format!("{label} expects a Set-like object."),
+                span,
+            )),
+        }
+    }
+
+    fn set_like_size(&self, view: &SetLikeView) -> f64 {
+        match view {
+            SetLikeView::Set(set) => set.len() as f64,
+            SetLikeView::Map(map) => map.len() as f64,
+            SetLikeView::Custom { size, .. } => *size,
+        }
+    }
+
+    fn set_like_has(
+        &mut self,
+        view: &SetLikeView,
+        item: &Value,
+        span: Span,
+    ) -> Result<bool, RuntimeError> {
+        match view {
+            SetLikeView::Set(set) => Ok(set.has(item)),
+            SetLikeView::Map(map) => Ok(map.get(item).is_some()),
+            SetLikeView::Custom { has, .. } => {
+                let result = self.invoke_value(has, vec![item.clone()], span)?;
+                Ok(is_truthy(&result))
+            }
+        }
+    }
+
+    fn set_like_keys(
+        &mut self,
+        view: &SetLikeView,
+        span: Span,
+    ) -> Result<Vec<Value>, RuntimeError> {
+        match view {
+            SetLikeView::Set(set) => Ok(set.values()),
+            SetLikeView::Map(map) => Ok(map.keys()),
+            SetLikeView::Custom { keys, .. } => {
+                let result = self.invoke_value(keys, Vec::new(), span)?;
+                spread_items(&result).ok_or_else(|| {
+                    RuntimeError::type_error(
+                        "Set operations expect 'keys()' to return an iterable collection.",
+                        span,
+                    )
+                })
+            }
+        }
+    }
+
+    fn set_operation(
+        &mut self,
+        target: &crate::value::SetRef,
+        method: &str,
+        other: &Value,
+        span: Span,
+    ) -> Result<Value, RuntimeError> {
+        let other = self.load_set_like(other, method, span)?;
+        let target_values = target.values();
+        let other_size = self.set_like_size(&other);
+        let target_size = target_values.len() as f64;
+        let copy = || crate::value::SetValue::from_values(target_values.clone());
+        match method {
+            "Set.union" => {
+                let result = copy();
+                for item in self.set_like_keys(&other, span)? {
+                    result.add(item);
+                }
+                Ok(Value::Set(Rc::new(result)))
+            }
+            "Set.intersection" => {
+                let result = crate::value::SetValue::new();
+                if target_size <= other_size {
+                    for item in target_values {
+                        if self.set_like_has(&other, &item, span)? {
+                            result.add(item);
+                        }
+                    }
+                } else {
+                    for item in self.set_like_keys(&other, span)? {
+                        if target.has(&item) {
+                            result.add(item);
+                        }
+                    }
+                }
+                Ok(Value::Set(Rc::new(result)))
+            }
+            "Set.difference" => {
+                let result = copy();
+                if target_size <= other_size {
+                    for item in target.values() {
+                        if self.set_like_has(&other, &item, span)? {
+                            result.remove(&item);
+                        }
+                    }
+                } else {
+                    for item in self.set_like_keys(&other, span)? {
+                        result.remove(&item);
+                    }
+                }
+                Ok(Value::Set(Rc::new(result)))
+            }
+            "Set.symmetricDifference" => {
+                let result = copy();
+                for item in self.set_like_keys(&other, span)? {
+                    if target.has(&item) {
+                        result.remove(&item);
+                    } else {
+                        result.add(item);
+                    }
+                }
+                Ok(Value::Set(Rc::new(result)))
+            }
+            "Set.isSubsetOf" => {
+                if target_size > other_size {
+                    return Ok(Value::Boolean(false));
+                }
+                for item in target_values {
+                    if !self.set_like_has(&other, &item, span)? {
+                        return Ok(Value::Boolean(false));
+                    }
+                }
+                Ok(Value::Boolean(true))
+            }
+            "Set.isSupersetOf" => {
+                if target_size < other_size {
+                    return Ok(Value::Boolean(false));
+                }
+                for item in self.set_like_keys(&other, span)? {
+                    if !target.has(&item) {
+                        return Ok(Value::Boolean(false));
+                    }
+                }
+                Ok(Value::Boolean(true))
+            }
+            "Set.isDisjointFrom" => {
+                if target_size <= other_size {
+                    for item in target_values {
+                        if self.set_like_has(&other, &item, span)? {
+                            return Ok(Value::Boolean(false));
+                        }
+                    }
+                } else {
+                    for item in self.set_like_keys(&other, span)? {
+                        if target.has(&item) {
+                            return Ok(Value::Boolean(false));
+                        }
+                    }
+                }
+                Ok(Value::Boolean(true))
+            }
+            _ => Err(RuntimeError::unsupported(method, span)),
+        }
     }
 
     fn call_method(
@@ -3204,6 +3574,48 @@ impl<'a> Interpreter<'a> {
                 };
                 Ok(Value::array(removed))
             }
+            "Array.toSpliced" => {
+                let array = as_array_ref(receiver, span)?;
+                let mut items = array.borrow().clone();
+                if !arguments.is_empty() {
+                    let length = items.len() as i64;
+                    let start_number = opt_number(&argument(0), "start")?.unwrap_or(0.0);
+                    let start = normalize_index(&Value::Number(start_number), length, 0)
+                        .clamp(0, length) as usize;
+                    let delete_count = if arguments.len() > 1 {
+                        let count = opt_number(&argument(1), "delete count")?.unwrap_or(0.0);
+                        if count.is_nan() {
+                            0
+                        } else {
+                            count.max(0.0).min((length - start as i64) as f64) as usize
+                        }
+                    } else {
+                        (length as usize) - start
+                    };
+                    let inserted = arguments.iter().skip(2).cloned().collect::<Vec<_>>();
+                    items.drain(start..start + delete_count);
+                    for (offset, value) in inserted.into_iter().enumerate() {
+                        items.insert(start + offset, value);
+                    }
+                }
+                Ok(Value::array(items))
+            }
+            "Array.toString" => {
+                let array = as_array_ref(receiver, span)?;
+                let text = array
+                    .borrow()
+                    .iter()
+                    .map(|item| {
+                        if item.is_nullish() {
+                            String::new()
+                        } else {
+                            to_js_string(item)
+                        }
+                    })
+                    .collect::<Vec<_>>()
+                    .join(",");
+                Ok(Value::String(text))
+            }
             "Array.fill" => {
                 let array = as_array_ref(receiver, span)?;
                 let length = array.borrow().len() as i64;
@@ -3731,6 +4143,16 @@ impl<'a> Interpreter<'a> {
                     )?;
                 }
                 Ok(Value::Undefined)
+            }
+            "Set.union"
+            | "Set.intersection"
+            | "Set.difference"
+            | "Set.symmetricDifference"
+            | "Set.isSubsetOf"
+            | "Set.isSupersetOf"
+            | "Set.isDisjointFrom" => {
+                let set = as_set_ref(receiver, span)?;
+                self.set_operation(&set, method, &argument(0), span)
             }
             _ => Err(RuntimeError::unsupported(method, span)),
         }
@@ -4566,13 +4988,20 @@ fn builtin_property(name: &str, key: &str) -> Value {
         ("Number", "EPSILON") => Value::Number(f64::EPSILON),
         ("Number", "MAX_VALUE") => Value::Number(f64::MAX),
         ("Number", "MIN_VALUE") => Value::Number(f64::from_bits(1)),
+        ("Number", "NaN") => Value::Number(f64::NAN),
+        ("Number", "POSITIVE_INFINITY") => Value::Number(f64::INFINITY),
+        ("Number", "NEGATIVE_INFINITY") => Value::Number(f64::NEG_INFINITY),
         ("String", "fromCharCode") => Value::Builtin("String.fromCharCode"),
         ("String", "fromCodePoint") => Value::Builtin("String.fromCodePoint"),
+        ("String", "raw") => Value::Builtin("String.raw"),
         ("Object", "keys") => Value::Builtin("Object.keys"),
         ("Object", "values") => Value::Builtin("Object.values"),
         ("Object", "entries") => Value::Builtin("Object.entries"),
         ("Object", "fromEntries") => Value::Builtin("Object.fromEntries"),
         ("Object", "hasOwn") => Value::Builtin("Object.hasOwn"),
+        ("Object", "is") => Value::Builtin("Object.is"),
+        ("Object", "groupBy") => Value::Builtin("Object.groupBy"),
+        ("Map", "groupBy") => Value::Builtin("Map.groupBy"),
         ("Object", "assign") => Value::Builtin("Object.assign"),
         ("Array", "isArray") => Value::Builtin("Array.isArray"),
         ("Array", "from") => Value::Builtin("Array.from"),
@@ -4631,6 +5060,8 @@ fn array_method(name: &str) -> Option<&'static str> {
         "with" => "Array.with",
         "at" => "Array.at",
         "splice" => "Array.splice",
+        "toSpliced" => "Array.toSpliced",
+        "toString" => "Array.toString",
         "fill" => "Array.fill",
         "copyWithin" => "Array.copyWithin",
         "keys" => "Array.keys",
@@ -4707,6 +5138,13 @@ fn set_method(name: &str) -> Option<&'static str> {
         "delete" => "Set.delete",
         "clear" => "Set.clear",
         "forEach" => "Set.forEach",
+        "union" => "Set.union",
+        "intersection" => "Set.intersection",
+        "difference" => "Set.difference",
+        "symmetricDifference" => "Set.symmetricDifference",
+        "isSubsetOf" => "Set.isSubsetOf",
+        "isSupersetOf" => "Set.isSupersetOf",
+        "isDisjointFrom" => "Set.isDisjointFrom",
         "keys" => "Set.keys",
         "values" => "Set.values",
         "entries" => "Set.entries",
@@ -4977,6 +5415,16 @@ fn math_numbers(arguments: &[Value], method: &str, span: Span) -> Result<Vec<f64
             )),
         })
         .collect()
+}
+
+fn math_random() -> f64 {
+    static STATE: AtomicU64 = AtomicU64::new(0x9E37_79B9_7F4A_7C15);
+    let mut value = STATE.load(Ordering::Relaxed);
+    value ^= value << 13;
+    value ^= value >> 7;
+    value ^= value << 17;
+    STATE.store(value, Ordering::Relaxed);
+    ((value >> 11) as f64) / ((1u64 << 53) as f64)
 }
 
 fn math_hypot(values: &[f64]) -> f64 {
@@ -5931,6 +6379,22 @@ fn is_truthy(value: &Value) -> bool {
 
 fn strict_equals(left: &Value, right: &Value) -> bool {
     left == right
+}
+
+/// ECMAScript SameValue: `NaN` equals itself and `-0` differs from `+0`.
+fn same_value(left: &Value, right: &Value) -> bool {
+    match (left, right) {
+        (Value::Number(left), Value::Number(right)) => {
+            if left.is_nan() && right.is_nan() {
+                true
+            } else if *left == 0.0 && *right == 0.0 {
+                left.is_sign_negative() == right.is_sign_negative()
+            } else {
+                left == right
+            }
+        }
+        _ => strict_equals(left, right),
+    }
 }
 
 fn is_object_like(value: &Value) -> bool {
@@ -7176,6 +7640,17 @@ mod tests {
         assert_eq!(array[1], number(4.0));
         assert_eq!(array[2], number(1.0));
         assert_eq!(array[3], number(3.0));
+        assert_eq!(
+            run_value(
+                "const a = [1,2,3]; const b = a.toSpliced(1, 1, 9, 8); \
+                 return [a.join(','), b.join(',')].join('|');"
+            ),
+            string("1,2,3|1,9,8,3")
+        );
+        assert_eq!(
+            run_value("return [1, [2, 3], null].toString();"),
+            string("1,2,3,")
+        );
     }
 
     #[test]
@@ -8476,6 +8951,63 @@ mod tests {
     }
 
     #[test]
+    fn evaluates_group_by() {
+        assert_eq!(
+            run_value(
+                "return JSON.stringify(Object.groupBy([1,2,3,4], (x) => x % 2 ? 'odd' : 'even'));"
+            ),
+            string(r#"{"odd":[1,3],"even":[2,4]}"#)
+        );
+        assert_eq!(
+            run_value(
+                "const m = Map.groupBy([1,2,3], (x) => x % 2); \
+                 return [[...m.keys()].join(','), m.get(1).join(','), m.get(0).join(',')].join('|');"
+            ),
+            string("1,0|1,3|2")
+        );
+        assert_eq!(
+            run_value(
+                "const o = Object.groupBy(new Set(['a','bb']), (x) => x.length); \
+                 return [o[1].join(','), o[2].join(',')].join('|');"
+            ),
+            string("a|bb")
+        );
+        let error =
+            run("return Object.groupBy([1], Math.abs);").expect_err("unsupported groupBy callback");
+        assert_eq!(error.kind(), super::RuntimeErrorKind::TypeError);
+    }
+
+    #[test]
+    fn evaluates_set_operations_and_set_like_arguments() {
+        assert_eq!(
+            run_value(
+                r#"const a = new Set([1,2,3]); const b = new Set([3,4]);
+                   return [
+                     [...a.union(b)].join(","),
+                     [...a.intersection(b)].join(","),
+                     [...a.difference(b)].join(","),
+                     [...a.symmetricDifference(b)].join(","),
+                     a.isSubsetOf(new Set([1,2,3,4])),
+                     a.isSupersetOf(new Set([1,2])),
+                     a.isDisjointFrom(new Set([4]))
+                   ].join("|");"#
+            ),
+            string("1,2,3,4|3|1,2|1,2,4|true|true|true")
+        );
+        assert_eq!(
+            run_value(
+                r#"const like = { size: 2, has: (x) => x === 1 || x === 2, keys: () => [1,2] };
+                   return [...new Set([1,3]).intersection(like)].join(",");"#
+            ),
+            string("1")
+        );
+        assert_eq!(
+            run_value("return new Set([1,2]).isSubsetOf(new Map([[1, 'a'], [2, 'b']]));"),
+            Value::Boolean(true)
+        );
+    }
+
+    #[test]
     fn iterates_sets_and_for_each_arguments() {
         let value = run_value(
             r#"
@@ -8924,6 +9456,13 @@ mod tests {
             ),
             string("true,false")
         );
+        assert_eq!(
+            run_value(
+                "return [Object.is(NaN, NaN), Object.is(0, -0), \
+                 Object.is('a', 'a'), Object.is({}, {})].join(',');"
+            ),
+            string("true,false,true,false")
+        );
         let error = run("return Object.hasOwn([1, 2], 1);").expect_err("arrays are not accepted");
         assert_eq!(error.kind(), super::RuntimeErrorKind::TypeError);
         assert_eq!(
@@ -9012,20 +9551,35 @@ mod tests {
             run_value("return Number.isNaN(Math.max());"),
             Value::Boolean(false)
         );
-        let error = run("return Math.sin(1);").expect_err("Math.sin is not implemented");
-        assert_eq!(error.kind(), super::RuntimeErrorKind::TypeError);
-        for source in [
-            "return Number.POSITIVE_INFINITY;",
-            "return Number.NEGATIVE_INFINITY;",
-            "return Number.NaN;",
-        ] {
-            let error = run(source).expect_err("unsupported Number member");
-            assert_eq!(
-                error.kind(),
-                super::RuntimeErrorKind::InvalidDataValue,
-                "{source}"
-            );
-        }
+        assert_eq!(run_value("return Math.sin(0);"), number(0.0));
+        assert_eq!(run_value("return Math.cos(0);"), number(1.0));
+        assert_eq!(
+            run_value("return Math.atan2(0, -1);"),
+            number(std::f64::consts::PI)
+        );
+        assert_eq!(run_value("return Math.clz32(1);"), number(31.0));
+        assert_eq!(run_value("return Math.imul(3, 4);"), number(12.0));
+        assert_eq!(
+            run_value("return Math.fround(1.1);"),
+            number(1.100000023841858)
+        );
+        assert_eq!(
+            run_value("const x = Math.random(); return x >= 0 && x < 1;"),
+            Value::Boolean(true)
+        );
+        assert_eq!(run_value("return String(Number.NaN);"), string("NaN"));
+        assert_eq!(
+            run_value("return String(Number.POSITIVE_INFINITY);"),
+            string("Infinity")
+        );
+        assert_eq!(
+            run_value("return String(Number.NEGATIVE_INFINITY);"),
+            string("-Infinity")
+        );
+        assert_eq!(
+            run_value("return Number.isNaN(Number.NaN);"),
+            Value::Boolean(true)
+        );
         assert_eq!(run_value("return typeof isNaN;"), string("undefined"));
         assert_eq!(run_value("return typeof isFinite;"), string("undefined"));
         let error = run("return isNaN(1);").expect_err("isNaN is not a CodeMode global");
@@ -9410,8 +9964,8 @@ mod tests {
         );
         assert_eq!(run_value("return (5).foo ?? 'n';"), string("n"));
         assert_eq!(
-            run_value("return [1,2,3].toSpliced === undefined;"),
-            Value::Boolean(true)
+            run_value("return [1,2,3].toSpliced(0, 1).join(',');"),
+            string("2,3")
         );
         assert_eq!(
             run_value(r#"return typeof foo === "undefined" ? "safe" : "no";"#),
@@ -9537,6 +10091,17 @@ mod tests {
         assert_eq!(error.kind(), super::RuntimeErrorKind::TypeError);
         let error = run("return String.fromCodePoint('65');")
             .expect_err("fromCodePoint requires number arguments");
+        assert_eq!(error.kind(), super::RuntimeErrorKind::TypeError);
+        assert_eq!(
+            run_value(r#"return String.raw({ raw: ["a", "b"] }, 1);"#),
+            string("a1b")
+        );
+        assert_eq!(
+            run_value(r#"return String.raw({ raw: { 0: "a", 1: "b", length: 2 } }, "-");"#),
+            string("a-b")
+        );
+        assert_eq!(run_value("return String.raw({ raw: [] });"), string(""));
+        let error = run("return String.raw({});").expect_err("raw template is required");
         assert_eq!(error.kind(), super::RuntimeErrorKind::TypeError);
         assert_eq!(run_value(r#"return Number("\uFEFF1");"#), number(1.0));
         assert_eq!(run_value(r#"return parseFloat("\uFEFF1.5");"#), number(1.5));
