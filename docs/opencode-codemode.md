@@ -235,15 +235,18 @@ shadowingできる。
   絶対位置で、負数は0になる。Arrayの検索系 (`indexOf` / `includes` /
   `lastIndexOf`) は負数を末尾からの相対として扱う。
   `split` のlimitはToUint32で変換し、`NaN` / `Infinity` は0、負数は
-  2^32のmoduloになる。`repeat` はupstreamと同じく有限かつ非負のcountだけを
-  受け、`NaN` / `Infinity` / 負数は `RangeError` にする。trim系はBOM
+  2^32のmoduloになる。`repeat` はToIntegerOrInfinityで `NaN` を0、小数を
+  切り捨てとして扱い、負数と `Infinity` は `RangeError` にする。
+  `padStart` / `padEnd` は空のpaddingならreceiverをそのまま返し、非空で
+  長さ上限を超える場合は `RangeError` にする。trim系はBOM
   (U+FEFF) も除去し、`<` / `>` の文字列比較はUTF-16 code unit順になる。
   `normalize` とRegExp依存のmatch系は未実装。
 - `Number` instance methods: toFixed、toPrecision、toExponential、toString
   (radix 2..36)、valueOf。digits/radixはnumberまたは `undefined` だけを
-  受け、他型は `TypeError` にする。radixはtruncateし、NaNを含む範囲外の
-  radixは `RangeError` にする。digitsが範囲外なら `RangeError` に
-  する。丸めはECMAScriptと同じround-half-away (0.5は0から遠い側) で行う。
+  受け、他型は `TypeError` にする。radixはupstreamと同じくraw値で2..36を
+  検証するため、36.9とNaNは `RangeError`、2.9は2として扱う。digitsが
+  範囲外なら `RangeError` にする。丸めはECMAScriptと同じround-half-away
+  (0.5は0から遠い側) で行う。
   `toPrecision` / `toExponential` は最短表記ではなく正確な10進展開から
   指数を決めるため、`(1e-7).toPrecision(17)` は `9.9999999999999995e-8`
   になる。
@@ -282,6 +285,9 @@ shadowingできる。
 構築する。呼び出しは同期で、引数と結果はplain data境界を通る。
 
 - `Object.keys(tools)` / `Object.keys(tools.ns)` はhostの名前を列挙する。
+  `ToolHost::keys` は未知パスに空配列を返す契約のため、未知namespaceの
+  列挙はupstreamの `UnknownTool` ではなく空配列になる。未知toolの呼び出しも
+  hostの `ToolError` 次第で、既定では `ToolFailure` になる。
 - 引数は深さ32、循環、関数、禁止メンバーを拒否する。検証はcallの記録より
   先に行うため、拒否された呼び出しは `maxToolCalls` を消費しない。
 - 結果は同じ境界を通す。hostの失敗は `message` と任意の `data` を持つ

@@ -3097,19 +3097,26 @@ impl<'a> Interpreter<'a> {
             "String.padStart" | "String.padEnd" => {
                 let text = as_string(receiver, span)?;
                 let number = number_arg(0)?;
-                if number == f64::INFINITY || number > MAX_STRING_LENGTH as f64 {
+                let target = if number.is_nan() || number <= 0.0 {
+                    0
+                } else if number.is_infinite() {
+                    usize::MAX
+                } else {
+                    number.min(usize::MAX as f64) as usize
+                };
+                let padding = optional_string_arg(1)?.unwrap_or_else(|| " ".to_owned());
+                // `padStart(Infinity, "")` returns the receiver unchanged: the
+                // empty filler short-circuits before the native length check.
+                if text.chars().count() >= target || padding.is_empty() {
+                    return Ok(Value::String(text));
+                }
+                if number.is_infinite() || target > MAX_STRING_LENGTH {
                     return Err(RuntimeError::new(
                         RuntimeErrorKind::RangeError,
                         "Invalid string length.",
                         span,
                     ));
                 }
-                let target = if number.is_nan() {
-                    0
-                } else {
-                    number.max(0.0).trunc() as usize
-                };
-                let padding = optional_string_arg(1)?.unwrap_or_else(|| " ".to_owned());
                 Ok(Value::String(pad_string(
                     &text,
                     target,
@@ -3120,14 +3127,17 @@ impl<'a> Interpreter<'a> {
             "String.repeat" => {
                 let text = as_string(receiver, span)?;
                 let number = number_arg(0)?;
-                if !number.is_finite() || number < 0.0 {
+                // ToIntegerOrInfinity: NaN becomes 0, fractions truncate; only
+                // a negative or infinite count is a RangeError.
+                let count = if number.is_nan() { 0.0 } else { number.trunc() };
+                if count < 0.0 || count.is_infinite() {
                     return Err(RuntimeError::new(
                         RuntimeErrorKind::RangeError,
                         "String.repeat expects a finite non-negative count.",
                         span,
                     ));
                 }
-                let count = number.trunc() as usize;
+                let count = count as usize;
                 if text.len().saturating_mul(count) > MAX_STRING_LENGTH {
                     return Err(RuntimeError::new(
                         RuntimeErrorKind::RangeError,
@@ -8245,6 +8255,8 @@ mod tests {
         let error = run("return (255).toString(NaN);").expect_err("NaN radix");
         assert_eq!(error.kind(), super::RuntimeErrorKind::RangeError);
         assert_eq!(run_value("return (255).toString(2.9);"), string("11111111"));
+        let error = run("return (255).toString(36.9);").expect_err("raw radix out of range");
+        assert_eq!(error.kind(), super::RuntimeErrorKind::RangeError);
         assert_eq!(
             run_value("return Number.parseInt('10', undefined);"),
             number(10.0)
@@ -8383,14 +8395,9 @@ mod tests {
             string("2.5e-1")
         );
         assert_eq!(run_value("return 'a'.repeat(2.9);"), string("aa"));
-        for source in ["return 'a'.repeat(-0.5);", "return 'a'.repeat(-1);"] {
-            let error = run(source).expect_err("negative repeat");
-            assert_eq!(
-                error.kind(),
-                super::RuntimeErrorKind::RangeError,
-                "{source}"
-            );
-        }
+        assert_eq!(run_value("return 'a'.repeat(-0.5);"), string(""));
+        let error = run("return 'a'.repeat(-1);").expect_err("negative repeat");
+        assert_eq!(error.kind(), super::RuntimeErrorKind::RangeError);
         let error = run("return 'a'.repeat(Infinity);").expect_err("infinite repeat");
         assert_eq!(error.kind(), super::RuntimeErrorKind::RangeError);
         assert_eq!(
@@ -8809,9 +8816,9 @@ mod tests {
         assert_eq!(run_value("return [0].includes(-0);"), Value::Boolean(true));
         assert_eq!(run_value("return [0].indexOf(-0);"), number(0.0));
         assert_eq!(run_value("return 'ab'.repeat(3);"), string("ababab"));
-        let error = run("return 'x'.repeat(NaN);").expect_err("NaN repeat");
-        assert_eq!(error.kind(), super::RuntimeErrorKind::RangeError);
+        assert_eq!(run_value("return 'x'.repeat(NaN);"), string(""));
         assert_eq!(run_value("return 'x'.padStart(5, 'ab');"), string("ababx"));
+        assert_eq!(run_value("return 'x'.padStart(Infinity, '');"), string("x"));
         assert_eq!(run_value("return 'x'.padEnd(0);"), string("x"));
 
         assert_eq!(
@@ -8845,11 +8852,8 @@ mod tests {
         for source in [
             "return 'x'.repeat(Infinity);",
             "return 'x'.repeat(-Infinity);",
-            "return 'x'.repeat(NaN);",
-            "return 'x'.repeat(-0.5);",
             "return 'x'.repeat(-1);",
             "return 'x'.padStart(Infinity);",
-            "return (255).toString(36.9);",
         ] {
             let error = run(source).expect_err("range-checked string size");
             assert_eq!(
