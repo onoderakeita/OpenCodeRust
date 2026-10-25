@@ -282,14 +282,16 @@ shadowingできる。
 構築する。呼び出しは同期で、引数と結果はplain data境界を通る。
 
 - `Object.keys(tools)` / `Object.keys(tools.ns)` はhostの名前を列挙する。
-- 引数は深さ32、循環、関数、禁止メンバーを拒否する。
+- 引数は深さ32、循環、関数、禁止メンバーを拒否する。検証はcallの記録より
+  先に行うため、拒否された呼び出しは `maxToolCalls` を消費しない。
 - 結果は同じ境界を通す。hostの失敗は `message` と任意の `data` を持つ
   objectとしてthrowし、`try`/`catch` で捕捉できる。
 - `maxToolCalls` は `set_limits` / `set_tool_call_limit` で適用し、超過は
   `ToolCallLimitExceeded` を返す。
 - `Promise.resolve`、`Promise.reject`、`Promise.all`、`Promise.allSettled`、
-  `Promise.race` は同期的に評価する。`await` はfulfilled値を取り出し、
-  rejected理由をthrowする。空の `Promise.race` はエラーにする。
+  `Promise.race` は同期的に評価する。組み合わせ関数は配列に加えて文字列・
+  Map・Setも受け、Mapはentryの配列に展開する。`await` はfulfilled値を
+  取り出し、rejected理由をthrowする。空の `Promise.race` はエラーにする。
 - `.then` / `.catch` / `.finally` と、未await Promiseのproperty読み取りは
   awaitを促す診断を返す。
 - 未await Promiseは、境界に加えてbinary/unary operatorと `JSON.stringify` でも

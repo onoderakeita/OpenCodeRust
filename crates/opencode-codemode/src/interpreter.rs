@@ -1720,15 +1720,14 @@ impl<'a> Interpreter<'a> {
             "Promise.reject" => Ok(Value::promise_rejected(argument(0))),
             "Promise.all" | "Promise.allSettled" | "Promise.race" => {
                 let source = argument(0);
-                let items = match &source {
-                    Value::Array(items) => items.borrow().clone(),
-                    _ => {
-                        return Err(RuntimeError::type_error(
-                            "Promise combinators require an array of values in CodeMode.",
-                            _span,
-                        ));
-                    }
-                };
+                // Upstream accepts arrays plus the spreadable sandbox values
+                // (strings, Maps, Sets), materializing Map entries as pairs.
+                let items = spread_items(&source).ok_or_else(|| {
+                    RuntimeError::type_error(
+                        "Promise combinators require an array of values in CodeMode.",
+                        _span,
+                    )
+                })?;
                 match name {
                     "Promise.race" => {
                         let Some(item) = items.into_iter().next() else {
@@ -3364,6 +3363,13 @@ impl<'a> Interpreter<'a> {
             ));
         }
         let name = path.join(".");
+        for (index, argument) in arguments.iter().enumerate() {
+            check_data(argument, &format!("tool argument {}", index + 1)).map_err(|error| {
+                RuntimeError::new(RuntimeErrorKind::InvalidDataValue, error.to_string(), span)
+            })?;
+        }
+        // Upstream validates/copies arguments before recording the call, so a
+        // rejected argument must not consume the tool-call budget.
         self.tool_budget.admit(name.clone()).map_err(|error| {
             RuntimeError::new(
                 RuntimeErrorKind::ToolCallLimitExceeded,
@@ -3371,11 +3377,6 @@ impl<'a> Interpreter<'a> {
                 span,
             )
         })?;
-        for (index, argument) in arguments.iter().enumerate() {
-            check_data(argument, &format!("tool argument {}", index + 1)).map_err(|error| {
-                RuntimeError::new(RuntimeErrorKind::InvalidDataValue, error.to_string(), span)
-            })?;
-        }
         let Some(host) = self.tool_host.as_mut() else {
             let message = format!("Tool '{name}' is not available in this execution.");
             let error = ToolError::new(message.clone());
@@ -6639,6 +6640,22 @@ mod tests {
     }
 
     #[test]
+    fn invalid_tool_arguments_do_not_consume_the_budget() {
+        let allocator = Allocator::default();
+        let program = parse_program(
+            &allocator,
+            "try { tools.echo(() => 1); } catch (e) {} return tools.echo(2);",
+        )
+        .expect("fixture should parse");
+        let mut interpreter = Interpreter::new();
+        interpreter.set_tool_host(Box::new(TestHost));
+        interpreter.set_tool_call_limit(Some(1));
+        let value = interpreter.run(&program).expect("valid call should run");
+        assert_eq!(value, number(2.0));
+        assert_eq!(interpreter.tool_calls(), ["echo"]);
+    }
+
+    #[test]
     fn evaluates_parity_globals_and_number_statics() {
         let source = r#"
             return [
@@ -7551,6 +7568,23 @@ mod tests {
     fn rejects_invalid_instanceof_right_hand_sides() {
         let error = run("return 1 instanceof 5;").expect_err("should reject the operand");
         assert!(error.message().contains("right-hand side of 'instanceof'"));
+    }
+
+    #[test]
+    fn promise_combinators_spread_sandbox_iterables() {
+        assert_eq!(
+            run_value("return (await Promise.all('ab')).join(',');"),
+            string("a,b")
+        );
+        assert_eq!(
+            run_value("return (await Promise.all(new Set([1, 2]))).join(',');"),
+            string("1,2")
+        );
+        assert_eq!(
+            run_value("return JSON.stringify(await Promise.all(new Map([['a', 1]])));"),
+            string(r#"[["a",1]]"#)
+        );
+        assert_eq!(run_value("return await Promise.race('xy');"), string("x"));
     }
 
     #[test]
