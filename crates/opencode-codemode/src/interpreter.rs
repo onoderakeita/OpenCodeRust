@@ -3916,6 +3916,8 @@ impl<'a> Interpreter<'a> {
             }
             "String.isWellFormed" => {
                 as_string(receiver, span)?;
+                // Rust strings cannot hold lone surrogates, so every value that
+                // reaches the interpreter is well formed.
                 Ok(Value::Boolean(true))
             }
             "String.toWellFormed" => Ok(Value::String(as_string(receiver, span)?)),
@@ -4132,7 +4134,13 @@ impl<'a> Interpreter<'a> {
                     ))
                 }
             })),
-            "Boolean.valueOf" => Ok(receiver.clone()),
+            "Boolean.valueOf" => match receiver {
+                Value::Boolean(_) => Ok(receiver.clone()),
+                _ => Err(RuntimeError::type_error(
+                    "Boolean.valueOf requires a boolean receiver.",
+                    span,
+                )),
+            },
             "Object.toString" | "Object.toLocaleString" => {
                 Ok(Value::String(class_tag(receiver).to_owned()))
             }
@@ -4788,7 +4796,13 @@ impl<'a> Interpreter<'a> {
                         .map_or(Value::Undefined, |character| {
                             Value::String(character.to_string())
                         })),
-                    Err(_) => Ok(bound_method(object, string_method(key))),
+                    Err(_) => {
+                        if let Some(method) = string_method(key) {
+                            Ok(bound_method(object, Some(method)))
+                        } else {
+                            Ok(bound_method(object, primitive_prototype_method(key)))
+                        }
+                    }
                 }
             }
             Value::Builtin(name) => {
@@ -4868,11 +4882,14 @@ impl<'a> Interpreter<'a> {
                     span,
                 )),
             },
-            Value::Number(_) => Ok(bound_method(object, number_method(key))),
+            Value::Number(_) => Ok(bound_method(
+                object,
+                number_method(key).or_else(|| primitive_prototype_method(key)),
+            )),
             Value::Boolean(_) => Ok(match key {
                 "toString" => bound_method(object, Some("Boolean.toString")),
                 "valueOf" => bound_method(object, Some("Boolean.valueOf")),
-                _ => Value::Undefined,
+                _ => bound_method(object, primitive_prototype_method(key)),
             }),
             Value::ToolRef(path) => {
                 let mut next = path.as_ref().clone();
@@ -5173,6 +5190,15 @@ fn class_tag(value: &Value) -> &'static str {
     }
 }
 
+fn primitive_prototype_method(name: &str) -> Option<&'static str> {
+    match name {
+        "hasOwnProperty" => Some("Object.hasOwnProperty"),
+        "propertyIsEnumerable" => Some("Object.propertyIsEnumerable"),
+        "isPrototypeOf" => Some("Object.isPrototypeOf"),
+        _ => None,
+    }
+}
+
 fn object_has_own(value: &Value, key: &str) -> bool {
     match value {
         Value::Object(object) => object.borrow().contains_key(key),
@@ -5186,6 +5212,12 @@ fn object_has_own(value: &Value, key: &str) -> bool {
         Value::Date(_) => key == "time",
         Value::Map(_) => key == "map",
         Value::Set(_) => key == "set",
+        Value::String(value) => {
+            key == "length"
+                || key
+                    .parse::<usize>()
+                    .is_ok_and(|index| index < value.chars().count())
+        }
         _ => false,
     }
 }
@@ -5197,6 +5229,9 @@ fn enumerable_own_property(value: &Value, key: &str) -> bool {
             .parse::<usize>()
             .is_ok_and(|index| index < array.borrow().len()),
         Value::Error(_) => key == "name" || key == "message",
+        Value::String(value) => key
+            .parse::<usize>()
+            .is_ok_and(|index| index < value.chars().count()),
         _ => false,
     }
 }
@@ -9393,6 +9428,24 @@ mod tests {
         let error =
             run("return Object.groupBy([1], Math.abs);").expect_err("unsupported groupBy callback");
         assert_eq!(error.kind(), super::RuntimeErrorKind::TypeError);
+        assert_eq!(
+            run_value("return JSON.stringify(Object.groupBy([1], () => 1));"),
+            string(r#"{"1":[1]}"#)
+        );
+        assert_eq!(
+            run_value("return JSON.stringify(Object.groupBy(['a','b'], (value, index) => index));"),
+            string(r#"{"0":["a"],"1":["b"]}"#)
+        );
+        let error =
+            run("return Object.groupBy(1, (x) => x);").expect_err("non-iterable groupBy source");
+        assert_eq!(error.kind(), super::RuntimeErrorKind::TypeError);
+        assert_eq!(
+            run_value(
+                "const key = () => 1; const m = Map.groupBy([1], () => key); \
+                 return m.get(key).join(',');"
+            ),
+            string("1")
+        );
     }
 
     #[test]
@@ -9411,6 +9464,18 @@ mod tests {
                    ].join("|");"#
             ),
             string("1,2,3,4|3|1,2|1,2,4|true|true|true")
+        );
+        assert_eq!(
+            run_value(
+                r#"const a = new Set([3,1,2]); const b = new Set([2,3]);
+                   return [
+                     [...a.intersection(b)].join(","),
+                     [...new Set([3,1]).union(new Set([2,1]))].join(","),
+                     [...a.difference(new Set([1]))].join(","),
+                     [...a.symmetricDifference(new Set([2,1,4]))].join(",")
+                   ].join("|");"#
+            ),
+            string("2,3|3,1,2|3,2|3,4")
         );
         assert_eq!(
             run_value(
@@ -9610,6 +9675,50 @@ mod tests {
             run_value("const d = new Date(0); return Number.isNaN(d.setTime());"),
             Value::Boolean(true)
         );
+        assert_eq!(
+            run_value(
+                "const d = new Date(0); d.setMonth(1, 29); \
+                 return [d.getMonth(), d.getDate()].join(',');"
+            ),
+            string("2,1")
+        );
+        assert_eq!(
+            run_value(
+                "const d = new Date(0); d.setDate(0); \
+                 return [d.getFullYear(), d.getMonth(), d.getDate()].join(',');"
+            ),
+            string("1969,11,31")
+        );
+        assert_eq!(
+            run_value("const d = new Date(0); d.setHours(1, 2, 3, 4); return d.getTime();"),
+            number(3_723_004.0)
+        );
+        assert_eq!(
+            run_value("const d = new Date(0); return [d.setTime(123), d.getTime()].join(',');"),
+            string("123,123")
+        );
+        assert_eq!(
+            run_value(
+                "const d = new Date(NaN); d.setMilliseconds(1); d.setSeconds(2); \
+                 d.setMinutes(3); d.setHours(4); d.setDate(5); d.setMonth(6); \
+                 return Number.isNaN(d.getTime());"
+            ),
+            Value::Boolean(true)
+        );
+        assert_eq!(
+            run_value(
+                "const d = new Date(NaN); d.setFullYear(2024); \
+                 return [d.getFullYear(), d.getMonth(), d.getDate()].join(',');"
+            ),
+            string("2024,0,1")
+        );
+        assert_eq!(
+            run_value(
+                "const d = new Date(0); d.setUTCMonth(13); \
+                 return [d.getUTCFullYear(), d.getUTCMonth()].join(',');"
+            ),
+            string("1971,1")
+        );
     }
 
     #[test]
@@ -9626,6 +9735,18 @@ mod tests {
             .expect_err("invalid ISO formatting should throw");
         assert_eq!(error.kind(), super::RuntimeErrorKind::RangeError);
         assert!(error.message().contains("Invalid time value."));
+        assert_eq!(
+            run_value(
+                r#"const d = new Date("garbage");
+                   return [d.toDateString(), d.toTimeString(), d.toUTCString(),
+                     d.toLocaleString(), d.toLocaleDateString(), d.toLocaleTimeString()].join("|");"#
+            ),
+            string("Invalid Date|Invalid Date|Invalid Date|Invalid Date|Invalid Date|Invalid Date")
+        );
+        assert_eq!(
+            run_value(r#"return Number.isNaN(new Date("garbage").getTimezoneOffset());"#),
+            Value::Boolean(true)
+        );
     }
 
     #[test]
@@ -9969,6 +10090,14 @@ mod tests {
             ),
             string("Error: x|Error|true")
         );
+        assert_eq!(
+            run_value(
+                "return ['x'.hasOwnProperty('0'), 'x'.hasOwnProperty('length'), \
+                 'x'.propertyIsEnumerable('0'), 'x'.propertyIsEnumerable('length'), \
+                 (5).hasOwnProperty('x'), true.hasOwnProperty('x')].join(',');"
+            ),
+            string("true,true,true,false,false,false")
+        );
     }
 
     #[test]
@@ -10081,6 +10210,15 @@ mod tests {
             number(std::f64::consts::PI)
         );
         assert_eq!(run_value("return Math.clz32(1);"), number(31.0));
+        assert_eq!(run_value("return Math.clz32(0);"), number(32.0));
+        assert_eq!(run_value("return Math.acos(1);"), number(0.0));
+        assert_eq!(run_value("return Math.expm1(0);"), number(0.0));
+        assert_eq!(run_value("return Math.log1p(0);"), number(0.0));
+        assert_eq!(
+            run_value("return String(1 / Math.sign(-0));"),
+            string("-Infinity")
+        );
+        assert_eq!(run_value("return Math.imul(0xffffffff, 5);"), number(-5.0));
         assert_eq!(run_value("return Math.imul(3, 4);"), number(12.0));
         assert_eq!(
             run_value("return Math.fround(1.1);"),
@@ -10260,6 +10398,17 @@ mod tests {
                  (-0).toLocaleString(), (1e-7).toLocaleString()].join('|');"
             ),
             string("1,234,567.891|-1,234|-0|0")
+        );
+        assert_eq!(
+            run_value(
+                "return [(NaN).toLocaleString(), (Infinity).toLocaleString(), \
+                 (-Infinity).toLocaleString(), (1e21).toLocaleString()].join('|');"
+            ),
+            string("NaN|∞|-∞|1,000,000,000,000,000,000,000")
+        );
+        assert_eq!(
+            run_value("return [Infinity, NaN, 1000].toLocaleString();"),
+            string("∞,NaN,1,000")
         );
         assert_eq!(run_value("return 'a'.repeat(2.9);"), string("aa"));
         for source in ["return 'a'.repeat(-0.5);", "return 'a'.repeat(-1);"] {

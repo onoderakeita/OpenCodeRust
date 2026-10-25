@@ -8,7 +8,9 @@
 //!
 //! Arrays and objects use shared references (`Rc<RefCell<...>>`) so that
 //! JavaScript assignment aliases storage and identity comparison works, while
-//! the data boundary still validates and copies the reachable data. Runtime-only
+//! the data boundary still validates and copies the reachable data. Dates use
+//! `Rc<DateValue>` with a `Cell<f64>` so `Date` setters mutate every alias,
+//! matching JavaScript's mutable Date objects. Runtime-only
 //! values (functions) may be stored inside arrays and objects but are rejected
 //! by [`check_data`].
 
