@@ -144,6 +144,11 @@ pub fn parse_iso(text: &str) -> f64 {
     let (hours, minutes, seconds, milliseconds, offset_minutes) = match time_text {
         None => (0, 0, 0, 0, 0),
         Some(time_text) => {
+            let time_text = if iso_time {
+                time_text
+            } else {
+                time_text.trim_start_matches(char::is_whitespace)
+            };
             let Some(parsed) = parse_time_part(time_text) else {
                 return f64::NAN;
             };
@@ -250,6 +255,9 @@ fn parse_seconds(text: &str) -> Option<(u32, u32)> {
 
 fn split_offset(text: &str) -> Option<(&str, i32)> {
     if let Some(time) = text.strip_suffix('Z').or_else(|| text.strip_suffix('z')) {
+        if time.contains(['+', '-']) {
+            return None;
+        }
         return Some((time, 0));
     }
     let offset_index = text
@@ -404,9 +412,12 @@ mod tests {
         assert!(parse_iso("2024-01-02T03:04:05+09").is_nan());
         assert!(parse_iso("2024-01-02T03:04:05+9:00").is_nan());
         assert!(parse_iso("2024-01-02T03:04:05+09:0").is_nan());
+        assert!(parse_iso("2024-01-02T03:04:05+09:00Z").is_nan());
+        assert!(parse_iso("2024-01-02T03:04:05Z+09:00").is_nan());
         assert!(parse_iso("2024-1-2T03:04:05Z").is_nan());
         assert!(parse_iso("2024-01T03:04:05Z").is_nan());
         assert_eq!(parse_iso("2024-1-2 03:04:05Z"), 1_704_164_645_000.0);
+        assert_eq!(parse_iso("2024-01-02  03:04:05Z"), 1_704_164_645_000.0);
         assert!(parse_iso("garbage").is_nan());
         assert!(parse_iso("2024-13-01").is_nan());
         assert!(parse_iso("2024-01-02T24:00:01Z").is_nan());
