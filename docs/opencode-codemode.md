@@ -260,7 +260,9 @@ shadowingできる。
   (U+FEFF) も除去し、`<` / `>` の文字列比較はUTF-16 code unit順になる。
   `normalize` とRegExp依存のmatch系は未実装。
 - `Number` instance methods: toFixed、toPrecision、toExponential、toString
-  (radix 2..36)、valueOf。digits/radixはnumberまたは `undefined` だけを
+  (radix 2..36)、toLocaleString、valueOf。`toLocaleString` はen-US相当の
+  3桁区切り・最大3小数 (`∞`、`-0`) を返し、locale/optionsは無視する。
+  digits/radixはnumberまたは `undefined` だけを
   受け、他型は `TypeError` にする。radixはupstreamと同じくraw値で2..36を
   検証するため、36.9とNaNは `RangeError`、2.9は2として扱う。digitsが
   範囲外なら `RangeError` にする。丸めはECMAScriptと同じround-half-away

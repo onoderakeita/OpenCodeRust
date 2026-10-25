@@ -4033,6 +4033,9 @@ impl<'a> Interpreter<'a> {
                 };
                 Ok(Value::String(number_to_string(number, radix)))
             }
+            "Number.toLocaleString" => Ok(Value::String(format_number_locale(as_number(
+                receiver, span,
+            )?))),
             "Number.valueOf" => Ok(Value::Number(as_number(receiver, span)?)),
             "Date.getTime" | "Date.valueOf" => Ok(Value::Number(as_date_time(receiver, span)?)),
             "Date.toISOString" => crate::date::iso_string(as_date_time(receiver, span)?)
@@ -5142,6 +5145,7 @@ fn number_method(name: &str) -> Option<&'static str> {
         "toPrecision" => "Number.toPrecision",
         "toExponential" => "Number.toExponential",
         "toString" => "Number.toString",
+        "toLocaleString" => "Number.toLocaleString",
         "valueOf" => "Number.valueOf",
         _ => return None,
     })
@@ -7334,6 +7338,69 @@ fn format_number(value: f64) -> String {
         output.push_str(&exponent.to_string());
     }
     output
+}
+
+fn format_number_locale(value: f64) -> String {
+    if value.is_nan() {
+        return "NaN".to_owned();
+    }
+    if value.is_infinite() {
+        return if value.is_sign_negative() {
+            "-∞"
+        } else {
+            "∞"
+        }
+        .to_owned();
+    }
+    let negative = value.is_sign_negative();
+    let absolute = value.abs();
+    if absolute < 0.0005 {
+        return if negative { "-0" } else { "0" }.to_owned();
+    }
+    let text = if absolute >= 1e21 {
+        expand_scientific(&format_number(absolute))
+    } else {
+        let mut text = format!("{absolute:.3}");
+        if text.contains('.') {
+            text = text.trim_end_matches('0').trim_end_matches('.').to_owned();
+        }
+        text
+    };
+    let (integer, fraction) = text.split_once('.').unwrap_or((&text, ""));
+    let mut grouped = String::new();
+    for (index, character) in integer.chars().enumerate() {
+        if index > 0 && (integer.len() - index) % 3 == 0 {
+            grouped.push(',');
+        }
+        grouped.push(character);
+    }
+    if !fraction.is_empty() {
+        grouped.push('.');
+        grouped.push_str(fraction);
+    }
+    if negative {
+        grouped.insert(0, '-');
+    }
+    grouped
+}
+
+fn expand_scientific(text: &str) -> String {
+    let Some((mantissa, exponent)) = text.split_once('e') else {
+        return text.to_owned();
+    };
+    let Ok(exponent) = exponent.parse::<i32>() else {
+        return text.to_owned();
+    };
+    let digits = mantissa.replace('.', "");
+    let point = mantissa.find('.').map_or(mantissa.len(), |index| index) as i32 + exponent;
+    if point <= 0 {
+        format!("0.{}{}", "0".repeat((-point) as usize), digits)
+    } else if point as usize >= digits.len() {
+        format!("{digits}{}", "0".repeat(point as usize - digits.len()))
+    } else {
+        let point = point as usize;
+        format!("{}.{}", &digits[..point], &digits[point..])
+    }
 }
 
 fn to_property_key(value: &Value, span: Span) -> Result<String, RuntimeError> {
@@ -9994,6 +10061,13 @@ mod tests {
         assert_eq!(
             run_value("return (0.25).toExponential(1);"),
             string("2.5e-1")
+        );
+        assert_eq!(
+            run_value(
+                "return [(1234567.891).toLocaleString(), (-1234).toLocaleString(), \
+                 (-0).toLocaleString(), (1e-7).toLocaleString()].join('|');"
+            ),
+            string("1,234,567.891|-1,234|-0|0")
         );
         assert_eq!(run_value("return 'a'.repeat(2.9);"), string("aa"));
         for source in ["return 'a'.repeat(-0.5);", "return 'a'.repeat(-1);"] {
