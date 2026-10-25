@@ -1842,7 +1842,11 @@ impl<'a> Interpreter<'a> {
             }
             "Error" | "TypeError" | "RangeError" | "SyntaxError" | "ReferenceError"
             | "EvalError" | "URIError" => Ok(make_error(name, arguments)),
-            "Map" | "Set" | "Date" => Err(RuntimeError::type_error(
+            "Date" => Ok(Value::String(
+                crate::date::iso_string(crate::date::now_ms())
+                    .unwrap_or_else(|| "Invalid Date".to_owned()),
+            )),
+            "Map" | "Set" => Err(RuntimeError::type_error(
                 format!("Constructor {name} requires 'new'."),
                 _span,
             )),
@@ -4034,6 +4038,15 @@ impl<'a> Interpreter<'a> {
             "Date.toJSON" => Ok(crate::date::iso_string(as_date_time(receiver, span)?)
                 .map_or(Value::Null, Value::String)),
             "Date.toString" => Ok(Value::String(to_js_string(receiver))),
+            "Date.toDateString"
+            | "Date.toTimeString"
+            | "Date.toUTCString"
+            | "Date.toLocaleString"
+            | "Date.toLocaleDateString"
+            | "Date.toLocaleTimeString" => {
+                let time = as_date_time(receiver, span)?;
+                Ok(Value::String(format_date_method(time, method)))
+            }
             "Date.getFullYear" => Ok(date_component(receiver, span, |parts| parts.year as f64)),
             "Date.getMonth" => Ok(date_component(receiver, span, |parts| parts.month as f64)),
             "Date.getDate" => Ok(date_component(receiver, span, |parts| parts.day as f64)),
@@ -5170,6 +5183,12 @@ fn date_method(name: &str) -> Option<&'static str> {
         "toISOString" => "Date.toISOString",
         "toJSON" => "Date.toJSON",
         "toString" => "Date.toString",
+        "toDateString" => "Date.toDateString",
+        "toTimeString" => "Date.toTimeString",
+        "toUTCString" | "toGMTString" => "Date.toUTCString",
+        "toLocaleString" => "Date.toLocaleString",
+        "toLocaleDateString" => "Date.toLocaleDateString",
+        "toLocaleTimeString" => "Date.toLocaleTimeString",
         "getFullYear" | "getUTCFullYear" => "Date.getFullYear",
         "getMonth" | "getUTCMonth" => "Date.getMonth",
         "getDate" | "getUTCDate" => "Date.getDate",
@@ -5326,6 +5345,54 @@ fn apply_date_setter(date: &crate::value::DateRef, method: &str, arguments: &[Va
     let time = crate::date::from_components(&components);
     date.time_ms.set(time);
     Value::Number(time)
+}
+
+fn format_date_method(time_ms: f64, method: &str) -> String {
+    let Some(parts) = crate::date::parts(time_ms) else {
+        return "Invalid Date".to_owned();
+    };
+    const WEEKDAYS: [&str; 7] = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+    const MONTHS: [&str; 12] = [
+        "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+    ];
+    let weekday = WEEKDAYS
+        .get(parts.weekday as usize)
+        .copied()
+        .unwrap_or("Sun");
+    let month = MONTHS.get(parts.month as usize).copied().unwrap_or("Jan");
+    let year = parts.year;
+    let date = format!("{weekday} {month} {:02} {year:04}", parts.day);
+    let time = format!(
+        "{:02}:{:02}:{:02} GMT+0000 (Coordinated Universal Time)",
+        parts.hours, parts.minutes, parts.seconds
+    );
+    let (hour12, suffix) = match parts.hours % 12 {
+        0 => (12, if parts.hours < 12 { "AM" } else { "PM" }),
+        hour => (hour, if parts.hours < 12 { "AM" } else { "PM" }),
+    };
+    let locale_time = format!(
+        "{hour12}:{:02}:{:02} {suffix}",
+        parts.minutes, parts.seconds
+    );
+    match method {
+        "Date.toDateString" => date,
+        "Date.toTimeString" => time,
+        "Date.toUTCString" => format!(
+            "{weekday}, {:02} {month} {year:04} {:02}:{:02}:{:02} GMT",
+            parts.day, parts.hours, parts.minutes, parts.seconds
+        ),
+        "Date.toLocaleDateString" => {
+            format!("{}/{}/{:04}", parts.month + 1, parts.day, year)
+        }
+        "Date.toLocaleTimeString" => locale_time,
+        "Date.toLocaleString" => format!(
+            "{}/{}/{:04}, {locale_time}",
+            parts.month + 1,
+            parts.day,
+            year
+        ),
+        _ => date,
+    }
 }
 
 fn date_component(
@@ -9233,6 +9300,30 @@ mod tests {
             run_value(r#"return Number.isNaN(new Date(2024, NaN).getTime());"#),
             Value::Boolean(true)
         );
+    }
+
+    #[test]
+    fn formats_date_string_forms() {
+        assert_eq!(
+            run_value(
+                r#"const d = new Date("2024-01-02T03:04:05Z");
+                   return [
+                     d.toUTCString(), d.toDateString(), d.toTimeString(),
+                     d.toLocaleString(), d.toLocaleDateString(), d.toLocaleTimeString()
+                   ].join("|");"#
+            ),
+            string(
+                "Tue, 02 Jan 2024 03:04:05 GMT|Tue Jan 02 2024|\
+                 03:04:05 GMT+0000 (Coordinated Universal Time)|\
+                 1/2/2024, 3:04:05 AM|1/2/2024|3:04:05 AM"
+            )
+        );
+        assert_eq!(
+            run_value(r#"return new Date("garbage").toUTCString();"#),
+            string("Invalid Date")
+        );
+        assert_eq!(run_value("return typeof Date();"), string("string"));
+        assert_eq!(run_value("return Date().length;"), number(24.0));
     }
 
     #[test]

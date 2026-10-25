@@ -282,15 +282,19 @@ shadowingできる。
 - Map/Setはspreadとfor-ofで反復でき、Mapは `[key, value]`、Setは値を返す。
   実データ境界では `{}` に直列化する。
 - `Date`: `new Date()`、`new Date(ms)`、`new Date(isoString)`、
-  `new Date(year, month, ...)`、`Date.now`、`Date.parse`、`Date.UTC`。
+  `new Date(year, month, ...)`、`Date()` (現在時刻のISO文字列)、`Date.now`、
+  `Date.parse`、`Date.UTC`。
   `getTime` / `valueOf`、ISO getter、local getter、`toISOString`、`toJSON`、
-  `toString`、`getTimezoneOffset`、`setTime`、`setMilliseconds`、`setSeconds`、
+  `toString`、`toDateString`、`toTimeString`、`toUTCString` / `toGMTString`、
+  `toLocaleString` / `toLocaleDateString` / `toLocaleTimeString`、
+  `getTimezoneOffset`、`setTime`、`setMilliseconds`、`setSeconds`、
   `setMinutes`、`setHours`、`setDate`、`setMonth`、`setFullYear` とUTC版を持つ。
   setterはDateをin-placeで更新し、TimeClip後の時刻を返す。無効日付は
   `setTime` / `setFullYear` 以外では `NaN` のまま。
 - DateはUTC固定で評価する。component constructorとlocal getterもUTCとして
   扱い、`getTimezoneOffset()` は有効日付で `0` を返す。これはhost timezone
-  非依存を優先した意図的な差分である。
+  非依存を優先した意図的な差分である。`toDateString` / `toTimeString` /
+  `toUTCString` と `toLocale*` もUTCの英語表記で固定する。
 - `Date.parse` はISO 8601のsubset (`YYYY`、`YYYY-MM`、`YYYY-MM-DD`、
   符号付き拡張年 `-000001` / `+010000`、`T`/`t`/space区切り、
   `Z` / `±HH:MM` / `±HHMM`) を受理し、zone省略時はUTCとする。
