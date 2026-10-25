@@ -2189,6 +2189,7 @@ impl<'a> Interpreter<'a> {
                 Ok(value)
             }
             "JSON.stringify" => {
+                let mut replacer_function = None;
                 let properties = match arguments.get(1) {
                     Some(Value::Array(array)) => {
                         let mut list = Vec::new();
@@ -2204,8 +2205,10 @@ impl<'a> Interpreter<'a> {
                         }
                         Some(list)
                     }
-                    Some(Value::Function(_)) => {
-                        return Err(RuntimeError::unsupported("JSON.stringify replacer", _span))
+                    Some(value) if type_of(value) == "function" => {
+                        ensure_collection_callback(value, "JSON.stringify", _span)?;
+                        replacer_function = Some(value.clone());
+                        None
                     }
                     _ => None,
                 };
@@ -2221,7 +2224,19 @@ impl<'a> Interpreter<'a> {
                     Some(Value::String(text)) => text.chars().take(10).collect(),
                     _ => String::new(),
                 };
-                match stringify_json_with_indent(&argument(0), &indent, properties.as_deref()) {
+                let value = if let Some(replacer) = replacer_function {
+                    self.json_transform_value(
+                        argument(0),
+                        "",
+                        &replacer,
+                        &mut Vec::new(),
+                        0,
+                        _span,
+                    )?
+                } else {
+                    argument(0)
+                };
+                match stringify_json_with_indent(&value, &indent, properties.as_deref()) {
                     Ok(Some(text)) => Ok(Value::String(text)),
                     Ok(None) => Ok(Value::Undefined),
                     Err(JsonStringifyError::Circular) => Err(RuntimeError::new(
@@ -3153,6 +3168,140 @@ impl<'a> Interpreter<'a> {
             }
             _ => Ok(to_js_string(item)),
         }
+    }
+
+    fn json_transform_value(
+        &mut self,
+        value: Value,
+        key: &str,
+        replacer: &Value,
+        ancestors: &mut Vec<usize>,
+        depth: usize,
+        span: Span,
+    ) -> Result<Value, RuntimeError> {
+        if depth > crate::value::MAX_VALUE_DEPTH {
+            return Err(RuntimeError::new(
+                RuntimeErrorKind::InvalidDataValue,
+                "JSON.stringify value exceeds the maximum value depth.",
+                span,
+            ));
+        }
+        let value = match value {
+            Value::Promise(_) => {
+                return Err(RuntimeError::new(
+                    RuntimeErrorKind::InvalidDataValue,
+                    "JSON.stringify cannot serialize an un-awaited Promise. \
+                     Await it first, for example `await tools.ns.tool(...)`.",
+                    span,
+                ));
+            }
+            Value::Date(date) => match crate::date::iso_string(date.time_ms.get()) {
+                Some(text) => Value::String(text),
+                None => Value::Null,
+            },
+            Value::Object(object) => {
+                let to_json = object.borrow().get("toJSON").cloned();
+                match to_json {
+                    Some(to_json) if type_of(&to_json) == "function" => {
+                        self.invoke_value(&to_json, vec![Value::String(key.to_owned())], span)?
+                    }
+                    _ => Value::Object(object),
+                }
+            }
+            other => other,
+        };
+        let value =
+            self.invoke_value(replacer, vec![Value::String(key.to_owned()), value], span)?;
+        match value {
+            Value::Undefined => Ok(Value::Undefined),
+            Value::Function(_) | Value::Builtin(_) | Value::BoundMethod { .. } => {
+                Ok(Value::Undefined)
+            }
+            Value::ToolRef(path) => {
+                if path.is_empty() {
+                    Ok(Value::object())
+                } else {
+                    Ok(Value::Undefined)
+                }
+            }
+            Value::Promise(_) | Value::Date(_) | Value::Map(_) | Value::Set(_) => {
+                Ok(Value::object())
+            }
+            Value::Error(error) => {
+                let mut object = IndexMap::new();
+                object.insert(
+                    "name".to_owned(),
+                    Value::String(error.kind.name().to_owned()),
+                );
+                object.insert("message".to_owned(), Value::String(error.message.clone()));
+                self.json_transform_object(object, replacer, ancestors, depth, span)
+            }
+            Value::Array(array) => {
+                let identity = Rc::as_ptr(&array) as *const () as usize;
+                if ancestors.contains(&identity) {
+                    return Err(RuntimeError::new(
+                        RuntimeErrorKind::InvalidDataValue,
+                        "JSON.stringify value contains a circular value.",
+                        span,
+                    ));
+                }
+                ancestors.push(identity);
+                let items = array.borrow().clone();
+                let mut transformed = Vec::with_capacity(items.len());
+                for (index, item) in items.into_iter().enumerate() {
+                    let item = self.json_transform_value(
+                        item,
+                        &index.to_string(),
+                        replacer,
+                        ancestors,
+                        depth + 1,
+                        span,
+                    )?;
+                    transformed.push(if item.is_undefined() {
+                        Value::Null
+                    } else {
+                        item
+                    });
+                }
+                ancestors.pop();
+                Ok(Value::array(transformed))
+            }
+            Value::Object(object) => {
+                let entries = object.borrow().clone();
+                self.json_transform_object(entries, replacer, ancestors, depth, span)
+            }
+            other => Ok(other),
+        }
+    }
+
+    fn json_transform_object(
+        &mut self,
+        entries: IndexMap<String, Value>,
+        replacer: &Value,
+        ancestors: &mut Vec<usize>,
+        depth: usize,
+        span: Span,
+    ) -> Result<Value, RuntimeError> {
+        let object = Rc::new(RefCell::new(IndexMap::new()));
+        let identity = Rc::as_ptr(&object) as *const () as usize;
+        if ancestors.contains(&identity) {
+            return Err(RuntimeError::new(
+                RuntimeErrorKind::InvalidDataValue,
+                "JSON.stringify value contains a circular value.",
+                span,
+            ));
+        }
+        ancestors.push(identity);
+        for child_key in ordered_keys(&entries) {
+            let child = entries.get(&child_key).cloned().unwrap_or(Value::Undefined);
+            let child =
+                self.json_transform_value(child, &child_key, replacer, ancestors, depth + 1, span)?;
+            if !child.is_undefined() {
+                object.borrow_mut().insert(child_key, child);
+            }
+        }
+        ancestors.pop();
+        Ok(Value::Object(object))
     }
 
     fn json_revive_value(
@@ -9874,9 +10023,87 @@ mod tests {
             run_value("return JSON.stringify({ a: 1 }, 42);"),
             string(r#"{"a":1}"#)
         );
-        let error = run("return JSON.stringify({ a: 1 }, () => 1);")
-            .expect_err("function replacer is still unsupported");
-        assert_eq!(error.kind(), super::RuntimeErrorKind::UnsupportedSyntax);
+    }
+
+    #[test]
+    fn evaluates_json_stringify_replacer_functions() {
+        assert_eq!(
+            run_value(
+                r#"return JSON.stringify({ a: 1, b: 2 }, (k, v) => typeof v === "number" ? v * 2 : v);"#
+            ),
+            string(r#"{"a":2,"b":4}"#)
+        );
+        assert_eq!(
+            run_value(
+                r#"return JSON.stringify({ a: 1, b: 2 }, (k, v) => k === "a" ? undefined : v);"#
+            ),
+            string(r#"{"b":2}"#)
+        );
+        assert_eq!(
+            run_value(
+                r#"return JSON.stringify([1, 2], (k, v) => typeof v === "number" && v === 1 ? undefined : v);"#
+            ),
+            string("[null,2]")
+        );
+        assert_eq!(
+            run_value(
+                "const f = () => 1; \
+                 return JSON.stringify({ a: 1, b: f }, (k, v) => v);"
+            ),
+            string(r#"{"a":1}"#)
+        );
+        assert_eq!(
+            run_value(
+                "const f = () => 1; \
+                 return JSON.stringify({ a: 1, b: f }, (k, v) => k === 'b' ? 2 : v);"
+            ),
+            string(r#"{"a":1,"b":2}"#)
+        );
+        assert_eq!(
+            run_value(r#"return JSON.stringify({ d: new Date(0) }, (k, v) => v);"#),
+            string(r#"{"d":"1970-01-01T00:00:00.000Z"}"#)
+        );
+        assert_eq!(
+            run_value(
+                r#"return JSON.stringify({ d: new Date(0) }, (k, v) => k === "d" ? new Date(0) : v);"#
+            ),
+            string(r#"{"d":{}}"#)
+        );
+        assert_eq!(
+            run_value(r#"return JSON.stringify(new Error("x"), (k, v) => v);"#),
+            string(r#"{"name":"Error","message":"x"}"#)
+        );
+        assert_eq!(
+            run_value(
+                r#"return JSON.stringify(new Error("x"), (k, v) => k === "message" ? "y" : v);"#
+            ),
+            string(r#"{"name":"Error","message":"y"}"#)
+        );
+        assert_eq!(
+            run_value(r#"return JSON.stringify({ toJSON() { return 5; } }, (k, v) => v);"#),
+            string("5")
+        );
+        assert_eq!(
+            run_value(
+                r#"return JSON.stringify({ a: 1, b: 3 }, (k, v) => k === "a" ? Promise.resolve(2) : v);"#
+            ),
+            string(r#"{"a":{},"b":3}"#)
+        );
+        assert_eq!(
+            run_value(r#"return String(JSON.stringify({ a: 1 }, () => undefined));"#),
+            string("undefined")
+        );
+        let error = run("return JSON.stringify({ a: 1 }, Math.abs);")
+            .expect_err("unsupported callable replacer");
+        assert_eq!(error.kind(), super::RuntimeErrorKind::TypeError);
+        let error = run(
+            r#"try { JSON.stringify({ a: 1 }, () => { throw new Error("r"); }); return "no"; }
+               catch (e) { return e.message; }"#,
+        );
+        assert_eq!(
+            error.expect("replacer throw should be catchable"),
+            string("r")
+        );
     }
 
     #[test]
