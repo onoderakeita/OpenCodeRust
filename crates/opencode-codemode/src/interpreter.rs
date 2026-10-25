@@ -3907,7 +3907,22 @@ impl<'a> Interpreter<'a> {
                     Err(_) => Ok(bound_method(object, string_method(key))),
                 }
             }
-            Value::Builtin(name) => Ok(builtin_property(name, key)),
+            Value::Builtin(name) => {
+                if *name == "Promise"
+                    && !matches!(key, "resolve" | "reject" | "all" | "allSettled" | "race")
+                {
+                    return Err(RuntimeError::new(
+                        RuntimeErrorKind::ExecutionFailure,
+                        format!(
+                            "Promise.{key} is not available in CodeMode. Available: \
+                             Promise.all, Promise.allSettled, Promise.race, \
+                             Promise.resolve, Promise.reject."
+                        ),
+                        span,
+                    ));
+                }
+                Ok(builtin_property(name, key))
+            }
             Value::Error(error) => Ok(match key {
                 "name" => Value::String(error.kind.name().to_owned()),
                 "message" => Value::String(error.message.clone()),
@@ -5696,20 +5711,28 @@ fn format_console_argument(value: &Value) -> String {
 /// friendly forms at any depth, cycles render `"[Circular]"`, and runtime
 /// references render `"[CodeMode reference]"`.
 fn format_console_value(value: &Value, seen: &mut Vec<usize>, depth: usize) -> String {
+    // Upstream renders primitives and friendly sandbox leaves before the depth
+    // guard, so a string or Date at depth 33 still prints instead of "...".
+    match value {
+        Value::Undefined | Value::Null => return "null".to_owned(),
+        Value::Boolean(value) => return value.to_string(),
+        Value::Number(value) => return format_number(*value),
+        Value::String(value) => {
+            return serde_json::to_string(value).unwrap_or_else(|_| "\"\"".to_owned())
+        }
+        Value::Date(date) => {
+            return crate::date::iso_string(date.time_ms)
+                .unwrap_or_else(|| "Invalid Date".to_owned())
+        }
+        Value::Promise(_) => return "[Promise (await it to get its value)]".to_owned(),
+        _ => {}
+    }
     if depth > MAX_CONSOLE_DEPTH {
         return "...".to_owned();
     }
     match value {
-        Value::Undefined | Value::Null => "null".to_owned(),
-        Value::Boolean(value) => value.to_string(),
-        Value::Number(value) => format_number(*value),
-        Value::String(value) => serde_json::to_string(value).unwrap_or_else(|_| "\"\"".to_owned()),
         Value::Function(_) | Value::Builtin(_) | Value::BoundMethod { .. } | Value::ToolRef(_) => {
             "[CodeMode reference]".to_owned()
-        }
-        Value::Promise(_) => "[Promise (await it to get its value)]".to_owned(),
-        Value::Date(date) => {
-            crate::date::iso_string(date.time_ms).unwrap_or_else(|| "Invalid Date".to_owned())
         }
         Value::Error(error) => {
             let name = serde_json::to_string(error.kind.name()).unwrap_or_default();
@@ -5786,6 +5809,7 @@ fn format_console_value(value: &Value, seen: &mut Vec<usize>, depth: usize) -> S
             seen.pop();
             format!("Set({}) [{}]", set.len(), values)
         }
+        _ => unreachable!("primitive console values return before the depth guard"),
     }
 }
 
@@ -5872,9 +5896,52 @@ fn console_contains_runtime_reference(value: &Value, seen: &mut Vec<usize>) -> b
     }
 }
 
+/// Upstream `containsRuntimeReference`: sandbox values (Date, Map, Set) count
+/// as runtime references here, unlike the table-data checkpoint which keeps
+/// them as legitimate cell data. Used only for the columns argument.
+fn contains_runtime_reference(value: &Value, seen: &mut Vec<usize>) -> bool {
+    match value {
+        Value::Function(_)
+        | Value::Builtin(_)
+        | Value::BoundMethod { .. }
+        | Value::ToolRef(_)
+        | Value::Promise(_)
+        | Value::Date(_)
+        | Value::Map(_)
+        | Value::Set(_) => true,
+        Value::Array(array) => {
+            let pointer = Rc::as_ptr(array) as *const () as usize;
+            if seen.contains(&pointer) {
+                return false;
+            }
+            seen.push(pointer);
+            let found = array
+                .borrow()
+                .iter()
+                .any(|item| contains_runtime_reference(item, seen));
+            seen.pop();
+            found
+        }
+        Value::Object(object) => {
+            let pointer = Rc::as_ptr(object) as *const () as usize;
+            if seen.contains(&pointer) {
+                return false;
+            }
+            seen.push(pointer);
+            let found = object
+                .borrow()
+                .values()
+                .any(|item| contains_runtime_reference(item, seen));
+            seen.pop();
+            found
+        }
+        _ => false,
+    }
+}
+
 fn console_table_columns(value: Option<&Value>) -> Option<Vec<String>> {
     let value = value?;
-    if value.is_undefined() || console_contains_runtime_reference(value, &mut Vec::new()) {
+    if value.is_undefined() || contains_runtime_reference(value, &mut Vec::new()) {
         return None;
     }
     match value {
@@ -7694,6 +7761,10 @@ mod tests {
 
         let error = run("return await Promise.race([]);").expect_err("empty race should fail");
         assert!(error.message().contains("never settle"));
+
+        let error = run("return Promise.foo;").expect_err("unknown Promise member");
+        assert_eq!(error.kind(), super::RuntimeErrorKind::ExecutionFailure);
+        assert!(error.message().contains("Promise.foo is not available"));
     }
 
     #[test]
@@ -8078,6 +8149,7 @@ mod tests {
             console.table([{ a: 1 }], [() => 1]);
             console.table(new Map([["a", 1]]));
             console.table(new TypeError("bad"));
+            console.table([{ a: 1 }], [new Date(0)]);
             console.table();
         "#,
         )
@@ -8096,6 +8168,7 @@ mod tests {
                 "(index)\ta\n0\t1",
                 "(index)\tValue\n0\tMap(1) [[\"a\",1]]",
                 "(index)\tValue\nname\tTypeError\nmessage\tbad",
+                "(index)\ta\n0\t1",
                 "undefined",
             ]
         );

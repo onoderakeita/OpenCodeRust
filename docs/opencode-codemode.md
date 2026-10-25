@@ -136,6 +136,8 @@ shadowingできる。
   同じく配列またはobjectをrowsに展開し、`(index)` 行と列keyをタブ区切りで
   描画する。primitiveやArray/Date/Map/Setの要素は `Value` 列に入り、
   columns配列を渡すと各要素を `String(column)` にした列だけを表示する。
+  columnsにcallable/PromiseやDate/Map/Setなどのsandbox値が含まれる場合は
+  列指定を無視する。
   入力にcallable/tool/Promiseが含まれる場合は表全体を
   `[CodeMode reference]` にし、`undefined` は `undefined` を返す。
 - `Math`: abs、cbrt、ceil、floor、round、trunc、max、min、pow、sqrt、hypot、
@@ -302,7 +304,8 @@ shadowingできる。
   Map・Setも受け、Mapはentryの配列に展開する。`await` はfulfilled値を
   取り出し、rejected理由をthrowする。空の `Promise.race` はエラーにする。
 - `.then` / `.catch` / `.finally` と、未await Promiseのproperty読み取りは
-  awaitを促す診断を返す。
+  awaitを促す診断を返す。`Promise.unknown` のようなnamespaceの未知メンバーは
+  読み取り時点でエラーにする。
 - 未await Promiseは、境界に加えてbinary/unary operatorと `JSON.stringify` でも
   `InvalidDataValue` として拒否する。`typeof` と `instanceof` はcoercion
   しないため、そのまま観察できる。
@@ -334,6 +337,10 @@ shadowingできる。
 - TypeScriptの型消去・transpile parity
 - 非同期tool実行と未await rejectionの診断
 - 同期host呼び出しを中断するtimeout
+- `Math` / `JSON` / `console` / `Object` / `Array` / `Date` / `Map` / `Set` の
+  未知メンバーは、upstreamのGlobalMethodReference (typeof `function`) ではなく
+  `undefined` になる。呼び出しはどちらも失敗する。
+- `localeCompare` はhost ICUではなくコードポイント順で比較する
 - upstream parity test suiteの完全移植 (依存不要な差分コーパスは実装済み)
 
 ## Validation

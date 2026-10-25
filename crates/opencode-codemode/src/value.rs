@@ -434,7 +434,10 @@ pub enum Value {
 /// Returns the canonical array-index value of a property key, mirroring the
 /// ECMAScript array-index definition (0 .. 2^32 - 2, no leading zeros).
 pub(crate) fn array_index(key: &str) -> Option<u32> {
-    if key.is_empty() || (key.len() > 1 && key.starts_with('0')) {
+    if key.is_empty()
+        || !key.as_bytes().iter().all(u8::is_ascii_digit)
+        || (key.len() > 1 && key.starts_with('0'))
+    {
         return None;
     }
     let value = key.parse::<u32>().ok()?;
@@ -993,11 +996,17 @@ mod tests {
     fn orders_object_json_keys_like_javascript() {
         let value = object(&[
             ("b", Value::Number(1.0)),
-            ("2", Value::Number(2.0)),
-            ("1", Value::Number(3.0)),
+            ("+1", Value::Number(2.0)),
+            ("2", Value::Number(3.0)),
+            ("01", Value::Number(4.0)),
+            ("1", Value::Number(5.0)),
+            ("4294967295", Value::Number(6.0)),
         ]);
 
-        assert_eq!(value.to_json().to_string(), r#"{"1":3,"2":2,"b":1}"#);
+        assert_eq!(
+            value.to_json().to_string(),
+            r#"{"1":5,"2":3,"b":1,"+1":2,"01":4,"4294967295":6}"#
+        );
     }
 
     #[test]
