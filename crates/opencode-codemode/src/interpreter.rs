@@ -1451,7 +1451,7 @@ impl<'a> Interpreter<'a> {
                 let key = match left {
                     Value::String(value) => value.clone(),
                     Value::Number(value) => format_number(*value),
-                    Value::Date(date) => format_number(date.time_ms),
+                    Value::Date(date) => format_number(date.time_ms.get()),
                     _ => to_js_string(left),
                 };
                 Ok(Value::Boolean(has_property(right, &key)))
@@ -4052,6 +4052,17 @@ impl<'a> Interpreter<'a> {
                     f64::NAN
                 }))
             }
+            "Date.setTime"
+            | "Date.setMilliseconds"
+            | "Date.setSeconds"
+            | "Date.setMinutes"
+            | "Date.setHours"
+            | "Date.setDate"
+            | "Date.setMonth"
+            | "Date.setFullYear" => {
+                let date = as_date_ref(receiver, span)?;
+                Ok(apply_date_setter(&date, method, arguments))
+            }
             "Map.get" => {
                 let map = as_map_ref(receiver, span)?;
                 Ok(map.get(&argument(0)).unwrap_or(Value::Undefined))
@@ -4902,7 +4913,7 @@ fn construct_date(arguments: &[Value]) -> Value {
     let time_ms = match arguments {
         [] => crate::date::now_ms(),
         [value] => match value {
-            Value::Date(date) => date.time_ms,
+            Value::Date(date) => date.time_ms.get(),
             Value::Number(number) => crate::date::clip(*number),
             Value::String(text) => crate::date::parse_iso(text),
             _ => f64::NAN,
@@ -5168,6 +5179,14 @@ fn date_method(name: &str) -> Option<&'static str> {
         "getSeconds" | "getUTCSeconds" => "Date.getSeconds",
         "getMilliseconds" | "getUTCMilliseconds" => "Date.getMilliseconds",
         "getTimezoneOffset" => "Date.getTimezoneOffset",
+        "setTime" => "Date.setTime",
+        "setMilliseconds" | "setUTCMilliseconds" => "Date.setMilliseconds",
+        "setSeconds" | "setUTCSeconds" => "Date.setSeconds",
+        "setMinutes" | "setUTCMinutes" => "Date.setMinutes",
+        "setHours" | "setUTCHours" => "Date.setHours",
+        "setDate" | "setUTCDate" => "Date.setDate",
+        "setMonth" | "setUTCMonth" => "Date.setMonth",
+        "setFullYear" | "setUTCFullYear" => "Date.setFullYear",
         _ => return None,
     })
 }
@@ -5204,12 +5223,109 @@ fn as_set_ref(value: &Value, span: Span) -> Result<crate::value::SetRef, Runtime
 
 fn as_date_time(value: &Value, span: Span) -> Result<f64, RuntimeError> {
     match value {
-        Value::Date(date) => Ok(date.time_ms),
+        Value::Date(date) => Ok(date.time_ms.get()),
         _ => Err(RuntimeError::type_error(
             "Date method requires a Date receiver.",
             span,
         )),
     }
+}
+
+fn as_date_ref(value: &Value, span: Span) -> Result<crate::value::DateRef, RuntimeError> {
+    match value {
+        Value::Date(date) => Ok(Rc::clone(date)),
+        _ => Err(RuntimeError::type_error(
+            "Date method requires a Date receiver.",
+            span,
+        )),
+    }
+}
+
+fn apply_date_setter(date: &crate::value::DateRef, method: &str, arguments: &[Value]) -> Value {
+    let argument = |index: usize| arguments.get(index).map(to_number);
+    let first = argument(0).unwrap_or(f64::NAN);
+    if method == "Date.setTime" {
+        let time = crate::date::clip(first);
+        date.time_ms.set(time);
+        return Value::Number(time);
+    }
+    let current = date.time_ms.get();
+    let Some(parts) = crate::date::parts(current) else {
+        if method == "Date.setFullYear" {
+            let time = crate::date::from_components(&[
+                first,
+                argument(1).unwrap_or(0.0),
+                argument(2).unwrap_or(1.0),
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+            ]);
+            date.time_ms.set(time);
+            return Value::Number(time);
+        }
+        return Value::Number(f64::NAN);
+    };
+    let year = parts.year as f64;
+    let month = parts.month as f64;
+    let day = parts.day as f64;
+    let hours = parts.hours as f64;
+    let minutes = parts.minutes as f64;
+    let seconds = parts.seconds as f64;
+    let milliseconds = parts.milliseconds as f64;
+    let components = match method {
+        "Date.setMilliseconds" => [year, month, day, hours, minutes, seconds, first],
+        "Date.setSeconds" => [
+            year,
+            month,
+            day,
+            hours,
+            minutes,
+            first,
+            argument(1).unwrap_or(milliseconds),
+        ],
+        "Date.setMinutes" => [
+            year,
+            month,
+            day,
+            hours,
+            first,
+            argument(1).unwrap_or(seconds),
+            argument(2).unwrap_or(milliseconds),
+        ],
+        "Date.setHours" => [
+            year,
+            month,
+            day,
+            first,
+            argument(1).unwrap_or(minutes),
+            argument(2).unwrap_or(seconds),
+            argument(3).unwrap_or(milliseconds),
+        ],
+        "Date.setDate" => [year, month, first, hours, minutes, seconds, milliseconds],
+        "Date.setMonth" => [
+            year,
+            first,
+            argument(1).unwrap_or(day),
+            hours,
+            minutes,
+            seconds,
+            milliseconds,
+        ],
+        "Date.setFullYear" => [
+            first,
+            argument(1).unwrap_or(month),
+            argument(2).unwrap_or(day),
+            hours,
+            minutes,
+            seconds,
+            milliseconds,
+        ],
+        _ => return Value::Number(f64::NAN),
+    };
+    let time = crate::date::from_components(&components);
+    date.time_ms.set(time);
+    Value::Number(time)
 }
 
 fn date_component(
@@ -5877,7 +5993,7 @@ fn stringify_json_inner(
         Value::Promise(_) => Err(JsonStringifyError::UnawaitedPromise),
         Value::Map(_) | Value::Set(_) => Ok(Some("{}".to_owned())),
         Value::Date(date) => Ok(Some(
-            crate::date::iso_string(date.time_ms)
+            crate::date::iso_string(date.time_ms.get())
                 .and_then(|text| serde_json::to_string(&text).ok())
                 .unwrap_or_else(|| "null".to_owned()),
         )),
@@ -6409,7 +6525,7 @@ fn is_object_like(value: &Value) -> bool {
 /// its time value for every operator except `+`.
 fn equality_operand(value: &Value) -> Value {
     match value {
-        Value::Date(date) => Value::Number(date.time_ms),
+        Value::Date(date) => Value::Number(date.time_ms.get()),
         Value::Undefined
         | Value::Null
         | Value::Boolean(_)
@@ -6461,7 +6577,7 @@ fn addition_operand(value: &Value) -> Value {
 /// time value for ordering while other objects stringify.
 fn comparison_operand(value: &Value) -> Value {
     match value {
-        Value::Date(date) => Value::Number(date.time_ms),
+        Value::Date(date) => Value::Number(date.time_ms.get()),
         Value::Undefined
         | Value::Null
         | Value::Boolean(_)
@@ -6531,7 +6647,7 @@ fn to_number(value: &Value) -> f64 {
         | Value::Promise(_)
         | Value::Map(_)
         | Value::Set(_) => f64::NAN,
-        Value::Date(date) => date.time_ms,
+        Value::Date(date) => date.time_ms.get(),
         Value::ToolRef(_) => f64::NAN,
     }
 }
@@ -6601,7 +6717,7 @@ fn format_console_value(value: &Value, seen: &mut Vec<usize>, depth: usize) -> S
             return serde_json::to_string(value).unwrap_or_else(|_| "\"\"".to_owned())
         }
         Value::Date(date) => {
-            return crate::date::iso_string(date.time_ms)
+            return crate::date::iso_string(date.time_ms.get())
                 .unwrap_or_else(|| "Invalid Date".to_owned())
         }
         Value::Promise(_) => return "[Promise (await it to get its value)]".to_owned(),
@@ -7077,7 +7193,7 @@ fn to_js_string_seen(value: &Value, seen: &mut Vec<usize>) -> String {
         Value::Map(_) => "[object Map]".to_owned(),
         Value::Set(_) => "[object Set]".to_owned(),
         Value::Date(date) => {
-            crate::date::iso_string(date.time_ms).unwrap_or_else(|| "Invalid Date".to_owned())
+            crate::date::iso_string(date.time_ms.get()).unwrap_or_else(|| "Invalid Date".to_owned())
         }
         Value::ToolRef(_) => value.to_string(),
     }
@@ -9115,6 +9231,57 @@ mod tests {
         );
         assert_eq!(
             run_value(r#"return Number.isNaN(new Date(2024, NaN).getTime());"#),
+            Value::Boolean(true)
+        );
+    }
+
+    #[test]
+    fn mutates_dates_with_setters() {
+        assert_eq!(
+            run_value(
+                "const d = new Date(0); return [d.setUTCFullYear(2024), d.getTime()].join(',');"
+            ),
+            string("1704067200000,1704067200000")
+        );
+        assert_eq!(
+            run_value("const d = new Date(0); d.setUTCMilliseconds(500); return d.getTime();"),
+            number(500.0)
+        );
+        assert_eq!(
+            run_value("const d = new Date(0); d.setUTCSeconds(5, 250); return d.getTime();"),
+            number(5250.0)
+        );
+        assert_eq!(
+            run_value("const d = new Date(0); d.setUTCMinutes(2, 3, 4); return d.getTime();"),
+            number(123_004.0)
+        );
+        assert_eq!(
+            run_value("const d = new Date(0); d.setUTCHours(1, 2, 3, 4); return d.getTime();"),
+            number(3_723_004.0)
+        );
+        assert_eq!(
+            run_value("const d = new Date(0); d.setUTCDate(2); return d.getTime();"),
+            number(86_400_000.0)
+        );
+        assert_eq!(
+            run_value("const d = new Date(0); d.setUTCMonth(1, 2); return d.getTime();"),
+            number(2_764_800_000.0)
+        );
+        assert_eq!(
+            run_value(
+                "const d = new Date(NaN); const value = d.setUTCFullYear(2024); \
+                 return [value, d.getTime()].join(',');"
+            ),
+            string("1704067200000,1704067200000")
+        );
+        assert_eq!(
+            run_value(
+                "const d = new Date(NaN); d.setUTCDate(2); return Number.isNaN(d.getTime());"
+            ),
+            Value::Boolean(true)
+        );
+        assert_eq!(
+            run_value("const d = new Date(0); return Number.isNaN(d.setTime());"),
             Value::Boolean(true)
         );
     }

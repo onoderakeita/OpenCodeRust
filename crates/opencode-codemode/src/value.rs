@@ -379,7 +379,7 @@ pub type SetRef = Rc<SetValue>;
 #[derive(Debug)]
 pub struct DateValue {
     /// Unix time in milliseconds; `NaN` marks an invalid date.
-    pub time_ms: f64,
+    pub time_ms: std::cell::Cell<f64>,
 }
 
 /// Shared reference to a date.
@@ -544,7 +544,7 @@ impl Value {
     /// Creates a date, applying the JavaScript TimeClip algorithm.
     pub fn date(time_ms: f64) -> Self {
         Self::Date(Rc::new(DateValue {
-            time_ms: crate::date::clip(time_ms),
+            time_ms: std::cell::Cell::new(crate::date::clip(time_ms)),
         }))
     }
 
@@ -678,9 +678,8 @@ impl Value {
             }
             Self::Promise(_) => JsonValue::Null,
             Self::Map(_) | Self::Set(_) => JsonValue::Object(JsonMap::new()),
-            Self::Date(date) => {
-                crate::date::iso_string(date.time_ms).map_or(JsonValue::Null, JsonValue::String)
-            }
+            Self::Date(date) => crate::date::iso_string(date.time_ms.get())
+                .map_or(JsonValue::Null, JsonValue::String),
             Self::Function(_) | Self::Builtin(_) | Self::BoundMethod { .. } | Self::ToolRef(_) => {
                 JsonValue::Null
             }
@@ -769,7 +768,7 @@ impl Display for Value {
             Self::Promise(_) => formatter.write_str("[Promise]"),
             Self::Map(_) => formatter.write_str("[object Map]"),
             Self::Set(_) => formatter.write_str("[object Set]"),
-            Self::Date(date) => match crate::date::iso_string(date.time_ms) {
+            Self::Date(date) => match crate::date::iso_string(date.time_ms.get()) {
                 Some(text) => formatter.write_str(&text),
                 None => formatter.write_str("Invalid Date"),
             },

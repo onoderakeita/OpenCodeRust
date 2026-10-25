@@ -284,7 +284,10 @@ shadowingできる。
 - `Date`: `new Date()`、`new Date(ms)`、`new Date(isoString)`、
   `new Date(year, month, ...)`、`Date.now`、`Date.parse`、`Date.UTC`。
   `getTime` / `valueOf`、ISO getter、local getter、`toISOString`、`toJSON`、
-  `toString`、`getTimezoneOffset` を持つ。
+  `toString`、`getTimezoneOffset`、`setTime`、`setMilliseconds`、`setSeconds`、
+  `setMinutes`、`setHours`、`setDate`、`setMonth`、`setFullYear` とUTC版を持つ。
+  setterはDateをin-placeで更新し、TimeClip後の時刻を返す。無効日付は
+  `setTime` / `setFullYear` 以外では `NaN` のまま。
 - DateはUTC固定で評価する。component constructorとlocal getterもUTCとして
   扱い、`getTimezoneOffset()` は有効日付で `0` を返す。これはhost timezone
   非依存を優先した意図的な差分である。
