@@ -453,6 +453,7 @@ impl<'a> Interpreter<'a> {
             ("clz32", Value::Builtin("Math.clz32")),
             ("imul", Value::Builtin("Math.imul")),
             ("random", Value::Builtin("Math.random")),
+            ("sumPrecise", Value::Builtin("Math.sumPrecise")),
             ("hypot", Value::Builtin("Math.hypot")),
             ("log2", Value::Builtin("Math.log2")),
             ("log10", Value::Builtin("Math.log10")),
@@ -2106,6 +2107,35 @@ impl<'a> Interpreter<'a> {
                 }))
             }
             "Math.random" => Ok(Value::Number(math_random())),
+            "Math.sumPrecise" => {
+                let source = argument(0);
+                let items = spread_items(&source).ok_or_else(|| {
+                    RuntimeError::type_error(
+                        "Math.sumPrecise expects a synchronous iterable of numbers.",
+                        _span,
+                    )
+                })?;
+                let mut sum = 0.0f64;
+                let mut compensation = 0.0f64;
+                for item in items {
+                    let Value::Number(value) = item else {
+                        return Err(RuntimeError::type_error(
+                            "Math.sumPrecise expects an iterable of numbers.",
+                            _span,
+                        ));
+                    };
+                    let total = sum + value;
+                    if value.is_finite() && sum.is_finite() {
+                        compensation += if sum.abs() >= value.abs() {
+                            (sum - total) + value
+                        } else {
+                            (value - total) + sum
+                        };
+                    }
+                    sum = total;
+                }
+                Ok(Value::Number(sum + compensation))
+            }
             "Math.hypot" => {
                 let numbers = math_numbers(arguments, name, _span)?;
                 Ok(Value::Number(math_hypot(&numbers)))
@@ -11403,6 +11433,15 @@ mod tests {
             string("-Infinity")
         );
         assert_eq!(run_value("return Math.imul(0xffffffff, 5);"), number(-5.0));
+        assert_eq!(run_value("return Math.sumPrecise([1, 2, 3]);"), number(6.0));
+        assert_eq!(run_value("return Math.sumPrecise([]);"), number(0.0));
+        assert_eq!(
+            run_value("return Math.sumPrecise(new Set([1, 2]));"),
+            number(3.0)
+        );
+        let error =
+            run("return Math.sumPrecise([1, '2']);").expect_err("sumPrecise requires numbers");
+        assert_eq!(error.kind(), super::RuntimeErrorKind::TypeError);
         assert_eq!(run_value("return Math.imul(3, 4);"), number(12.0));
         assert_eq!(
             run_value("return Math.fround(1.1);"),

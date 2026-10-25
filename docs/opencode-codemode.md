@@ -155,11 +155,12 @@ shadowingできる。
 - `Math`: abs、cbrt、ceil、floor、round、trunc、max、min、pow、sqrt、hypot、
   sign、log、log1p、log2、log10、exp、expm1、acos、acosh、asin、asinh、atan、
   atan2、atanh、cos、cosh、sin、sinh、tan、tanh、fround、clz32、imul、
-  random、PI、E、LN2、LN10、LOG2E、LOG10E、SQRT2、SQRT1_2。
+  random、sumPrecise、PI、E、LN2、LN10、LOG2E、LOG10E、SQRT2、SQRT1_2。
   提供された引数はすべてnumberでなければ `TypeError` にし、引数なしは
   `NaN` として扱う (baseline 941e71dの型検査を維持)。`max` は +0、`min` は
   -0 を優先し、`round` は`0 < x < 0.5` を `+0` にし、
   `0.49999999999999994` の二重丸めを避ける。
+  `sumPrecise` はiterableのnumberだけを受け、compensated sumで合計する。
   負のゼロは保持する。`pow` は `(±1) ** ±Infinity` を `NaN`、
   `(-Infinity) ** 奇数` を `-Infinity` にするなどECMAScriptの特殊caseに従う。
 - `JSON`: parse、stringify。objectのkey順はECMAScriptと同じく配列indexの
