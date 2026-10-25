@@ -3070,7 +3070,7 @@ impl<'a> Interpreter<'a> {
             }
             Value::Object(object) => {
                 let method = object.borrow().get("toLocaleString").cloned();
-                if let Some(method) = method.filter(|method| is_collection_callback(method)) {
+                if let Some(method) = method.filter(is_collection_callback) {
                     let result = self.invoke_value(&method, Vec::new(), span)?;
                     return Ok(to_js_string(&result));
                 }
