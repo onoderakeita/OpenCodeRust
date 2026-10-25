@@ -4123,6 +4123,32 @@ impl<'a> Interpreter<'a> {
                 let date = as_date_ref(receiver, span)?;
                 Ok(apply_date_setter(&date, method, arguments))
             }
+            "Object.toString" | "Object.toLocaleString" => {
+                Ok(Value::String(class_tag(receiver).to_owned()))
+            }
+            "Object.valueOf" => Ok(receiver.clone()),
+            "Object.hasOwnProperty" => Ok(Value::Boolean(object_has_own(
+                receiver,
+                &to_js_string(&argument(0)),
+            ))),
+            "Object.propertyIsEnumerable" => Ok(Value::Boolean(enumerable_own_property(
+                receiver,
+                &to_js_string(&argument(0)),
+            ))),
+            "Object.isPrototypeOf" => Ok(Value::Boolean(false)),
+            "Error.toString" => {
+                let Value::Error(error) = receiver else {
+                    return Err(RuntimeError::type_error(
+                        "Error.toString requires an Error receiver.",
+                        span,
+                    ));
+                };
+                Ok(Value::String(if error.message.is_empty() {
+                    error.kind.name().to_owned()
+                } else {
+                    format!("{}: {}", error.kind.name(), error.message)
+                }))
+            }
             "Map.get" => {
                 let map = as_map_ref(receiver, span)?;
                 Ok(map.get(&argument(0)).unwrap_or(Value::Undefined))
@@ -4715,11 +4741,13 @@ impl<'a> Interpreter<'a> {
             ));
         }
         match object {
-            Value::Object(object) => Ok(object
-                .borrow()
-                .get(key)
-                .cloned()
-                .unwrap_or(Value::Undefined)),
+            Value::Object(map) => {
+                let value = map.borrow().get(key).cloned();
+                if let Some(value) = value {
+                    return Ok(value);
+                }
+                Ok(bound_method(object, object_prototype_method(key)))
+            }
             Value::Array(array) => {
                 if key == "length" {
                     return Ok(Value::Number(array.borrow().len() as f64));
@@ -4730,7 +4758,13 @@ impl<'a> Interpreter<'a> {
                         .get(index)
                         .cloned()
                         .unwrap_or(Value::Undefined)),
-                    Err(_) => Ok(bound_method(object, array_method(key))),
+                    Err(_) => {
+                        if let Some(method) = array_method(key) {
+                            Ok(bound_method(object, Some(method)))
+                        } else {
+                            Ok(bound_method(object, object_prototype_method(key)))
+                        }
+                    }
                 }
             }
             Value::String(value) => {
@@ -4780,20 +4814,35 @@ impl<'a> Interpreter<'a> {
             Value::Error(error) => Ok(match key {
                 "name" => Value::String(error.kind.name().to_owned()),
                 "message" => Value::String(error.message.clone()),
-                _ => Value::Undefined,
+                "toString" => bound_method(object, Some("Error.toString")),
+                _ => bound_method(object, object_prototype_method(key)),
             }),
-            Value::Date(_) => Ok(bound_method(object, date_method(key))),
+            Value::Date(_) => {
+                if let Some(method) = date_method(key) {
+                    Ok(bound_method(object, Some(method)))
+                } else {
+                    Ok(bound_method(object, object_prototype_method(key)))
+                }
+            }
             Value::Map(map) => {
                 if key == "size" {
                     return Ok(Value::Number(map.len() as f64));
                 }
-                Ok(bound_method(object, map_method(key)))
+                if let Some(method) = map_method(key) {
+                    Ok(bound_method(object, Some(method)))
+                } else {
+                    Ok(bound_method(object, object_prototype_method(key)))
+                }
             }
             Value::Set(set) => {
                 if key == "size" {
                     return Ok(Value::Number(set.len() as f64));
                 }
-                Ok(bound_method(object, set_method(key)))
+                if let Some(method) = set_method(key) {
+                    Ok(bound_method(object, Some(method)))
+                } else {
+                    Ok(bound_method(object, object_prototype_method(key)))
+                }
             }
             Value::Promise(_) => match key {
                 "then" | "catch" | "finally" => Err(RuntimeError::new(
@@ -5086,6 +5135,59 @@ fn builtin_property(name: &str, key: &str) -> Value {
         ("Date", "parse") => Value::Builtin("Date.parse"),
         ("Date", "UTC") => Value::Builtin("Date.UTC"),
         _ => Value::Undefined,
+    }
+}
+
+fn object_prototype_method(name: &str) -> Option<&'static str> {
+    Some(match name {
+        "hasOwnProperty" => "Object.hasOwnProperty",
+        "isPrototypeOf" => "Object.isPrototypeOf",
+        "propertyIsEnumerable" => "Object.propertyIsEnumerable",
+        "toLocaleString" => "Object.toLocaleString",
+        "toString" => "Object.toString",
+        "valueOf" => "Object.valueOf",
+        _ => return None,
+    })
+}
+
+fn class_tag(value: &Value) -> &'static str {
+    match value {
+        Value::Array(_) => "[object Array]",
+        Value::Object(_) => "[object Object]",
+        Value::Map(_) => "[object Map]",
+        Value::Set(_) => "[object Set]",
+        Value::Date(_) => "[object Date]",
+        Value::Error(_) => "[object Error]",
+        Value::Function(_) => "[object Function]",
+        _ => "[object Object]",
+    }
+}
+
+fn object_has_own(value: &Value, key: &str) -> bool {
+    match value {
+        Value::Object(object) => object.borrow().contains_key(key),
+        Value::Array(array) => {
+            key == "length"
+                || key
+                    .parse::<usize>()
+                    .is_ok_and(|index| index < array.borrow().len())
+        }
+        Value::Error(_) => key == "name" || key == "message",
+        Value::Date(_) => key == "time",
+        Value::Map(_) => key == "map",
+        Value::Set(_) => key == "set",
+        _ => false,
+    }
+}
+
+fn enumerable_own_property(value: &Value, key: &str) -> bool {
+    match value {
+        Value::Object(object) => object.borrow().contains_key(key),
+        Value::Array(array) => key
+            .parse::<usize>()
+            .is_ok_and(|index| index < array.borrow().len()),
+        Value::Error(_) => key == "name" || key == "message",
+        _ => false,
     }
 }
 
@@ -9825,6 +9927,36 @@ mod tests {
         assert_eq!(
             run_value("return `${new Date(0)}`;"),
             string("1970-01-01T00:00:00.000Z")
+        );
+    }
+
+    #[test]
+    fn evaluates_object_prototype_helpers() {
+        assert_eq!(
+            run_value(
+                "const o = { a: 1 }; return [o.hasOwnProperty('a'), o.hasOwnProperty('b'), \
+                 o.propertyIsEnumerable('a'), o.isPrototypeOf(o), o.toString(), \
+                 o.valueOf() === o].join(',');"
+            ),
+            string("true,false,true,false,[object Object],true")
+        );
+        assert_eq!(
+            run_value(
+                "const a = [1]; return [a.hasOwnProperty('0'), a.hasOwnProperty('length'), \
+                 a.propertyIsEnumerable('length'), a.toString()].join(',');"
+            ),
+            string("true,true,false,1")
+        );
+        assert_eq!(
+            run_value("return [new Map().toString(), new Set().toString()].join(',');"),
+            string("[object Map],[object Set]")
+        );
+        assert_eq!(
+            run_value(
+                "const e = new Error('x'); \
+                 return [e.toString(), new Error().toString(), e.hasOwnProperty('message')].join('|');"
+            ),
+            string("Error: x|Error|true")
         );
     }
 

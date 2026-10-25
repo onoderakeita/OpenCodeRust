@@ -188,6 +188,9 @@ shadowingできる。
 - `Object`: keys、values、entries、hasOwn、is、groupBy、fromEntries (配列とMap)、
   assign。`is` はSameValue (`NaN`同士はtrue、`+0`/`-0`はfalse)。
   `groupBy` はiterableをcallbackの戻り値キーでObjectへまとめ、値は配列。
+  object/array/Map/Set/Date/Errorは `hasOwnProperty`、`propertyIsEnumerable`、
+  `isPrototypeOf`、`toString` / `toLocaleString`、`valueOf` をfallbackで持つ。
+  Errorの `toString()` は `Name: message` (messageが空なら `Name`) を返す。
   `keys` はdata objectと配列を受け、Date/Map/Setでは空配列を返す。
   `values` / `entries` / `hasOwn` は配列とprimitiveを `TypeError` にし、
   Date/Map/Setでは `values` / `entries` が空配列、`hasOwn` が `false` を
