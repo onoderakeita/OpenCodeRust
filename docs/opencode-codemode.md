@@ -327,6 +327,9 @@ shadowingできる。
 
 - 空文字または空白のみのcodeは、parse前に `ParseError` ("Code cannot be empty.")
   として失敗する。
+- プログラムの結果は明示的な `return` の値、なければ最後に評価された
+  expression statementの値になる。どちらかがPromiseならsettleしてから
+  data境界を通し、rejectなら `ExecutionFailure` として失敗する。
 - 成功は `CodeModeResult::Success` で、`value` (JSON)、`logs`、`truncated`、
   `tool_calls` を返す。`value` は `to_json` で正規化し、`NaN` / `Infinity` は
   `null` になる。

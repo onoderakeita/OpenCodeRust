@@ -123,9 +123,25 @@ impl RuntimeError {
     }
 
     fn thrown(value: Value, span: Span) -> Self {
+        let message = if contains_opaque_reference(&value, &mut Vec::new()) {
+            "a non-data value".to_owned()
+        } else {
+            match &value {
+                Value::Error(error) => error.message.clone(),
+                Value::Object(object) => object
+                    .borrow()
+                    .get("message")
+                    .and_then(|message| match message {
+                        Value::String(text) => Some(text.clone()),
+                        _ => None,
+                    })
+                    .unwrap_or_else(|| to_js_string(&value)),
+                _ => to_js_string(&value),
+            }
+        };
         Self {
             kind: RuntimeErrorKind::ExecutionFailure,
-            message: to_js_string(&value),
+            message,
             span,
             thrown: Some(value),
         }
@@ -296,6 +312,10 @@ pub struct Interpreter<'a> {
     deadline: Option<Instant>,
     call_depth: usize,
     eval_depth: usize,
+    /// Last expression-statement value, returned when the program has no
+    /// explicit `return` (upstream `lastValue`).
+    last_value: Value,
+    last_value_span: Span,
     /// Math/JSON/console are plain objects in the Rust model but immutable
     /// GlobalNamespaces upstream; reject writes to their identities.
     frozen_namespaces: Vec<usize>,
@@ -322,6 +342,8 @@ impl<'a> Interpreter<'a> {
             deadline: None,
             call_depth: 0,
             eval_depth: 0,
+            last_value: Value::Undefined,
+            last_value_span: Span::default(),
             frozen_namespaces: Vec::new(),
         };
         interpreter.install_globals();
@@ -476,25 +498,20 @@ impl<'a> Interpreter<'a> {
         }
     }
 
-    /// Evaluates a program and returns its top-level `return` value, or
-    /// `undefined`.
+    /// Evaluates a program and returns its top-level `return` value, or the
+    /// last expression-statement value when no `return` runs.
     pub fn run(&mut self, program: &'a Program<'a>) -> Result<Value, RuntimeError> {
         self.deadline = self
             .timeout
             .and_then(|timeout| Instant::now().checked_add(timeout));
         self.hoist_functions(&program.body)?;
+        let mut returned: Option<(Value, Span)> = None;
         for statement in &program.body {
             match self.eval_statement(statement)? {
                 Flow::Normal => {}
                 Flow::Return(value) => {
-                    check_data(&value, "result").map_err(|error| {
-                        RuntimeError::new(
-                            RuntimeErrorKind::InvalidDataValue,
-                            error.to_string(),
-                            statement.span(),
-                        )
-                    })?;
-                    return Ok(value);
+                    returned = Some((value, statement.span()));
+                    break;
                 }
                 Flow::Break | Flow::Continue => {
                     return Err(RuntimeError::new(
@@ -505,7 +522,22 @@ impl<'a> Interpreter<'a> {
                 }
             }
         }
-        Ok(Value::Undefined)
+        let (mut value, span) =
+            returned.unwrap_or_else(|| (self.last_value.clone(), self.last_value_span));
+        // The program body behaves like an implicit async function: a returned
+        // or trailing promise settles before the data boundary.
+        if let Value::Promise(promise) = &value {
+            match &**promise {
+                PromiseState::Fulfilled(settled) => value = settled.clone(),
+                PromiseState::Rejected(reason) => {
+                    return Err(RuntimeError::thrown(reason.clone(), span))
+                }
+            }
+        }
+        check_data(&value, "result").map_err(|error| {
+            RuntimeError::new(RuntimeErrorKind::InvalidDataValue, error.to_string(), span)
+        })?;
+        Ok(value)
     }
 
     fn hoist_functions(&mut self, statements: &'a [Statement<'a>]) -> Result<(), RuntimeError> {
@@ -609,7 +641,9 @@ impl<'a> Interpreter<'a> {
             },
             Statement::EmptyStatement(_) => Ok(Flow::Normal),
             Statement::ExpressionStatement(statement) => {
-                self.eval_expression(&statement.expression)?;
+                let value = self.eval_expression(&statement.expression)?;
+                self.last_value = value;
+                self.last_value_span = statement.span;
                 Ok(Flow::Normal)
             }
             Statement::ForInStatement(statement) => {
@@ -1681,6 +1715,7 @@ impl<'a> Interpreter<'a> {
         arguments: Vec<Value>,
         span: Span,
     ) -> Result<Value, RuntimeError> {
+        self.check_timeout(span)?;
         match callee {
             Value::Function(id) => self.invoke_function(*id, arguments, span),
             Value::Builtin(name) => self.call_builtin(name, &arguments, span),
@@ -6799,6 +6834,22 @@ mod tests {
             .expect_err("forward parameter reference is a TDZ error");
         assert_eq!(error.kind(), super::RuntimeErrorKind::ReferenceError);
         assert!(error.message().contains("before initialization"));
+    }
+
+    #[test]
+    fn returns_the_last_expression_and_settles_returned_promises() {
+        assert_eq!(run_value("1 + 2;"), number(3.0));
+        assert_eq!(run_value("1 + 2; const x = 4;"), number(3.0));
+        assert_eq!(run_value("return Promise.resolve(7);"), number(7.0));
+        assert_eq!(run_value("Promise.resolve(7);"), number(7.0));
+
+        let error = run("return Promise.reject('bad');").expect_err("rejected result");
+        assert_eq!(error.kind(), super::RuntimeErrorKind::ExecutionFailure);
+        assert_eq!(error.message(), "bad");
+
+        let error = run("return Promise.reject({ message: 'bad object' });")
+            .expect_err("rejected object result");
+        assert_eq!(error.message(), "bad object");
     }
 
     #[test]
