@@ -102,9 +102,12 @@ upstreamは未対応構文を評価到達時に拒否する。`inspect_support` 
   Rustの評価frameがJavaScriptより大きいための固定上限である。
 - `new` は `Error`、`TypeError`、`RangeError`、`SyntaxError`、
   `ReferenceError`、`EvalError`、`URIError`、`AggregateError` のconstructorと
-  `Map` / `Set` / `Date` を許可する。
+  `Object` / `Map` / `Set` / `Date` を許可する。
   `Error(...)` は `new` なしでも同じ値を作り、`Map` / `Set` / `Date` は
-  `new` なしでは `TypeError` にする。`AggregateError(errors, message)` は
+  `new` なしでは `TypeError` にする。`Object(...)` は `new` なしでも動き、
+  object/array/Error/Map/Set/Date/Promise/callableは同一値を返し、引数なし・
+  null・undefinedは新しい空object、primitiveは `TypeError` にする。
+  `AggregateError(errors, message)` は
   `errors` iterableと任意messageを受け、`errors` propertyはnon-enumerable。
 - `instanceof` はError brandと `Map` / `Set` / `Date` / `Array` / `Object` /
   `Promise` を判定する。`Number` / `String` / `Boolean` は常に `false`

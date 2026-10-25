@@ -1271,6 +1271,7 @@ impl<'a> Interpreter<'a> {
                 let callee = self.eval_expression(&expression.callee)?;
                 let arguments = self.eval_arguments(&expression.arguments)?;
                 match callee {
+                    Value::Builtin("Object") => construct_object(&arguments, expression.span),
                     Value::Builtin("Map") => construct_map(arguments.first(), expression.span),
                     Value::Builtin("Set") => construct_set(arguments.first(), expression.span),
                     Value::Builtin("Date") => Ok(construct_date(&arguments)),
@@ -1853,7 +1854,8 @@ impl<'a> Interpreter<'a> {
                 format!("Constructor {name} requires 'new'."),
                 _span,
             )),
-            "Object" | "Array" | "Promise" => Err(RuntimeError::new(
+            "Object" => construct_object(arguments, _span),
+            "Array" | "Promise" => Err(RuntimeError::new(
                 RuntimeErrorKind::ExecutionFailure,
                 "Only tools are callable in CodeMode.",
                 _span,
@@ -5432,6 +5434,28 @@ fn construct_date(arguments: &[Value]) -> Value {
     Value::date(time_ms)
 }
 
+fn construct_object(arguments: &[Value], span: Span) -> Result<Value, RuntimeError> {
+    match arguments.first() {
+        None | Some(Value::Undefined) | Some(Value::Null) => Ok(Value::object()),
+        Some(
+            value @ (Value::Object(_)
+            | Value::Array(_)
+            | Value::Error(_)
+            | Value::Map(_)
+            | Value::Set(_)
+            | Value::Date(_)
+            | Value::Promise(_)
+            | Value::Function(_)
+            | Value::Builtin(_)
+            | Value::BoundMethod { .. }),
+        ) => Ok(value.clone()),
+        Some(_) => Err(RuntimeError::type_error(
+            "Object(...) wrapper objects are not supported; use the primitive value directly.",
+            span,
+        )),
+    }
+}
+
 fn make_error(name: &str, arguments: &[Value]) -> Value {
     let kind = ErrorKind::from_name(name).unwrap_or(ErrorKind::Error);
     let message = match arguments.first() {
@@ -8594,7 +8618,7 @@ mod tests {
 
     #[test]
     fn rejects_calling_namespace_objects() {
-        for source in ["return Object();", "return Array();", "return Promise();"] {
+        for source in ["return Array();", "return Promise();"] {
             let error = run(source).expect_err("namespaces are not callable");
             assert_eq!(
                 error.kind(),
@@ -8602,6 +8626,27 @@ mod tests {
                 "{source}"
             );
             assert!(error.message().contains("Only tools are callable"));
+        }
+    }
+
+    #[test]
+    fn evaluates_object_constructor() {
+        assert_eq!(
+            run_value(
+                "const o = { a: 1 }; const f = () => 1; const d = new Date(0); \
+                 return [Object(o) === o, new Object(o) === o, typeof Object(f), \
+                 Object(d) === d, Object() === Object(), Object(null).a === undefined, \
+                 Object(undefined).a === undefined].join(',');"
+            ),
+            string("true,true,function,true,false,true,true")
+        );
+        for source in [
+            "return Object(1);",
+            "return Object('x');",
+            "return new Object(true);",
+        ] {
+            let error = run(source).expect_err("boxed primitives are unsupported");
+            assert_eq!(error.kind(), super::RuntimeErrorKind::TypeError, "{source}");
         }
     }
 
