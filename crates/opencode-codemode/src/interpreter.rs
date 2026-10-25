@@ -264,6 +264,9 @@ pub struct Interpreter<'a> {
     deadline: Option<Instant>,
     call_depth: usize,
     eval_depth: usize,
+    /// Math/JSON/console are plain objects in the Rust model but immutable
+    /// GlobalNamespaces upstream; reject writes to their identities.
+    frozen_namespaces: Vec<usize>,
 }
 
 impl<'a> Default for Interpreter<'a> {
@@ -287,6 +290,7 @@ impl<'a> Interpreter<'a> {
             deadline: None,
             call_depth: 0,
             eval_depth: 0,
+            frozen_namespaces: Vec::new(),
         };
         interpreter.install_globals();
         interpreter.scope = Rc::new(RefCell::new(Scope::script(globals)));
@@ -391,6 +395,12 @@ impl<'a> Interpreter<'a> {
             ("parse", Value::Builtin("JSON.parse")),
             ("stringify", Value::Builtin("JSON.stringify")),
         ]);
+        for namespace in [&console, &math, &json] {
+            if let Value::Object(object) = namespace {
+                self.frozen_namespaces
+                    .push(Rc::as_ptr(object) as *const () as usize);
+            }
+        }
         let mut scope = self.scope.borrow_mut();
         for (name, value) in [
             ("console", console),
@@ -899,6 +909,16 @@ impl<'a> Interpreter<'a> {
                             match value {
                                 Value::Null | Value::Undefined => {}
                                 Value::Object(source) => {
+                                    if self
+                                        .frozen_namespaces
+                                        .contains(&(Rc::as_ptr(&source) as *const () as usize))
+                                    {
+                                        return Err(RuntimeError::new(
+                                            RuntimeErrorKind::InvalidDataValue,
+                                            "Object spread requires a data object in CodeMode.",
+                                            spread.span,
+                                        ));
+                                    }
                                     let source = source.borrow();
                                     for key in ordered_keys(&source) {
                                         if is_blocked_member(&key) {
@@ -1214,7 +1234,15 @@ impl<'a> Interpreter<'a> {
                         span,
                     ));
                 }
-                let key = to_property_key(left, span)?;
+                // ToPropertyKey for the left operand: upstream coerces data
+                // objects to their string form and Dates to their time value
+                // before Object.hasOwn, so booleans/null/arrays work too.
+                let key = match left {
+                    Value::String(value) => value.clone(),
+                    Value::Number(value) => format_number(*value),
+                    Value::Date(date) => format_number(date.time_ms),
+                    _ => to_js_string(left),
+                };
                 Ok(Value::Boolean(has_property(right, &key)))
             }
             BinaryOperator::Instanceof => Ok(Value::Boolean(instance_of(left, right, span)?)),
@@ -4008,6 +4036,13 @@ impl<'a> Interpreter<'a> {
         match object {
             Value::Object(object) => {
                 let target = Rc::as_ptr(object) as *const () as usize;
+                if self.frozen_namespaces.contains(&target) {
+                    return Err(RuntimeError::new(
+                        RuntimeErrorKind::ExecutionFailure,
+                        "Only data fields may be assigned in CodeMode.",
+                        span,
+                    ));
+                }
                 if contains_identity(&value, target, &mut Vec::new()) {
                     return Err(RuntimeError::new(
                         RuntimeErrorKind::InvalidDataValue,
@@ -6648,6 +6683,35 @@ mod tests {
     }
 
     #[test]
+    fn rejects_assignment_to_global_namespaces() {
+        for source in [
+            "Math.PI = 3; return 0;",
+            "JSON.parse = 1; return 0;",
+            "console.log = 1; return 0;",
+        ] {
+            let error = run(source).expect_err("namespaces are not assignable");
+            assert_eq!(
+                error.kind(),
+                super::RuntimeErrorKind::ExecutionFailure,
+                "{source}"
+            );
+            assert!(error.message().contains("Only data fields"));
+        }
+        assert_eq!(run_value("const o = {}; o.x = 1; return o.x;"), number(1.0));
+        for source in [
+            "const x = { ...Math }; return 0;",
+            "const x = { ...console }; return 0;",
+        ] {
+            let error = run(source).expect_err("namespaces are not spreadable");
+            assert_eq!(
+                error.kind(),
+                super::RuntimeErrorKind::InvalidDataValue,
+                "{source}"
+            );
+        }
+    }
+
+    #[test]
     fn captures_console_output() {
         let allocator = Allocator::default();
         let program = parse_program(
@@ -9067,6 +9131,14 @@ mod tests {
         );
         let error = run("return true.toString;").expect_err("booleans are not objects");
         assert_eq!(error.kind(), super::RuntimeErrorKind::ExecutionFailure);
+        assert_eq!(
+            run_value(
+                "return [true in { true: 1 }, null in { null: 1 }, \
+                 undefined in { undefined: 1 }, [1, 2] in { '1,2': 1 }, \
+                 (new Date(5)) in { 5: 1 }].join(',');"
+            ),
+            string("true,true,true,true,true")
+        );
         assert_eq!(
             run_value(r#"return JSON.stringify({ b: 1, 2: 2, 1: 3 });"#),
             string(r#"{"1":3,"2":2,"b":1}"#)

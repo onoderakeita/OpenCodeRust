@@ -115,6 +115,9 @@ upstreamは未対応構文を評価到達時に拒否する。`inspect_support` 
 - 緩い等価 (`==`) はToPrimitiveを使い、Dateは時刻値、その他のobjectは
   文字列化で比較する。object同士は参照同一性で判定する。
 - `+` はToPrimitive、関係比較と `==` はDateを時刻値として扱う。
+- `in` はown propertyだけを調べる。左辺はToPropertyKeyで変換し、Dateは
+  時刻値、配列・objectは文字列として扱う。右辺がdata objectでなければ
+  `TypeError` にする。
 
 ## Stdlib baseline
 
