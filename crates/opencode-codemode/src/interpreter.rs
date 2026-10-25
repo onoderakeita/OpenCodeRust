@@ -60,6 +60,8 @@ pub enum RuntimeErrorKind {
     Timeout,
     /// The configured tool-call budget was exhausted.
     ToolCallLimitExceeded,
+    /// The referenced tool path does not exist in the host tree.
+    UnknownTool,
     /// A host tool returned a value outside the plain-data contract.
     InvalidToolOutput,
     /// A host tool failed.
@@ -80,6 +82,7 @@ impl Display for RuntimeErrorKind {
             Self::UnsupportedSyntax => "UnsupportedSyntax",
             Self::Timeout => "Timeout",
             Self::ToolCallLimitExceeded => "ToolCallLimitExceeded",
+            Self::UnknownTool => "UnknownTool",
             Self::InvalidToolOutput => "InvalidToolOutput",
             Self::ToolFailure => "ToolFailure",
             Self::ExecutionFailure => "ExecutionFailure",
@@ -3739,6 +3742,17 @@ impl<'a> Interpreter<'a> {
                 span,
             )
         })?;
+        if let Some(host) = &self.tool_host {
+            let parent = &path[..path.len().saturating_sub(1)];
+            let names = host.keys(parent);
+            if !names.is_empty() && !names.iter().any(|name| path.last() == Some(name)) {
+                return Err(RuntimeError::new(
+                    RuntimeErrorKind::UnknownTool,
+                    format!("Unknown tool '{name}'."),
+                    span,
+                ));
+            }
+        }
         let Some(host) = self.tool_host.as_mut() else {
             let message = format!("Tool '{name}' is not available in this execution.");
             let error = ToolError::new(message.clone());
@@ -7293,6 +7307,13 @@ mod tests {
     fn rejects_non_data_tool_arguments() {
         let error = run_with_host("return tools.echo(() => 1);").expect_err("should fail");
         assert_eq!(error.kind(), super::RuntimeErrorKind::InvalidDataValue);
+    }
+
+    #[test]
+    fn reports_unknown_tool_paths() {
+        let error = run_with_host("return tools.nope();").expect_err("unknown tool");
+        assert_eq!(error.kind(), super::RuntimeErrorKind::UnknownTool);
+        assert!(error.message().contains("Unknown tool 'nope'"));
     }
 
     #[test]

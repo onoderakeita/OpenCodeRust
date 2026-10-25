@@ -248,6 +248,7 @@ fn map_runtime_kind(kind: RuntimeErrorKind) -> DiagnosticKind {
         RuntimeErrorKind::UnsupportedSyntax => DiagnosticKind::UnsupportedSyntax,
         RuntimeErrorKind::InvalidDataValue => DiagnosticKind::InvalidDataValue,
         RuntimeErrorKind::ToolCallLimitExceeded => DiagnosticKind::ToolCallLimitExceeded,
+        RuntimeErrorKind::UnknownTool => DiagnosticKind::UnknownTool,
         RuntimeErrorKind::InvalidToolOutput => DiagnosticKind::InvalidToolOutput,
         RuntimeErrorKind::Timeout => DiagnosticKind::TimeoutExceeded,
         RuntimeErrorKind::ToolFailure => DiagnosticKind::ToolFailure,
@@ -462,6 +463,17 @@ mod tests {
             Some(super::Location { line: 2, column: 8 })
         );
         assert_eq!(failure.logs, ["before"]);
+    }
+
+    #[test]
+    fn reports_unknown_tools() {
+        let failure = failure(execute_code(
+            "return tools.nope();",
+            Some(Box::new(EchoHost::default())),
+            &ExecutionLimits::default(),
+        ));
+        assert_eq!(failure.error.kind, DiagnosticKind::UnknownTool);
+        assert_eq!(failure.tool_calls, ["nope"]);
     }
 
     #[test]

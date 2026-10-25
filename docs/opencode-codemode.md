@@ -298,8 +298,9 @@ shadowingできる。
 
 - `Object.keys(tools)` / `Object.keys(tools.ns)` はhostの名前を列挙する。
   `ToolHost::keys` は未知パスに空配列を返す契約のため、未知namespaceの
-  列挙はupstreamの `UnknownTool` ではなく空配列になる。未知toolの呼び出しも
-  hostの `ToolError` 次第で、既定では `ToolFailure` になる。
+  列挙はupstreamの `UnknownTool` ではなく空配列になる。未知toolの呼び出しは、
+  親の `keys` が非空で名前を含まない場合 `UnknownTool`、それ以外はhostの
+  `ToolError` 次第で `ToolFailure` になる。
 - 引数は深さ32、循環、関数、禁止メンバーを拒否する。検証はcallの記録より
   先に行うため、拒否された呼び出しは `maxToolCalls` を消費しない。
 - 結果は同じ境界を通す。hostの失敗は `message` と任意の `data` を持つ
