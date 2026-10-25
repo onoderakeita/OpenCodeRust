@@ -193,6 +193,10 @@ shadowingできる。
   `decodeURI` はreserved文字のescapeを元の表記のまま残す。壊れた `%XX` と
   不正なUTF-8は `URIError` をthrowする。入力はdata境界を通すため、
   callableと未await Promiseは `InvalidDataValue` になる。
+- Web helpers: `btoa` は各characterをLatin-1 byteとしてbase64化し、
+  0xFF超の文字は `TypeError` にする。`atob` はASCII whitespaceを無視し、
+  省略paddingを補うforgiving base64を復号して各byteをLatin-1文字として返す。
+  不正文字・不正padding・引数なしは `TypeError`。
 - グローバルな `String` / `Number` / `Boolean` / `parseInt` / `parseFloat` は、
   入力 (ネストを含む) のcallableと未await Promiseをdata境界で
   `InvalidDataValue` にする。

@@ -517,6 +517,8 @@ impl<'a> Interpreter<'a> {
             ("encodeURIComponent", Value::Builtin("encodeURIComponent")),
             ("decodeURI", Value::Builtin("decodeURI")),
             ("decodeURIComponent", Value::Builtin("decodeURIComponent")),
+            ("atob", Value::Builtin("atob")),
+            ("btoa", Value::Builtin("btoa")),
         ] {
             scope.bindings.insert(
                 name.to_owned(),
@@ -1826,6 +1828,41 @@ impl<'a> Interpreter<'a> {
                 Ok(Value::Number(parse_int(&to_js_string(&argument(0)), radix)))
             }
             "parseFloat" => Ok(Value::Number(parse_float(&to_js_string(&argument(0))))),
+            "atob" => {
+                if arguments.is_empty() {
+                    return Err(RuntimeError::type_error(
+                        "atob requires 1 argument (a string).",
+                        _span,
+                    ));
+                }
+                let text = to_js_string(&argument(0));
+                let bytes = base64_decode(&text).ok_or_else(|| {
+                    RuntimeError::type_error("The string contains invalid characters.", _span)
+                })?;
+                Ok(Value::String(
+                    bytes.iter().map(|byte| char::from(*byte)).collect(),
+                ))
+            }
+            "btoa" => {
+                if arguments.is_empty() {
+                    return Err(RuntimeError::type_error(
+                        "btoa requires 1 argument (a string).",
+                        _span,
+                    ));
+                }
+                let text = to_js_string(&argument(0));
+                let mut bytes = Vec::with_capacity(text.len());
+                for character in text.chars() {
+                    if character as u32 > 0xFF {
+                        return Err(RuntimeError::type_error(
+                            "The string contains invalid characters.",
+                            _span,
+                        ));
+                    }
+                    bytes.push(character as u8);
+                }
+                Ok(Value::String(base64_encode(&bytes)))
+            }
             "encodeURI" | "encodeURIComponent" | "decodeURI" | "decodeURIComponent" => {
                 let text = to_js_string(&argument(0));
                 let result = match name {
@@ -7993,6 +8030,98 @@ fn format_number(value: f64) -> String {
     output
 }
 
+fn base64_encode(bytes: &[u8]) -> String {
+    const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut output = String::with_capacity(bytes.len().div_ceil(3) * 4);
+    for chunk in bytes.chunks(3) {
+        let first = chunk[0];
+        let second = chunk.get(1).copied().unwrap_or(0);
+        let third = chunk.get(2).copied().unwrap_or(0);
+        output.push(ALPHABET[(first >> 2) as usize] as char);
+        output.push(ALPHABET[(((first & 0x03) << 4) | (second >> 4)) as usize] as char);
+        if chunk.len() > 1 {
+            output.push(ALPHABET[(((second & 0x0F) << 2) | (third >> 6)) as usize] as char);
+        } else {
+            output.push('=');
+        }
+        if chunk.len() > 2 {
+            output.push(ALPHABET[(third & 0x3F) as usize] as char);
+        } else {
+            output.push('=');
+        }
+    }
+    output
+}
+
+fn base64_decode(text: &str) -> Option<Vec<u8>> {
+    let mut cleaned = Vec::with_capacity(text.len());
+    for byte in text.bytes() {
+        if matches!(byte, b' ' | b'\t' | b'\n' | b'\x0C' | b'\r') {
+            continue;
+        }
+        cleaned.push(byte);
+    }
+    if cleaned.is_empty() {
+        return Some(Vec::new());
+    }
+    let padding = cleaned
+        .iter()
+        .rev()
+        .take_while(|byte| **byte == b'=')
+        .count();
+    if padding > 2 {
+        return None;
+    }
+    let data_length = cleaned.len() - padding;
+    if cleaned[..data_length].contains(&b'=') {
+        return None;
+    }
+    if padding > 0 {
+        if cleaned.len() % 4 != 0 {
+            return None;
+        }
+    } else if matches!(cleaned.len() % 4, 1) {
+        return None;
+    }
+    let mut data = cleaned[..data_length].to_vec();
+    while data.len() % 4 != 0 {
+        data.push(b'=');
+    }
+    let value = |byte: u8| -> Option<u8> {
+        match byte {
+            b'A'..=b'Z' => Some(byte - b'A'),
+            b'a'..=b'z' => Some(byte - b'a' + 26),
+            b'0'..=b'9' => Some(byte - b'0' + 52),
+            b'+' => Some(62),
+            b'/' => Some(63),
+            _ => None,
+        }
+    };
+    let mut output = Vec::with_capacity(data.len() / 4 * 3);
+    for chunk in data.chunks(4) {
+        let mut values = [0u8; 4];
+        let mut present = 0;
+        for (index, byte) in chunk.iter().enumerate() {
+            if *byte == b'=' {
+                if index < 2 {
+                    return None;
+                }
+            } else {
+                values[index] = value(*byte)?;
+                present = index + 1;
+            }
+        }
+        output.push((values[0] << 2) | (values[1] >> 4));
+        if present > 2 {
+            output.push((values[1] << 4) | (values[2] >> 2));
+        }
+        if present > 3 {
+            output.push((values[2] << 6) | values[3]);
+        }
+    }
+    Some(output)
+}
+
 fn format_number_locale(value: f64) -> String {
     if value.is_nan() {
         return "NaN".to_owned();
@@ -10149,6 +10278,29 @@ mod tests {
             error.expect("replacer throw should be catchable"),
             string("r")
         );
+    }
+
+    #[test]
+    fn evaluates_base64_globals() {
+        assert_eq!(run_value(r#"return btoa("abc");"#), string("YWJj"));
+        assert_eq!(run_value(r#"return btoa("é");"#), string("6Q=="));
+        assert_eq!(run_value(r#"return btoa("");"#), string(""));
+        assert_eq!(run_value(r#"return atob("YQ==");"#), string("a"));
+        assert_eq!(run_value(r#"return atob(" YQ== ");"#), string("a"));
+        assert_eq!(run_value(r#"return atob("YQ");"#), string("a"));
+        assert_eq!(run_value(r#"return atob("");"#), string(""));
+        assert_eq!(run_value(r#"return atob(btoa("é"));"#), string("é"));
+        assert_eq!(
+            run_value(r#"return atob("/w==").charCodeAt(0);"#),
+            number(255.0)
+        );
+        let error = run(r#"return atob("!!");"#).expect_err("invalid base64");
+        assert_eq!(error.kind(), super::RuntimeErrorKind::TypeError);
+        let error = run("return atob();").expect_err("missing argument");
+        assert_eq!(error.kind(), super::RuntimeErrorKind::TypeError);
+        let error = run(r#"return btoa("😀");"#).expect_err("non-Latin1 string");
+        assert_eq!(error.kind(), super::RuntimeErrorKind::TypeError);
+        assert_eq!(run_value(r#"return btoa("a", 1);"#), string("YQ=="));
     }
 
     #[test]
