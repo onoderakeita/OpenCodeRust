@@ -7392,7 +7392,7 @@ fn expand_scientific(text: &str) -> String {
         return text.to_owned();
     };
     let digits = mantissa.replace('.', "");
-    let point = mantissa.find('.').map_or(mantissa.len(), |index| index) as i32 + exponent;
+    let point = mantissa.find('.').unwrap_or(mantissa.len()) as i32 + exponent;
     if point <= 0 {
         format!("0.{}{}", "0".repeat((-point) as usize), digits)
     } else if point as usize >= digits.len() {
