@@ -3875,6 +3875,11 @@ impl<'a> Interpreter<'a> {
                     (_, None) => Value::Undefined,
                 })
             }
+            "String.isWellFormed" => {
+                as_string(receiver, span)?;
+                Ok(Value::Boolean(true))
+            }
+            "String.toWellFormed" => Ok(Value::String(as_string(receiver, span)?)),
             "String.at" => {
                 let text = as_string(receiver, span)?;
                 let characters: Vec<char> = text.chars().collect();
@@ -5123,6 +5128,8 @@ fn string_method(name: &str) -> Option<&'static str> {
         "replace" => "String.replace",
         "replaceAll" => "String.replaceAll",
         "codePointAt" => "String.codePointAt",
+        "isWellFormed" => "String.isWellFormed",
+        "toWellFormed" => "String.toWellFormed",
         "toString" => "String.toString",
         "concat" => "String.concat",
         _ => return None,
@@ -9855,6 +9862,10 @@ mod tests {
 
     #[test]
     fn supports_additional_string_and_math_methods() {
+        assert_eq!(
+            run_value(r#"return ["abc".isWellFormed(), "abc".toWellFormed()].join(",");"#),
+            string("true,abc")
+        );
         assert_eq!(
             run_value(r#"return "a-b-a".replaceAll("a", "x");"#),
             string("x-b-x")

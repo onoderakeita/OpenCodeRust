@@ -237,7 +237,8 @@ shadowingできる。
   push/pop/shift/unshift/splice/fill/copyWithinはin-placeで変更する。
 - `String` instance methods: split、slice、substring、substr、indexOf、lastIndexOf、
   includes、startsWith、endsWith、trim系 (trimLeft/trimRight含む)、
-  case変換、charAt、charCodeAt、codePointAt、at、padStart、padEnd、repeat、
+  case変換、charAt、charCodeAt、codePointAt、isWellFormed、toWellFormed、at、
+  padStart、padEnd、repeat、
   replace、replaceAll、concat、toString、localeCompare。upstreamに合わせて
   検索語・separator・paddingはstring、位置・limit・countはnumberだけを受け、
   他型は `TypeError` にする。`split()` は引数なしのときだけ `[receiver]` を
