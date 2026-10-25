@@ -162,7 +162,8 @@ shadowingできる。
 - `Number` statics: `Number.isNaN`、`isFinite`、`isInteger`、`isSafeInteger`、
   `parseInt`、`parseFloat`、定数 (`MAX_SAFE_INTEGER`、`MAX_VALUE`、
   `MIN_VALUE` など)。`parseInt` のradixはnumberまたは `undefined` だけを
-  受け、他型は `TypeError` にする。`MIN_VALUE` は最小の正のsubnormal
+  受け、他型は `TypeError` にする。`POSITIVE_INFINITY` / `NEGATIVE_INFINITY` /
+  `NaN` などallowlistにないmemberの読み取りは `InvalidDataValue` になる。`MIN_VALUE` は最小の正のsubnormal
   (`5e-324`) で、`f64::MIN_POSITIVE` ではない。
 - `String` statics: `String.fromCharCode`、`String.fromCodePoint`。
 - URI helpers: `encodeURI` / `encodeURIComponent` はUTF-8をpercent-encodeし、
@@ -339,8 +340,12 @@ shadowingできる。
 - 同期host呼び出しを中断するtimeout
 - `Math` / `JSON` / `console` / `Object` / `Array` / `Date` / `Map` / `Set` の
   未知メンバーは、upstreamのGlobalMethodReference (typeof `function`) ではなく
-  `undefined` になる。呼び出しはどちらも失敗する。
+  `undefined` になる。呼び出しはどちらも失敗する。また `Math` / `JSON` /
+  `console` は内部ではplain objectなので、`for...in` で列挙でき、consoleには
+  objectとして描画される (upstreamはopaque reference扱い)。
 - `localeCompare` はhost ICUではなくコードポイント順で比較する
+- `Error` は `name` / `message` を持つbranded valueで、upstreamのplain object
+  のように任意propertyを追加・変更できない
 - upstream parity test suiteの完全移植 (依存不要な差分コーパスは実装済み)
 
 ## Validation

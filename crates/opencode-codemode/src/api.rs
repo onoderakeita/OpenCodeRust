@@ -398,6 +398,30 @@ mod tests {
     }
 
     #[test]
+    fn rejects_non_data_results_and_preserves_logs() {
+        for code in [
+            "return () => 1;",
+            "return { f: () => 1 };",
+            "return [Promise.resolve(1)];",
+            "return tools;",
+        ] {
+            let failure = failure(execute_code(code, None, &ExecutionLimits::default()));
+            assert_eq!(
+                failure.error.kind,
+                DiagnosticKind::InvalidDataValue,
+                "{code}"
+            );
+        }
+        let failure = failure(execute_code(
+            "console.log(\"before\"); return () => 1;",
+            None,
+            &ExecutionLimits::default(),
+        ));
+        assert_eq!(failure.error.kind, DiagnosticKind::InvalidDataValue);
+        assert_eq!(failure.logs, ["before"]);
+    }
+
+    #[test]
     fn reports_parse_failures() {
         let failure = failure(execute_code("const = ;", None, &ExecutionLimits::default()));
         assert_eq!(failure.error.kind, DiagnosticKind::ParseError);

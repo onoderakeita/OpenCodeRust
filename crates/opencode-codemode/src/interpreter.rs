@@ -3921,7 +3921,21 @@ impl<'a> Interpreter<'a> {
                         span,
                     ));
                 }
-                Ok(builtin_property(name, key))
+                match builtin_property(name, key) {
+                    Value::Undefined
+                        if matches!(*name, "Object" | "Array" | "Date" | "Map" | "Set") =>
+                    {
+                        // Upstream returns a GlobalMethodReference here; the Rust
+                        // model documents the resulting `undefined` as a known gap.
+                        Ok(Value::Undefined)
+                    }
+                    Value::Undefined => Err(RuntimeError::new(
+                        RuntimeErrorKind::InvalidDataValue,
+                        "CodeMode runtime references are opaque and do not expose properties.",
+                        span,
+                    )),
+                    value => Ok(value),
+                }
             }
             Value::Error(error) => Ok(match key {
                 "name" => Value::String(error.kind.name().to_owned()),
@@ -3956,6 +3970,11 @@ impl<'a> Interpreter<'a> {
                 )),
             },
             Value::Number(_) => Ok(bound_method(object, number_method(key))),
+            Value::Boolean(_) => Err(RuntimeError::new(
+                RuntimeErrorKind::ExecutionFailure,
+                "Cannot access a property on a non-object value.",
+                span,
+            )),
             Value::ToolRef(path) => {
                 let mut next = path.as_ref().clone();
                 next.push(key.to_owned());
@@ -3965,7 +3984,11 @@ impl<'a> Interpreter<'a> {
                 "Cannot read a property of null or undefined.",
                 span,
             )),
-            _ => Ok(Value::Undefined),
+            Value::Function(_) | Value::BoundMethod { .. } => Err(RuntimeError::new(
+                RuntimeErrorKind::InvalidDataValue,
+                "CodeMode runtime references are opaque and do not expose properties.",
+                span,
+            )),
         }
     }
 
@@ -4994,8 +5017,8 @@ fn stringify_json_inner(
     depth: usize,
 ) -> Result<Option<String>, JsonStringifyError> {
     match value {
-        Value::Undefined | Value::ToolRef(_) => Ok(None),
-        Value::Function(_) | Value::Builtin(_) | Value::BoundMethod { .. } => {
+        Value::Undefined => Ok(None),
+        Value::Function(_) | Value::Builtin(_) | Value::BoundMethod { .. } | Value::ToolRef(_) => {
             Err(JsonStringifyError::NonData)
         }
         Value::Error(error) => {
@@ -6613,13 +6636,15 @@ mod tests {
         let source = r#"
             const map = [1, 2].map;
             const keys = Object.keys;
-            return [typeof map, typeof keys, map.length];
+            return [typeof map, typeof keys];
         "#;
         let value = run_value(source);
         let array = value.as_array().expect("array result");
         assert_eq!(array[0], string("function"));
         assert_eq!(array[1], string("function"));
-        assert_eq!(array[2], Value::Undefined);
+        let error = run("const map = [1, 2].map; return map.length;")
+            .expect_err("runtime references are opaque");
+        assert_eq!(error.kind(), super::RuntimeErrorKind::InvalidDataValue);
     }
 
     #[test]
@@ -7515,6 +7540,10 @@ mod tests {
             .expect_err("functions are not data");
         assert_eq!(error.kind(), super::RuntimeErrorKind::InvalidDataValue);
         assert!(error.message().contains("data only"));
+
+        let error = run("return JSON.stringify(tools);").expect_err("tool refs are not data");
+        assert_eq!(error.kind(), super::RuntimeErrorKind::InvalidDataValue);
+        assert!(error.message().contains("data only"));
     }
 
     #[test]
@@ -8374,15 +8403,18 @@ mod tests {
         );
         let error = run("return Math.sin(1);").expect_err("Math.sin is not implemented");
         assert_eq!(error.kind(), super::RuntimeErrorKind::TypeError);
-        assert_eq!(
-            run_value("return typeof Number.POSITIVE_INFINITY;"),
-            string("undefined")
-        );
-        assert_eq!(
-            run_value("return typeof Number.NEGATIVE_INFINITY;"),
-            string("undefined")
-        );
-        assert_eq!(run_value("return typeof Number.NaN;"), string("undefined"));
+        for source in [
+            "return Number.POSITIVE_INFINITY;",
+            "return Number.NEGATIVE_INFINITY;",
+            "return Number.NaN;",
+        ] {
+            let error = run(source).expect_err("unsupported Number member");
+            assert_eq!(
+                error.kind(),
+                super::RuntimeErrorKind::InvalidDataValue,
+                "{source}"
+            );
+        }
         assert_eq!(run_value("return typeof isNaN;"), string("undefined"));
         assert_eq!(run_value("return typeof isFinite;"), string("undefined"));
         let error = run("return isNaN(1);").expect_err("isNaN is not a CodeMode global");
@@ -9033,6 +9065,8 @@ mod tests {
             run_value(r#"return Object.keys({ "1.5": 1, "-1": 2 }).join(",");"#),
             string("1.5,-1")
         );
+        let error = run("return true.toString;").expect_err("booleans are not objects");
+        assert_eq!(error.kind(), super::RuntimeErrorKind::ExecutionFailure);
         assert_eq!(
             run_value(r#"return JSON.stringify({ b: 1, 2: 2, 1: 3 });"#),
             string(r#"{"1":3,"2":2,"b":1}"#)
