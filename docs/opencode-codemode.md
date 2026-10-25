@@ -274,6 +274,8 @@ shadowingできる。
   `toPrecision` / `toExponential` は最短表記ではなく正確な10進展開から
   指数を決めるため、`(1e-7).toPrecision(17)` は `9.9999999999999995e-8`
   になる。
+- `Boolean` instance methods: toString、valueOf。boolean primitiveの未知
+  propertyは `undefined` になる。
 - 数値の文字列化はECMAScriptの `Number::toString` に合わせ、指数が -6 未満または
   20 超のとき指数表記 (`1e+21`、`1e-7`) を使う。
 - `Map`: `new Map(entries | Map)`、get、set、has、delete、clear、forEach、

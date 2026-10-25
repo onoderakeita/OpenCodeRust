@@ -4123,6 +4123,16 @@ impl<'a> Interpreter<'a> {
                 let date = as_date_ref(receiver, span)?;
                 Ok(apply_date_setter(&date, method, arguments))
             }
+            "Boolean.toString" => Ok(Value::String(match receiver {
+                Value::Boolean(value) => value.to_string(),
+                _ => {
+                    return Err(RuntimeError::type_error(
+                        "Boolean.toString requires a boolean receiver.",
+                        span,
+                    ))
+                }
+            })),
+            "Boolean.valueOf" => Ok(receiver.clone()),
             "Object.toString" | "Object.toLocaleString" => {
                 Ok(Value::String(class_tag(receiver).to_owned()))
             }
@@ -4859,11 +4869,11 @@ impl<'a> Interpreter<'a> {
                 )),
             },
             Value::Number(_) => Ok(bound_method(object, number_method(key))),
-            Value::Boolean(_) => Err(RuntimeError::new(
-                RuntimeErrorKind::ExecutionFailure,
-                "Cannot access a property on a non-object value.",
-                span,
-            )),
+            Value::Boolean(_) => Ok(match key {
+                "toString" => bound_method(object, Some("Boolean.toString")),
+                "valueOf" => bound_method(object, Some("Boolean.valueOf")),
+                _ => Value::Undefined,
+            }),
             Value::ToolRef(path) => {
                 let mut next = path.as_ref().clone();
                 next.push(key.to_owned());
@@ -10772,8 +10782,12 @@ mod tests {
             run_value(r#"return Object.keys({ "1.5": 1, "-1": 2 }).join(",");"#),
             string("1.5,-1")
         );
-        let error = run("return true.toString;").expect_err("booleans are not objects");
-        assert_eq!(error.kind(), super::RuntimeErrorKind::ExecutionFailure);
+        assert_eq!(run_value("return true.toString();"), string("true"));
+        assert_eq!(run_value("return true.valueOf();"), Value::Boolean(true));
+        assert_eq!(
+            run_value("return typeof true.missing;"),
+            string("undefined")
+        );
         assert_eq!(
             run_value(
                 "return [true in { true: 1 }, null in { null: 1 }, \
