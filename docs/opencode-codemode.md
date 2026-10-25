@@ -349,6 +349,9 @@ shadowingできる。
 
 ## 未実装
 
+- 現行実装はbaseline `941e71d` に合わせている。最新 `dev` (`5be4b16`) の
+  test262準拠強化、RegExp/URL/Web API、generator/for-await、iterator helpers、
+  bytes、Number定数の再追加などは未追随。
 - RegExp、URL、`String.normalize`
 - TypeScriptの型消去・transpile parity
 - 非同期tool実行と未await rejectionの診断
@@ -383,5 +386,13 @@ UTC固定Date・plain-object Errorなどupstream固有の差分をレビュー�
 
 ## References
 
-- [upstream CodeMode](https://github.com/anomalyco/opencode/tree/941e71dbbb/packages/codemode)
+- ローカル参照checkout: `/data/data/com.termux/files/home/projects/opencode-official`
+  (`anomalyco/opencode`、`dev` @ `5be4b1642bf8d84f69b3c53e24147b85637bba1c`、
+  2026-10-25、`packages/codemode` v2.1.4)。今後の調査はこの作業ツリーを使う。
+- 現在のRust実装が監査したbaseline: `941e71dbbb94ea5b32226c2845585992dadb361f`
+  (2026-08-10)。最新の `dev` はinterpreter/stdlibが大幅に再構成されており、
+  test262・RegExp・URL・Web API・generator・for-await等が追加されている。
+  未監査の差分は別タスクで扱う。
+- [upstream CodeMode (baseline)](https://github.com/anomalyco/opencode/tree/941e71dbbb/packages/codemode)
+- [upstream CodeMode (latest dev)](https://github.com/anomalyco/opencode/tree/5be4b1642bf8d84f69b3c53e24147b85637bba1c/packages/codemode)
 - [Oxc parser](https://github.com/oxc-project/oxc/tree/main/crates/oxc_parser)
