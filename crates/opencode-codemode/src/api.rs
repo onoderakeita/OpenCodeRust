@@ -274,9 +274,17 @@ fn suggestions(kind: DiagnosticKind) -> Vec<String> {
                 "Return plain data rather than functions, promises, or circular values.".to_owned(),
             ]
         }
+        DiagnosticKind::UnsupportedSyntax => vec![
+            "Use the supported CodeMode subset: data literals, destructuring, optional chaining, \
+             template literals, conditionals, switch, loops, arrow functions, spread, try/catch, \
+             Array/String/Object/Math/JSON helpers, console, Promise combinators, and tools.* calls."
+                .to_owned(),
+        ],
+        DiagnosticKind::UnknownTool => vec![
+            "Use Object.keys(tools) to list namespaces or tools.$codemode.search to find a tool."
+                .to_owned(),
+        ],
         DiagnosticKind::ParseError
-        | DiagnosticKind::UnsupportedSyntax
-        | DiagnosticKind::UnknownTool
         | DiagnosticKind::InvalidToolInput
         | DiagnosticKind::InvalidToolOutput
         | DiagnosticKind::ToolFailure
@@ -473,6 +481,7 @@ mod tests {
             &ExecutionLimits::default(),
         ));
         assert_eq!(failure.error.kind, DiagnosticKind::UnknownTool);
+        assert!(!failure.error.suggestions.is_empty());
         assert_eq!(failure.tool_calls, ["nope"]);
     }
 

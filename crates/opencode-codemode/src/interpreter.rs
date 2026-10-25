@@ -5223,10 +5223,23 @@ fn own_keys(value: &Value) -> Vec<String> {
     }
 }
 
-/// Whitespace trimmed by `String.prototype.trim`, including the BOM that
-/// `char::is_whitespace` does not cover.
+/// Whitespace trimmed by `String.prototype.trim` and numeric parsers: the
+/// ECMAScript WhiteSpace + LineTerminator set. Rust's `is_whitespace` also
+/// includes U+0085 (NEL), which JavaScript does not treat as whitespace.
 fn is_js_whitespace(character: char) -> bool {
-    character.is_whitespace() || character == '\u{FEFF}'
+    matches!(
+        character,
+        '\u{0009}' | '\u{000B}' | '\u{000C}' | '\u{0020}' | '\u{00A0}' | '\u{1680}' | '\u{2000}'
+            ..='\u{200A}'
+                | '\u{2028}'
+                | '\u{2029}'
+                | '\u{202F}'
+                | '\u{205F}'
+                | '\u{3000}'
+                | '\u{FEFF}'
+                | '\n'
+                | '\r'
+    )
 }
 
 fn json_to_value(json: &serde_json::Value, span: Span) -> Result<Value, RuntimeError> {
@@ -9735,6 +9748,10 @@ mod tests {
         );
         assert_eq!(run_value(r#"return "\u{FEFF}x".trimStart();"#), string("x"));
         assert_eq!(run_value(r#"return "x\u{FEFF}".trimEnd();"#), string("x"));
+        assert_eq!(
+            run_value(r#"return "\u{0085}x\u{0085}".trim().length;"#),
+            number(3.0)
+        );
     }
 
     #[test]
