@@ -170,8 +170,9 @@ shadowingできる。
   childからparentへ `(key, value)` で呼ぶ。objectで `undefined` を返すと
   propertyを削除し、arrayでは要素を `undefined` にしてlengthを維持する。
   第3引数のindent (数値0..10または先頭10文字の文字列) を受け付ける。
-  stringifyのreplacer配列・関数は `UnsupportedSyntax` にする。Errorは
-  indent指定時も整形する。
+  stringifyのreplacer配列はproperty allowlistとして、指定順・重複除去・
+  数値keyの文字列化を適用する。replacer関数は `UnsupportedSyntax` にする。
+  Errorはindent指定時も整形する。
 - `Number` statics: `Number.isNaN`、`isFinite`、`isInteger`、`isSafeInteger`、
   `parseInt`、`parseFloat`、定数 (`MAX_SAFE_INTEGER`、`MAX_VALUE`、
   `MIN_VALUE`、`EPSILON`、`NaN`、`POSITIVE_INFINITY`、`NEGATIVE_INFINITY`)。

@@ -2189,9 +2189,26 @@ impl<'a> Interpreter<'a> {
                 Ok(value)
             }
             "JSON.stringify" => {
-                if let Some(Value::Array(_)) | Some(Value::Function(_)) = arguments.get(1) {
-                    return Err(RuntimeError::unsupported("JSON.stringify replacer", _span));
-                }
+                let properties = match arguments.get(1) {
+                    Some(Value::Array(array)) => {
+                        let mut list = Vec::new();
+                        for item in array.borrow().iter() {
+                            let key = match item {
+                                Value::String(text) => text.clone(),
+                                Value::Number(number) => format_number(*number),
+                                _ => continue,
+                            };
+                            if !list.contains(&key) {
+                                list.push(key);
+                            }
+                        }
+                        Some(list)
+                    }
+                    Some(Value::Function(_)) => {
+                        return Err(RuntimeError::unsupported("JSON.stringify replacer", _span))
+                    }
+                    _ => None,
+                };
                 let indent = match arguments.get(2) {
                     Some(Value::Number(number)) => {
                         let count = if number.is_nan() {
@@ -2204,7 +2221,7 @@ impl<'a> Interpreter<'a> {
                     Some(Value::String(text)) => text.chars().take(10).collect(),
                     _ => String::new(),
                 };
-                match stringify_json_with_indent(&argument(0), &indent) {
+                match stringify_json_with_indent(&argument(0), &indent, properties.as_deref()) {
                     Ok(Some(text)) => Ok(Value::String(text)),
                     Ok(None) => Ok(Value::Undefined),
                     Err(JsonStringifyError::Circular) => Err(RuntimeError::new(
@@ -6463,8 +6480,9 @@ enum JsonStringifyError {
 fn stringify_json_with_indent(
     value: &Value,
     indent: &str,
+    properties: Option<&[String]>,
 ) -> Result<Option<String>, JsonStringifyError> {
-    stringify_json_inner(value, &mut Vec::new(), indent, 0)
+    stringify_json_inner(value, &mut Vec::new(), indent, 0, properties)
 }
 
 fn stringify_json_inner(
@@ -6472,6 +6490,7 @@ fn stringify_json_inner(
     ancestors: &mut Vec<usize>,
     indent: &str,
     depth: usize,
+    properties: Option<&[String]>,
 ) -> Result<Option<String>, JsonStringifyError> {
     match value {
         Value::Undefined => Ok(None),
@@ -6479,15 +6498,44 @@ fn stringify_json_inner(
             Err(JsonStringifyError::NonData)
         }
         Value::Error(error) => {
-            let name = serde_json::to_string(error.kind.name()).unwrap_or_default();
-            let message = serde_json::to_string(&error.message).unwrap_or_default();
+            let all = [
+                ("name", error.kind.name().to_owned()),
+                ("message", error.message.clone()),
+            ];
+            let entries = match properties {
+                Some(properties) => properties
+                    .iter()
+                    .filter_map(|key| {
+                        all.iter()
+                            .find(|(name, _)| name == key)
+                            .map(|(name, value)| (*name, value.clone()))
+                    })
+                    .collect::<Vec<_>>(),
+                None => all
+                    .iter()
+                    .map(|(name, value)| (*name, value.clone()))
+                    .collect(),
+            };
+            let mut parts = Vec::new();
+            for (key, value) in entries {
+                let value = serde_json::to_string(&value).unwrap_or_default();
+                if indent.is_empty() {
+                    parts.push(format!("\"{key}\":{value}"));
+                } else {
+                    parts.push(format!("\"{key}\": {value}"));
+                }
+            }
             if indent.is_empty() {
-                Ok(Some(format!("{{\"name\":{name},\"message\":{message}}}")))
+                Ok(Some(format!("{{{}}}", parts.join(","))))
+            } else if parts.is_empty() {
+                Ok(Some("{}".to_owned()))
             } else {
                 let inner = indent.repeat(depth + 1);
-                let outer = indent.repeat(depth);
+                let separator = format!(",\n{inner}");
                 Ok(Some(format!(
-                    "{{\n{inner}\"name\": {name},\n{inner}\"message\": {message}\n{outer}}}"
+                    "{{\n{inner}{}\n{}}}",
+                    parts.join(&separator),
+                    indent.repeat(depth)
                 )))
             }
         }
@@ -6520,7 +6568,7 @@ fn stringify_json_inner(
             let mut parts = Vec::new();
             for item in items.borrow().iter() {
                 parts.push(
-                    match stringify_json_inner(item, ancestors, indent, depth + 1)? {
+                    match stringify_json_inner(item, ancestors, indent, depth + 1, properties)? {
                         Some(text) => text,
                         None => "null".to_owned(),
                     },
@@ -6552,9 +6600,18 @@ fn stringify_json_inner(
             ancestors.push(identity);
             let source = object.borrow();
             let mut parts = Vec::new();
-            for key in ordered_keys(&source) {
+            let keys = match properties {
+                Some(properties) => properties
+                    .iter()
+                    .filter(|key| source.contains_key(*key))
+                    .cloned()
+                    .collect::<Vec<_>>(),
+                None => ordered_keys(&source),
+            };
+            for key in keys {
                 let value = source.get(&key).expect("ordered keys exist");
-                let Some(serialized) = stringify_json_inner(value, ancestors, indent, depth + 1)?
+                let Some(serialized) =
+                    stringify_json_inner(value, ancestors, indent, depth + 1, properties)?
                 else {
                     continue;
                 };
@@ -9780,6 +9837,49 @@ mod tests {
     }
 
     #[test]
+    fn evaluates_json_stringify_property_lists() {
+        assert_eq!(
+            run_value(r#"return JSON.stringify({ b: 1, a: 2 }, ["a", "b"]);"#),
+            string(r#"{"a":2,"b":1}"#)
+        );
+        assert_eq!(
+            run_value(r#"return JSON.stringify({ a: 1 }, ["a", "a"]);"#),
+            string(r#"{"a":1}"#)
+        );
+        assert_eq!(
+            run_value(r#"return JSON.stringify({ a: 1 }, []);"#),
+            string("{}")
+        );
+        assert_eq!(
+            run_value(r#"return JSON.stringify({ 1: "a", 2: "b" }, [1]);"#),
+            string(r#"{"1":"a"}"#)
+        );
+        assert_eq!(
+            run_value(r#"return JSON.stringify({ a: { b: 1, c: 2 }, d: 3 }, ["a", "b", "d"]);"#),
+            string(r#"{"a":{"b":1},"d":3}"#)
+        );
+        assert_eq!(
+            run_value(r#"return JSON.stringify([{ a: 1, b: 2 }], ["a"]);"#),
+            string(r#"[{"a":1}]"#)
+        );
+        assert_eq!(
+            run_value(r#"return JSON.stringify(new Error("x"), ["message"]);"#),
+            string(r#"{"message":"x"}"#)
+        );
+        assert_eq!(
+            run_value(r#"return JSON.stringify({ a: 1, b: 2 }, ["b"], "  ");"#),
+            string("{\n  \"b\": 2\n}")
+        );
+        assert_eq!(
+            run_value("return JSON.stringify({ a: 1 }, 42);"),
+            string(r#"{"a":1}"#)
+        );
+        let error = run("return JSON.stringify({ a: 1 }, () => 1);")
+            .expect_err("function replacer is still unsupported");
+        assert_eq!(error.kind(), super::RuntimeErrorKind::UnsupportedSyntax);
+    }
+
+    #[test]
     fn evaluates_maps_with_same_value_zero_keys() {
         assert_eq!(
             run_value(
@@ -11345,9 +11445,10 @@ mod tests {
             run_value("return JSON.stringify({ a: 1 }, null, 0);"),
             string(r#"{"a":1}"#)
         );
-        let error = run(r#"return JSON.stringify({ a: 1 }, ["a"]);"#)
-            .expect_err("replacer arrays are unsupported");
-        assert_eq!(error.kind(), super::RuntimeErrorKind::UnsupportedSyntax);
+        assert_eq!(
+            run_value(r#"return JSON.stringify({ a: 1 }, ["a"]);"#),
+            string(r#"{"a":1}"#)
+        );
         let error = run("const a = []; a[0] = a; return JSON.stringify(a);")
             .expect_err("circular assignment should fail");
         assert_eq!(error.kind(), super::RuntimeErrorKind::InvalidDataValue);
