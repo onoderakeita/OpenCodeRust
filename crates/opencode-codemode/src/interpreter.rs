@@ -4015,7 +4015,7 @@ impl<'a> Interpreter<'a> {
                     all,
                 )))
             }
-            "String.toString" => Ok(Value::String(as_string(receiver, span)?)),
+            "String.toString" | "String.valueOf" => Ok(Value::String(as_string(receiver, span)?)),
             "String.concat" => {
                 let mut text = as_string(receiver, span)?;
                 for index in 0..arguments.len() {
@@ -5286,6 +5286,7 @@ fn string_method(name: &str) -> Option<&'static str> {
         "isWellFormed" => "String.isWellFormed",
         "toWellFormed" => "String.toWellFormed",
         "toString" => "String.toString",
+        "valueOf" => "String.valueOf",
         "concat" => "String.concat",
         _ => return None,
     })
@@ -10160,6 +10161,7 @@ mod tests {
             string("a,a,97")
         );
         assert_eq!(run_value(r#"return "abc".toString();"#), string("abc"));
+        assert_eq!(run_value(r#"return "abc".valueOf();"#), string("abc"));
 
         assert_eq!(run_value("return Math.cbrt(27);"), number(3.0));
         assert_eq!(run_value("return Math.log2(8);"), number(3.0));
