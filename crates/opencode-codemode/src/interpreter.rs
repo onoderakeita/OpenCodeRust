@@ -187,6 +187,7 @@ impl std::error::Error for RuntimeError {}
 struct Binding {
     value: Value,
     mutable: bool,
+    initialized: bool,
 }
 
 #[derive(Debug, Default)]
@@ -238,6 +239,20 @@ enum Flow {
     Return(Value),
     Break,
     Continue,
+}
+
+/// A member/identifier reference resolved exactly once for compound updates,
+/// matching upstream `modifyMember` and preserving side-effect order.
+enum AssignmentPlace {
+    Identifier {
+        name: String,
+        span: Span,
+    },
+    Member {
+        object: Value,
+        key: String,
+        span: Span,
+    },
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -438,6 +453,7 @@ impl<'a> Interpreter<'a> {
                 Binding {
                     value,
                     mutable: false,
+                    initialized: true,
                 },
             );
         }
@@ -869,6 +885,13 @@ impl<'a> Interpreter<'a> {
                 Some(test) => {
                     if matched.is_none() {
                         let value = self.eval_expression(test)?;
+                        if contains_opaque_reference(&value, &mut Vec::new()) {
+                            return Err(RuntimeError::new(
+                                RuntimeErrorKind::InvalidDataValue,
+                                "Switch case values must be data values in CodeMode.",
+                                test.span(),
+                            ));
+                        }
                         if strict_equals(&discriminant, &value) {
                             matched = Some(index);
                             break;
@@ -934,12 +957,19 @@ impl<'a> Interpreter<'a> {
                 Ok(Value::String(output))
             }
             Expression::Identifier(identifier) => {
-                self.lookup(identifier.name.as_str()).ok_or_else(|| {
+                let binding = self.lookup(identifier.name.as_str()).ok_or_else(|| {
                     RuntimeError::reference(
                         format!("Unknown identifier '{}'.", identifier.name),
                         identifier.span,
                     )
-                })
+                })?;
+                if !binding.initialized {
+                    return Err(RuntimeError::reference(
+                        format!("Cannot access '{}' before initialization.", identifier.name),
+                        identifier.span,
+                    ));
+                }
+                Ok(binding.value)
             }
             Expression::ArrayExpression(array) => {
                 let mut values = Vec::new();
@@ -1317,18 +1347,146 @@ impl<'a> Interpreter<'a> {
         }
     }
 
+    fn resolve_place(
+        &mut self,
+        target: &'a SimpleAssignmentTarget<'a>,
+    ) -> Result<AssignmentPlace, RuntimeError> {
+        match target {
+            SimpleAssignmentTarget::AssignmentTargetIdentifier(identifier) => {
+                Ok(AssignmentPlace::Identifier {
+                    name: identifier.name.as_str().to_owned(),
+                    span: identifier.span,
+                })
+            }
+            SimpleAssignmentTarget::TSAsExpression(expression) => {
+                self.resolve_expression_place(&expression.expression)
+            }
+            SimpleAssignmentTarget::TSNonNullExpression(expression) => {
+                self.resolve_expression_place(&expression.expression)
+            }
+            SimpleAssignmentTarget::TSSatisfiesExpression(expression) => {
+                self.resolve_expression_place(&expression.expression)
+            }
+            SimpleAssignmentTarget::TSTypeAssertion(expression) => {
+                self.resolve_expression_place(&expression.expression)
+            }
+            _ => match target.as_member_expression() {
+                Some(member) => self.resolve_member_place(member),
+                None => Err(RuntimeError::type_error(
+                    "Assignment target must be an identifier or member expression.",
+                    target.span(),
+                )),
+            },
+        }
+    }
+
+    fn resolve_expression_place(
+        &mut self,
+        expression: &'a Expression<'a>,
+    ) -> Result<AssignmentPlace, RuntimeError> {
+        if let Expression::Identifier(identifier) = expression {
+            return Ok(AssignmentPlace::Identifier {
+                name: identifier.name.as_str().to_owned(),
+                span: identifier.span,
+            });
+        }
+        if let Some(member) = expression.as_member_expression() {
+            return self.resolve_member_place(member);
+        }
+        Err(RuntimeError::type_error(
+            "Assignment target must be an identifier or member expression.",
+            expression.span(),
+        ))
+    }
+
+    fn resolve_member_place(
+        &mut self,
+        member: &'a MemberExpression<'a>,
+    ) -> Result<AssignmentPlace, RuntimeError> {
+        match member {
+            MemberExpression::StaticMemberExpression(member) => {
+                let object = self.eval_expression(&member.object)?;
+                Ok(AssignmentPlace::Member {
+                    object,
+                    key: member.property.name.as_str().to_owned(),
+                    span: member.span,
+                })
+            }
+            MemberExpression::ComputedMemberExpression(member) => {
+                let object = self.eval_expression(&member.object)?;
+                let key = self.eval_expression(&member.expression)?;
+                let key = to_property_key(&key, member.span)?;
+                Ok(AssignmentPlace::Member {
+                    object,
+                    key,
+                    span: member.span,
+                })
+            }
+            MemberExpression::PrivateFieldExpression(member) => Err(RuntimeError::unsupported(
+                "PrivateFieldExpression",
+                member.span,
+            )),
+        }
+    }
+
+    fn read_place(&self, place: &AssignmentPlace) -> Result<Value, RuntimeError> {
+        match place {
+            AssignmentPlace::Identifier { name, span } => {
+                let binding = self.lookup(name).ok_or_else(|| {
+                    RuntimeError::reference(format!("Unknown identifier '{name}'."), *span)
+                })?;
+                if !binding.initialized {
+                    return Err(RuntimeError::reference(
+                        format!("Cannot access '{name}' before initialization."),
+                        *span,
+                    ));
+                }
+                Ok(binding.value)
+            }
+            AssignmentPlace::Member { object, key, span } => self.get_property(object, key, *span),
+        }
+    }
+
+    fn write_place(&mut self, place: &AssignmentPlace, value: Value) -> Result<(), RuntimeError> {
+        match place {
+            AssignmentPlace::Identifier { name, span } => {
+                self.assign_identifier(name, value, *span)
+            }
+            AssignmentPlace::Member { object, key, span } => {
+                self.set_property(object, key, value, *span)
+            }
+        }
+    }
+
     fn eval_assignment(
         &mut self,
         expression: &'a oxc_ast::ast::AssignmentExpression<'a>,
     ) -> Result<Value, RuntimeError> {
         if expression.operator.is_assign() {
             let value = self.eval_expression(&expression.right)?;
-            self.assign_target(&expression.left, value.clone())?;
+            if let Some(simple) = expression.left.as_simple_assignment_target() {
+                let place = self.resolve_place(simple)?;
+                self.write_place(&place, value.clone())?;
+            } else {
+                self.assign_target(&expression.left, value.clone())?;
+            }
             return Ok(value);
         }
 
         if let Some(logical) = expression.operator.to_logical_operator() {
-            let current = self.read_target(&expression.left)?;
+            let simple = expression
+                .left
+                .as_simple_assignment_target()
+                .ok_or_else(|| {
+                    RuntimeError::type_error(
+                        "Assignment target must be an identifier or member expression.",
+                        expression.left.span(),
+                    )
+                })?;
+            // Logical assignment resolves the place once before deciding
+            // whether the RHS runs, so side-effecting keys/objects run once.
+            let place = self.resolve_place(simple)?;
+            let current = self.read_place(&place)?;
             let should_assign = match logical {
                 LogicalOperator::Or => !is_truthy(&current),
                 LogicalOperator::And => is_truthy(&current),
@@ -1338,18 +1496,29 @@ impl<'a> Interpreter<'a> {
                 return Ok(current);
             }
             let value = self.eval_expression(&expression.right)?;
-            self.assign_target(&expression.left, value.clone())?;
+            self.write_place(&place, value.clone())?;
             return Ok(value);
         }
 
+        let simple = expression
+            .left
+            .as_simple_assignment_target()
+            .ok_or_else(|| {
+                RuntimeError::type_error(
+                    "Assignment target must be an identifier or member expression.",
+                    expression.left.span(),
+                )
+            })?;
+        // Upstream evaluates the RHS before resolving the compound target.
+        let right = self.eval_expression(&expression.right)?;
+        let place = self.resolve_place(simple)?;
+        let current = self.read_place(&place)?;
         let binary = expression
             .operator
             .to_binary_operator()
             .ok_or_else(|| RuntimeError::unsupported("AssignmentExpression", expression.span))?;
-        let current = self.read_target(&expression.left)?;
-        let right = self.eval_expression(&expression.right)?;
         let value = self.apply_binary(binary, &current, &right, expression.span)?;
-        self.assign_target(&expression.left, value.clone())?;
+        self.write_place(&place, value.clone())?;
         Ok(value)
     }
 
@@ -1360,13 +1529,14 @@ impl<'a> Interpreter<'a> {
         prefix: bool,
         span: Span,
     ) -> Result<Value, RuntimeError> {
-        let current = self.read_simple_target(target)?;
+        let place = self.resolve_place(target)?;
+        let current = self.read_place(&place)?;
         let old = to_number(&current);
         let next = match operator {
             UpdateOperator::Increment => old + 1.0,
             UpdateOperator::Decrement => old - 1.0,
         };
-        self.assign_simple_target(target, Value::Number(next))?;
+        self.write_place(&place, Value::Number(next))?;
         let _ = span;
         Ok(Value::Number(if prefix { next } else { old }))
     }
@@ -3601,6 +3771,29 @@ impl<'a> Interpreter<'a> {
         parameters: &'a oxc_ast::ast::FormalParameters<'a>,
         arguments: Vec<Value>,
     ) -> Result<(), RuntimeError> {
+        // Seed every parameter name as a TDZ slot first so a default that
+        // forward-references a later parameter fails instead of falling through
+        // to an outer binding with the same name.
+        let mut names = Vec::new();
+        for parameter in &parameters.items {
+            collect_binding_names(&parameter.pattern, &mut names);
+        }
+        if let Some(rest) = &parameters.rest {
+            collect_binding_names(&rest.rest.argument, &mut names);
+        }
+        {
+            let mut scope = self.scope.borrow_mut();
+            for name in names {
+                scope.bindings.insert(
+                    name.to_owned(),
+                    Binding {
+                        value: Value::Undefined,
+                        mutable: true,
+                        initialized: false,
+                    },
+                );
+            }
+        }
         for (index, parameter) in parameters.items.iter().enumerate() {
             let mut value = arguments.get(index).cloned().unwrap_or(Value::Undefined);
             if value.is_undefined() {
@@ -3748,15 +3941,22 @@ impl<'a> Interpreter<'a> {
             Rc::clone(&self.scope)
         };
         let mut scope = scope.borrow_mut();
-        if scope.bindings.contains_key(name) {
-            return Err(RuntimeError::reference(
-                format!("Identifier '{name}' has already been declared."),
-                span,
-            ));
+        if let Some(existing) = scope.bindings.get(name) {
+            if existing.initialized {
+                return Err(RuntimeError::reference(
+                    format!("Identifier '{name}' has already been declared."),
+                    span,
+                ));
+            }
         }
-        scope
-            .bindings
-            .insert(name.to_owned(), Binding { value, mutable });
+        scope.bindings.insert(
+            name.to_owned(),
+            Binding {
+                value,
+                mutable,
+                initialized: true,
+            },
+        );
         Ok(())
     }
 
@@ -3777,21 +3977,15 @@ impl<'a> Interpreter<'a> {
         }
     }
 
-    fn lookup(&self, name: &str) -> Option<Value> {
+    fn lookup(&self, name: &str) -> Option<Binding> {
         let mut scope = Rc::clone(&self.scope);
         loop {
-            let (value, parent) = {
+            let (binding, parent) = {
                 let current = scope.borrow();
-                (
-                    current
-                        .bindings
-                        .get(name)
-                        .map(|binding| binding.value.clone()),
-                    current.parent.clone(),
-                )
+                (current.bindings.get(name).cloned(), current.parent.clone())
             };
-            if let Some(value) = value {
-                return Some(value);
+            if let Some(binding) = binding {
+                return Some(binding);
             }
             let parent = parent?;
             scope = parent;
@@ -3829,51 +4023,6 @@ impl<'a> Interpreter<'a> {
                     ));
                 }
             }
-        }
-    }
-
-    fn read_target(&mut self, target: &'a AssignmentTarget<'a>) -> Result<Value, RuntimeError> {
-        let simple = target.as_simple_assignment_target().ok_or_else(|| {
-            RuntimeError::type_error(
-                "Assignment target must be an identifier or member expression.",
-                target.span(),
-            )
-        })?;
-        self.read_simple_target(simple)
-    }
-
-    fn read_simple_target(
-        &mut self,
-        target: &'a SimpleAssignmentTarget<'a>,
-    ) -> Result<Value, RuntimeError> {
-        match target {
-            SimpleAssignmentTarget::AssignmentTargetIdentifier(identifier) => {
-                self.lookup(identifier.name.as_str()).ok_or_else(|| {
-                    RuntimeError::reference(
-                        format!("Unknown identifier '{}'.", identifier.name),
-                        identifier.span,
-                    )
-                })
-            }
-            SimpleAssignmentTarget::TSAsExpression(expression) => {
-                self.eval_expression(&expression.expression)
-            }
-            SimpleAssignmentTarget::TSNonNullExpression(expression) => {
-                self.eval_expression(&expression.expression)
-            }
-            SimpleAssignmentTarget::TSSatisfiesExpression(expression) => {
-                self.eval_expression(&expression.expression)
-            }
-            SimpleAssignmentTarget::TSTypeAssertion(expression) => {
-                self.eval_expression(&expression.expression)
-            }
-            _ => match target.as_member_expression() {
-                Some(member) => self.eval_member(member),
-                None => Err(RuntimeError::type_error(
-                    "Assignment target must be an identifier or member expression.",
-                    target.span(),
-                )),
-            },
         }
     }
 
@@ -4850,6 +4999,18 @@ fn parse_float(text: &str) -> f64 {
     if text.is_empty() {
         return f64::NAN;
     }
+    // Rust's FromStr accepts inf/infinity case-insensitively; parseFloat only
+    // recognizes the exact "Infinity" spelling as a valid prefix.
+    let unsigned = text
+        .strip_prefix('+')
+        .or_else(|| text.strip_prefix('-'))
+        .unwrap_or(text);
+    if unsigned.len() >= 3
+        && unsigned.as_bytes()[..3].eq_ignore_ascii_case(b"inf")
+        && !unsigned.starts_with("Infinity")
+    {
+        return f64::NAN;
+    }
     let mut best = None;
     for (index, _) in text.char_indices().skip(1) {
         if let Ok(value) = text[..index].parse::<f64>() {
@@ -4884,6 +5045,19 @@ fn string_to_number(text: &str) -> f64 {
                 Err(_) => f64::NAN,
             };
         }
+    }
+    // Rust accepts "inf"/"infinity" case-insensitively; ECMAScript only
+    // accepts the exact spellings "Infinity", "+Infinity", and "-Infinity".
+    let unsigned = text
+        .strip_prefix('+')
+        .or_else(|| text.strip_prefix('-'))
+        .unwrap_or(text);
+    if unsigned.eq_ignore_ascii_case("inf") || unsigned.eq_ignore_ascii_case("infinity") {
+        return match text {
+            "Infinity" | "+Infinity" => f64::INFINITY,
+            "-Infinity" => f64::NEG_INFINITY,
+            _ => f64::NAN,
+        };
     }
     text.parse::<f64>().unwrap_or(f64::NAN)
 }
@@ -6423,6 +6597,31 @@ fn type_of(value: &Value) -> &'static str {
     }
 }
 
+fn collect_binding_names<'a>(pattern: &'a BindingPattern<'a>, out: &mut Vec<&'a str>) {
+    match pattern {
+        BindingPattern::BindingIdentifier(identifier) => out.push(identifier.name.as_str()),
+        BindingPattern::AssignmentPattern(assignment) => {
+            collect_binding_names(&assignment.left, out);
+        }
+        BindingPattern::ObjectPattern(object) => {
+            for property in &object.properties {
+                collect_binding_names(&property.value, out);
+            }
+            if let Some(rest) = &object.rest {
+                collect_binding_names(&rest.argument, out);
+            }
+        }
+        BindingPattern::ArrayPattern(array) => {
+            for element in array.elements.iter().flatten() {
+                collect_binding_names(element, out);
+            }
+            if let Some(rest) = &array.rest {
+                collect_binding_names(&rest.argument, out);
+            }
+        }
+    }
+}
+
 fn statement_kind(statement: &Statement<'_>) -> &'static str {
     match statement {
         Statement::LabeledStatement(_) => "LabeledStatement",
@@ -6485,6 +6684,39 @@ mod tests {
             run_value("const a = 1; let b = 2; b += 3; return a + b;"),
             number(6.0)
         );
+        assert_eq!(
+            run_value(
+                "const calls = []; const key = () => { calls.push('k'); return 'x'; }; \
+                 const obj = { x: 1 }; obj[key()] += 1; \
+                 return [obj.x, calls.length].join(',');"
+            ),
+            string("2,1")
+        );
+        assert_eq!(
+            run_value(
+                "let count = 0; const obj = { x: 1 }; \
+                 const key = () => { count += 1; return 'x'; }; obj[key()]++; \
+                 return [obj.x, count].join(',');"
+            ),
+            string("2,1")
+        );
+        assert_eq!(
+            run_value(
+                "const obj = {}; let count = 0; \
+                 const key = () => { count += 1; return 'x'; }; obj[key()] ??= 5; \
+                 return [obj.x, count].join(',');"
+            ),
+            string("5,1")
+        );
+        assert_eq!(
+            run_value(
+                "const order = []; const obj = { x: 1 }; \
+                 const key = () => { order.push('k'); return 'x'; }; \
+                 const rhs = () => { order.push('r'); return 2; }; \
+                 obj[key()] += rhs(); return [obj.x, order.join('')].join(',');"
+            ),
+            string("3,rk")
+        );
     }
 
     #[test]
@@ -6513,6 +6745,18 @@ mod tests {
             ),
             number(4.0)
         );
+    }
+
+    #[test]
+    fn evaluate_function_defaults_before_use() {
+        assert_eq!(
+            run_value("function f(a = 1, b = a) { return b; } return f();"),
+            number(1.0)
+        );
+        let error = run("const b = 9; function f(a = b, b = 2) { return a; } return f();")
+            .expect_err("forward parameter reference is a TDZ error");
+        assert_eq!(error.kind(), super::RuntimeErrorKind::ReferenceError);
+        assert!(error.message().contains("before initialization"));
     }
 
     #[test]
@@ -6607,6 +6851,9 @@ mod tests {
         );
         let error = run("switch (Promise.resolve(1)) { case 1: return 1; } return 0;")
             .expect_err("opaque switch discriminant");
+        assert_eq!(error.kind(), super::RuntimeErrorKind::InvalidDataValue);
+        let error = run("switch (1) { case (() => 1): return 1; } return 0;")
+            .expect_err("opaque switch case");
         assert_eq!(error.kind(), super::RuntimeErrorKind::InvalidDataValue);
     }
 
@@ -6737,6 +6984,34 @@ mod tests {
         assert_eq!(array[5], Value::Boolean(true));
         assert_eq!(array[6], string("ff"));
         assert_eq!(array[7], string("1.00"));
+        assert_eq!(
+            run_value("return String(Number('Infinity'));"),
+            string("Infinity")
+        );
+        assert_eq!(
+            run_value("return String(Number('+Infinity'));"),
+            string("Infinity")
+        );
+        assert_eq!(
+            run_value("return String(Number('-Infinity'));"),
+            string("-Infinity")
+        );
+        for spelling in ["inf", "INF", "infinity", "INFINITY", "+inf", "-infinity"] {
+            assert_eq!(
+                run_value(&format!("return String(Number('{spelling}'));")),
+                string("NaN"),
+                "{spelling}"
+            );
+            assert_eq!(
+                run_value(&format!("return String(parseFloat('{spelling}'));")),
+                string("NaN"),
+                "parseFloat {spelling}"
+            );
+        }
+        assert_eq!(
+            run_value("return String(parseFloat('Infinityx'));"),
+            string("Infinity")
+        );
     }
 
     #[test]
