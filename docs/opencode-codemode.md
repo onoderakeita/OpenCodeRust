@@ -358,6 +358,7 @@ shadowingできる。
   objectとして描画される (upstreamはopaque reference扱い)。
 - `localeCompare` はhost ICUではなくコードポイント順で比較する
 - `$codemode.search` のdiscovery toolとcatalog/instructions APIは未実装
+- tool definition/schemaの検証 (`InvalidToolInput`) は未実装
 - Rustの `String` はlone surrogateを保持できないため、`String.fromCharCode(0xD800)` /
   `String.fromCodePoint(0xD800)`、サロゲートを分割するindex操作や
   `split("")` / `replaceAll("")` の境界はJavaScriptと一致しない

@@ -704,15 +704,29 @@ impl<'a> Interpreter<'a> {
                 let result = match attempted {
                     Ok(flow) => Ok(flow),
                     Err(error) => match &statement.handler {
+                        // Timeouts are execution teardown, not program-visible
+                        // failures: a `catch` must not be able to swallow them.
+                        Some(_) if error.kind() == RuntimeErrorKind::Timeout => Err(error),
                         Some(handler) => self.eval_catch(handler, &error),
                         None => Err(error),
                     },
                 };
                 match &statement.finalizer {
-                    Some(finalizer) => match self.eval_block(&finalizer.body)? {
-                        Flow::Normal => result,
-                        abrupt => Ok(abrupt),
-                    },
+                    Some(finalizer) => {
+                        let flow = self.eval_block(&finalizer.body)?;
+                        if matches!(
+                            &result,
+                            Err(error) if error.kind() == RuntimeErrorKind::Timeout
+                        ) {
+                            // Keep the timeout even if `finally` returns/breaks.
+                            result
+                        } else {
+                            match flow {
+                                Flow::Normal => result,
+                                abrupt => Ok(abrupt),
+                            }
+                        }
+                    }
                     None => result,
                 }
             }
@@ -9839,6 +9853,23 @@ mod tests {
     fn enforces_the_wall_clock_timeout() {
         let allocator = Allocator::default();
         let program = parse_program(&allocator, "while (true) {}").expect("fixture should parse");
+        let mut interpreter = Interpreter::new();
+        interpreter.set_limits(&ExecutionLimits {
+            timeout_ms: Some(1),
+            ..ExecutionLimits::default()
+        });
+        let error = interpreter.run(&program).expect_err("should time out");
+        assert_eq!(error.kind(), super::RuntimeErrorKind::Timeout);
+    }
+
+    #[test]
+    fn timeouts_cannot_be_caught_or_overridden() {
+        let allocator = Allocator::default();
+        let program = parse_program(
+            &allocator,
+            "while (true) { try { 1; } catch (e) {} finally { 2; } }",
+        )
+        .expect("fixture should parse");
         let mut interpreter = Interpreter::new();
         interpreter.set_limits(&ExecutionLimits {
             timeout_ms: Some(1),
