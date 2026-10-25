@@ -342,9 +342,12 @@ shadowingできる。
   `Promise.race` は同期的に評価する。組み合わせ関数は配列に加えて文字列・
   Map・Setも受け、Mapはentryの配列に展開する。`await` はfulfilled値を
   取り出し、rejected理由をthrowする。空の `Promise.race` はエラーにする。
-- `.then` / `.catch` / `.finally` と、未await Promiseのproperty読み取りは
-  awaitを促す診断を返す。`Promise.unknown` のようなnamespaceの未知メンバーは
-  読み取り時点でエラーにする。
+- settled Promiseは `.then` / `.catch` / `.finally` を同期的にチェーンできる。
+  handlerはユーザー関数とcoercion/URI builtinだけを受け、他のcallableは
+  `TypeError`、非callableはpass-throughになる。handlerのthrowと返却Promiseは
+  新しいPromiseのreject/fulfill/adoptとして扱い、`finally` は元の状態を維持する。
+  未await Promiseの未知property読み取りはawaitを促す診断を返す。
+  `Promise.unknown` のようなnamespaceの未知メンバーは読み取り時点でエラーにする。
 - 未await Promiseは、境界に加えてbinary/unary operatorと `JSON.stringify` でも
   `InvalidDataValue` として拒否する。`typeof` と `instanceof` はcoercion
   しないため、そのまま観察できる。

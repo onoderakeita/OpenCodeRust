@@ -3080,6 +3080,100 @@ impl<'a> Interpreter<'a> {
         }
     }
 
+    fn promise_handler(
+        &self,
+        value: Option<&Value>,
+        method: &str,
+        span: Span,
+    ) -> Result<Option<Value>, RuntimeError> {
+        let Some(value) = value else {
+            return Ok(None);
+        };
+        if is_collection_callback(value) {
+            return Ok(Some(value.clone()));
+        }
+        if type_of(value) == "function" {
+            return Err(RuntimeError::type_error(
+                format!(
+                    "{method} cannot use this callable as a handler; wrap it in an arrow function."
+                ),
+                span,
+            ));
+        }
+        Ok(None)
+    }
+
+    fn promise_reaction(
+        &mut self,
+        receiver: &Value,
+        method: &str,
+        arguments: &[Value],
+        span: Span,
+    ) -> Result<Value, RuntimeError> {
+        let Value::Promise(promise) = receiver else {
+            return Err(RuntimeError::type_error(
+                "Promise method requires a Promise receiver.",
+                span,
+            ));
+        };
+        let (fulfilled, state) = match &**promise {
+            PromiseState::Fulfilled(value) => (true, value.clone()),
+            PromiseState::Rejected(reason) => (false, reason.clone()),
+        };
+        let settled = |value: Value| {
+            if fulfilled {
+                Value::promise_fulfilled(value)
+            } else {
+                Value::promise_rejected(value)
+            }
+        };
+        if method == "Promise.finally" {
+            let Some(handler) = self.promise_handler(arguments.first(), method, span)? else {
+                return Ok(settled(state));
+            };
+            match self.invoke_value(&handler, Vec::new(), span) {
+                Ok(result) => {
+                    if let Value::Promise(result) = &result {
+                        if let PromiseState::Rejected(reason) = &**result {
+                            return Ok(Value::promise_rejected(reason.clone()));
+                        }
+                    }
+                    Ok(settled(state))
+                }
+                Err(error) => {
+                    if error.kind() == RuntimeErrorKind::Timeout {
+                        return Err(error);
+                    }
+                    Ok(Value::promise_rejected(error.caught_value()))
+                }
+            }
+        } else {
+            let (on_fulfilled, on_rejected) = match method {
+                "Promise.then" => (
+                    self.promise_handler(arguments.first(), method, span)?,
+                    self.promise_handler(arguments.get(1), method, span)?,
+                ),
+                _ => (None, self.promise_handler(arguments.first(), method, span)?),
+            };
+            let handler = if fulfilled { on_fulfilled } else { on_rejected };
+            let Some(handler) = handler else {
+                return Ok(settled(state));
+            };
+            match self.invoke_value(&handler, vec![state], span) {
+                Ok(result) => Ok(match result {
+                    Value::Promise(_) => result,
+                    other => Value::promise_fulfilled(other),
+                }),
+                Err(error) => {
+                    if error.kind() == RuntimeErrorKind::Timeout {
+                        return Err(error);
+                    }
+                    Ok(Value::promise_rejected(error.caught_value()))
+                }
+            }
+        }
+    }
+
     fn call_method(
         &mut self,
         method: &'static str,
@@ -4141,6 +4235,9 @@ impl<'a> Interpreter<'a> {
                     span,
                 )),
             },
+            "Promise.then" | "Promise.catch" | "Promise.finally" => {
+                self.promise_reaction(receiver, method, arguments, span)
+            }
             "Object.toString" | "Object.toLocaleString" => {
                 Ok(Value::String(class_tag(receiver).to_owned()))
             }
@@ -4869,13 +4966,9 @@ impl<'a> Interpreter<'a> {
                 }
             }
             Value::Promise(_) => match key {
-                "then" | "catch" | "finally" => Err(RuntimeError::new(
-                    RuntimeErrorKind::UnsupportedSyntax,
-                    format!(
-                        "Promise.prototype.{key} is not supported in CodeMode. Use await instead."
-                    ),
-                    span,
-                )),
+                "then" => Ok(bound_method(object, Some("Promise.then"))),
+                "catch" => Ok(bound_method(object, Some("Promise.catch"))),
+                "finally" => Ok(bound_method(object, Some("Promise.finally"))),
                 _ => Err(RuntimeError::new(
                     RuntimeErrorKind::InvalidDataValue,
                     format!("Cannot read '{key}' from an un-awaited Promise; await it first."),
@@ -9305,13 +9398,10 @@ mod tests {
 
     #[test]
     fn promise_surface_hints_at_await() {
-        let error = run("return Promise.resolve(1).then((x) => x);")
-            .expect_err("then should be unsupported");
-        assert_eq!(error.kind(), super::RuntimeErrorKind::UnsupportedSyntax);
-        assert!(error
-            .message()
-            .contains("Promise.prototype.then is not supported"));
-        assert!(error.message().contains("await"));
+        assert_eq!(
+            run_value("return await Promise.resolve(1).then((x) => x + 1);"),
+            number(2.0)
+        );
 
         let error =
             run("return Promise.resolve(1).value;").expect_err("property reads should fail");
@@ -9325,6 +9415,94 @@ mod tests {
         let error = run("return Promise.foo;").expect_err("unknown Promise member");
         assert_eq!(error.kind(), super::RuntimeErrorKind::ExecutionFailure);
         assert!(error.message().contains("Promise.foo is not available"));
+    }
+
+    #[test]
+    fn chains_settled_promises() {
+        assert_eq!(
+            run_value("return await Promise.resolve(1).then((x) => x + 1).then((x) => x * 2);"),
+            number(4.0)
+        );
+        assert_eq!(
+            run_value(r#"return await Promise.reject("bad").catch((e) => e + "!");"#),
+            string("bad!")
+        );
+        assert_eq!(
+            run_value(
+                r#"try { await Promise.reject("bad").then((x) => x); return "no"; }
+                   catch (e) { return e; }"#
+            ),
+            string("bad")
+        );
+        assert_eq!(
+            run_value(
+                r#"try { await Promise.reject(1).catch(() => { throw new Error("x"); }); 
+                   return "no"; } catch (e) { return [e instanceof Error, e.message].join(","); }"#
+            ),
+            string("true,x")
+        );
+        assert_eq!(
+            run_value("return await Promise.resolve(5).then(42);"),
+            number(5.0)
+        );
+        assert_eq!(
+            run_value("return await Promise.resolve(5).catch(42);"),
+            number(5.0)
+        );
+        assert_eq!(
+            run_value("return await Promise.resolve(1).then((x) => Promise.resolve(x + 2));"),
+            number(3.0)
+        );
+        assert_eq!(
+            run_value(
+                "return await Promise.reject(1).catch(() => Promise.reject(2))\
+                 .then(undefined, (e) => e);"
+            ),
+            number(2.0)
+        );
+        assert_eq!(
+            run_value("return await Promise.resolve(5).finally(() => 7);"),
+            number(5.0)
+        );
+        assert_eq!(
+            run_value(
+                r#"try { await Promise.reject("e").finally(() => 7); return "no"; }
+                   catch (e) { return e; }"#
+            ),
+            string("e")
+        );
+        assert_eq!(
+            run_value(
+                r#"try { await Promise.resolve(1).finally(() => { throw new Error("f"); }); 
+                   return "no"; } catch (e) { return e.message; }"#
+            ),
+            string("f")
+        );
+        assert_eq!(
+            run_value(
+                "try { await Promise.resolve(1).finally(() => Promise.reject('r')); return 'no'; } \
+                 catch (e) { return e; }"
+            ),
+            string("r")
+        );
+        let error = run("return Promise.resolve(1).then((x) => x, Math.abs);")
+            .expect_err("unsupported callable handler");
+        assert_eq!(error.kind(), super::RuntimeErrorKind::TypeError);
+        assert_eq!(
+            run_value(
+                "let seen = -1; await Promise.resolve(1).finally((...args) => { seen = args.length; }); \
+                 return seen;"
+            ),
+            number(0.0)
+        );
+        assert_eq!(
+            run_value("return await Promise.resolve(1).then((x) => typeof x);"),
+            string("number")
+        );
+        assert_eq!(
+            run_value("return await Promise.resolve(1).then(() => () => 2).then((f) => f());"),
+            number(2.0)
+        );
     }
 
     #[test]
