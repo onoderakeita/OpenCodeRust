@@ -450,6 +450,7 @@ impl<'a> Interpreter<'a> {
             ("log1p", Value::Builtin("Math.log1p")),
             ("expm1", Value::Builtin("Math.expm1")),
             ("fround", Value::Builtin("Math.fround")),
+            ("f16round", Value::Builtin("Math.f16round")),
             ("clz32", Value::Builtin("Math.clz32")),
             ("imul", Value::Builtin("Math.imul")),
             ("random", Value::Builtin("Math.random")),
@@ -2073,7 +2074,8 @@ impl<'a> Interpreter<'a> {
             }
             "Math.acos" | "Math.acosh" | "Math.asin" | "Math.asinh" | "Math.atan"
             | "Math.atanh" | "Math.cos" | "Math.cosh" | "Math.sin" | "Math.sinh" | "Math.tan"
-            | "Math.tanh" | "Math.log1p" | "Math.expm1" | "Math.fround" | "Math.clz32" => {
+            | "Math.tanh" | "Math.log1p" | "Math.expm1" | "Math.fround" | "Math.f16round"
+            | "Math.clz32" => {
                 let numbers = math_numbers(arguments, name, _span)?;
                 let value = numbers.first().copied().unwrap_or(f64::NAN);
                 let result = match name {
@@ -2092,6 +2094,7 @@ impl<'a> Interpreter<'a> {
                     "Math.log1p" => value.ln_1p(),
                     "Math.expm1" => value.exp_m1(),
                     "Math.fround" => f64::from(value as f32),
+                    "Math.f16round" => math_f16round(value),
                     "Math.clz32" => f64::from(to_uint32(value).leading_zeros()),
                     _ => f64::NAN,
                 };
@@ -6301,6 +6304,53 @@ fn math_numbers(arguments: &[Value], method: &str, span: Span) -> Result<Vec<f64
             )),
         })
         .collect()
+}
+
+fn math_f16round(value: f64) -> f64 {
+    if !value.is_finite() {
+        return value;
+    }
+    if value == 0.0 {
+        return value;
+    }
+    let sign = value.is_sign_negative();
+    let absolute = value.abs();
+    let half_min_normal = f64::from_bits(((1023 - 14) as u64) << 52);
+    let rounded = if absolute >= half_min_normal {
+        let bits = absolute.to_bits();
+        let mut exponent = (((bits >> 52) & 0x7FF) as i32) - 1023;
+        let scale = f64::from_bits((((exponent - 10) + 1023) as u64) << 52);
+        let mut significand = round_ties_even_positive(absolute / scale);
+        if significand >= 2048.0 {
+            exponent += 1;
+            significand = 1024.0;
+        }
+        if exponent > 15 {
+            return if sign {
+                f64::NEG_INFINITY
+            } else {
+                f64::INFINITY
+            };
+        }
+        significand * f64::from_bits((((exponent - 10) + 1023) as u64) << 52)
+    } else {
+        round_ties_even_positive(absolute * 16_777_216.0) / 16_777_216.0
+    };
+    if sign {
+        -rounded
+    } else {
+        rounded
+    }
+}
+
+fn round_ties_even_positive(value: f64) -> f64 {
+    let floor = value.floor();
+    let fraction = value - floor;
+    if fraction > 0.5 || (fraction == 0.5 && floor % 2.0 != 0.0) {
+        floor + 1.0
+    } else {
+        floor
+    }
 }
 
 fn math_random() -> f64 {
@@ -11438,6 +11488,32 @@ mod tests {
         assert_eq!(
             run_value("return Math.sumPrecise(new Set([1, 2]));"),
             number(3.0)
+        );
+        assert_eq!(run_value("return Math.f16round(1.1);"), number(1.099609375));
+        assert_eq!(
+            run_value("return Math.f16round(0.1);"),
+            number(0.0999755859375)
+        );
+        assert_eq!(run_value("return Math.f16round(65519);"), number(65504.0));
+        assert_eq!(
+            run_value("return Math.f16round(65520);"),
+            number(f64::INFINITY)
+        );
+        assert_eq!(
+            run_value("return Math.f16round(-1.1);"),
+            number(-1.099609375)
+        );
+        assert_eq!(
+            run_value("return Math.f16round(1e-7);"),
+            number(1.1920928955078125e-7)
+        );
+        assert_eq!(
+            run_value("return String(1 / Math.f16round(-0));"),
+            string("-Infinity")
+        );
+        assert_eq!(
+            run_value("return Number.isNaN(Math.f16round(NaN));"),
+            Value::Boolean(true)
         );
         let error =
             run("return Math.sumPrecise([1, '2']);").expect_err("sumPrecise requires numbers");

@@ -154,7 +154,7 @@ shadowingできる。
   `[CodeMode reference]` にし、`undefined` は `undefined` を返す。
 - `Math`: abs、cbrt、ceil、floor、round、trunc、max、min、pow、sqrt、hypot、
   sign、log、log1p、log2、log10、exp、expm1、acos、acosh、asin、asinh、atan、
-  atan2、atanh、cos、cosh、sin、sinh、tan、tanh、fround、clz32、imul、
+  atan2、atanh、cos、cosh、sin、sinh、tan、tanh、fround、f16round、clz32、imul、
   random、sumPrecise、PI、E、LN2、LN10、LOG2E、LOG10E、SQRT2、SQRT1_2。
   提供された引数はすべてnumberでなければ `TypeError` にし、引数なしは
   `NaN` として扱う (baseline 941e71dの型検査を維持)。`max` は +0、`min` は
