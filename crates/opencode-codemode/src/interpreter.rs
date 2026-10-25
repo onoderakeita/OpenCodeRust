@@ -3046,6 +3046,40 @@ impl<'a> Interpreter<'a> {
         }
     }
 
+    fn locale_join(&mut self, items: Vec<Value>, span: Span) -> Result<String, RuntimeError> {
+        let mut parts = Vec::with_capacity(items.len());
+        for item in items {
+            parts.push(self.locale_element(&item, span)?);
+        }
+        Ok(parts.join(","))
+    }
+
+    fn locale_element(&mut self, item: &Value, span: Span) -> Result<String, RuntimeError> {
+        match item {
+            Value::Null | Value::Undefined => Ok(String::new()),
+            Value::Number(value) => Ok(format_number_locale(*value)),
+            Value::String(value) => Ok(value.clone()),
+            Value::Boolean(value) => Ok(value.to_string()),
+            Value::Date(date) => Ok(format_date_method(
+                date.time_ms.get(),
+                "Date.toLocaleString",
+            )),
+            Value::Array(array) => {
+                let items = array.borrow().clone();
+                self.locale_join(items, span)
+            }
+            Value::Object(object) => {
+                let method = object.borrow().get("toLocaleString").cloned();
+                if let Some(method) = method.filter(|method| is_collection_callback(method)) {
+                    let result = self.invoke_value(&method, Vec::new(), span)?;
+                    return Ok(to_js_string(&result));
+                }
+                Ok(to_js_string(item))
+            }
+            _ => Ok(to_js_string(item)),
+        }
+    }
+
     fn call_method(
         &mut self,
         method: &'static str,
@@ -3619,6 +3653,11 @@ impl<'a> Interpreter<'a> {
                     .collect::<Vec<_>>()
                     .join(",");
                 Ok(Value::String(text))
+            }
+            "Array.toLocaleString" => {
+                let array = as_array_ref(receiver, span)?;
+                let items = array.borrow().clone();
+                Ok(Value::String(self.locale_join(items, span)?))
             }
             "Array.fill" => {
                 let array = as_array_ref(receiver, span)?;
@@ -5094,6 +5133,7 @@ fn array_method(name: &str) -> Option<&'static str> {
         "splice" => "Array.splice",
         "toSpliced" => "Array.toSpliced",
         "toString" => "Array.toString",
+        "toLocaleString" => "Array.toLocaleString",
         "fill" => "Array.fill",
         "copyWithin" => "Array.copyWithin",
         "keys" => "Array.keys",
@@ -7907,6 +7947,14 @@ mod tests {
         assert_eq!(
             run_value("return [1, [2, 3], null].toString();"),
             string("1,2,3,")
+        );
+        assert_eq!(
+            run_value("return [1000, 2000].toLocaleString();"),
+            string("1,000,2,000")
+        );
+        assert_eq!(
+            run_value(r#"return [1, null, new Date("2024-01-02T03:04:05Z")].toLocaleString();"#),
+            string("1,,1/2/2024, 3:04:05 AM")
         );
     }
 

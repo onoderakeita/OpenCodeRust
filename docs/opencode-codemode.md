@@ -214,7 +214,8 @@ shadowingできる。
   reduce、reduceRight、find、findIndex、findLast、findLastIndex、some、
   every、join、slice、includes、indexOf、lastIndexOf、push、pop、shift、
   unshift、reverse、concat、flat、flatMap、sort、toSorted、toReversed、
-  with、at、splice、toSpliced、toString、fill、copyWithin、keys、values、entries。
+  with、at、splice、toSpliced、toString、toLocaleString、fill、copyWithin、
+  keys、values、entries。
   `toSpliced` はreceiverを変更せず、`splice()` は何も変更しない。
   `keys` / `values` / `entries` はiteratorではなく配列を返す。
   index系の引数 (`includes` のstart、`slice`、`at`、`with`、`splice`、
