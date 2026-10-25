@@ -203,6 +203,8 @@ shadowingできる。
 - `structuredClone` はObject/Array/Map/Set/Date/Error/AggregateErrorを
   共有参照と循環を保って複製する。callable/Promise/ToolRefは
   `DataCloneError` 相当の `TypeError` にする。
+- `crypto.randomUUID` はversion 4 / variant 10xxのUUID文字列を返す
+  (非暗号学的な疑似乱数)。
 - グローバルな `String` / `Number` / `Boolean` / `parseInt` / `parseFloat` は、
   入力 (ネストを含む) のcallableと未await Promiseをdata境界で
   `InvalidDataValue` にする。

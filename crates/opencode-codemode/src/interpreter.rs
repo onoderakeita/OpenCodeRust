@@ -492,7 +492,8 @@ impl<'a> Interpreter<'a> {
             ("parse", Value::Builtin("JSON.parse")),
             ("stringify", Value::Builtin("JSON.stringify")),
         ]);
-        for namespace in [&console, &math, &json] {
+        let crypto = Value::from_entries([("randomUUID", Value::Builtin("crypto.randomUUID"))]);
+        for namespace in [&console, &math, &json, &crypto] {
             if let Value::Object(object) = namespace {
                 self.frozen_namespaces
                     .push(Rc::as_ptr(object) as *const () as usize);
@@ -503,6 +504,7 @@ impl<'a> Interpreter<'a> {
             ("console", console),
             ("Math", math),
             ("JSON", json),
+            ("crypto", crypto),
             ("Object", Value::Builtin("Object")),
             ("Array", Value::Builtin("Array")),
             ("Promise", Value::Builtin("Promise")),
@@ -1888,6 +1890,7 @@ impl<'a> Interpreter<'a> {
                 let mut memo = HashMap::new();
                 structured_clone_value(&argument(0), &mut memo, _span)
             }
+            "crypto.randomUUID" => Ok(Value::String(random_uuid_v4())),
             "encodeURI" | "encodeURIComponent" | "decodeURI" | "decodeURIComponent" => {
                 let text = to_js_string(&argument(0));
                 let result = match name {
@@ -6555,6 +6558,27 @@ fn round_ties_even_positive(value: f64) -> f64 {
     }
 }
 
+fn random_uuid_v4() -> String {
+    let mut bytes = [0u8; 16];
+    for byte in &mut bytes {
+        *byte = (math_random() * 256.0) as u8;
+    }
+    bytes[6] = (bytes[6] & 0x0F) | 0x40;
+    bytes[8] = (bytes[8] & 0x3F) | 0x80;
+    let hex = bytes
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>();
+    format!(
+        "{}-{}-{}-{}-{}",
+        &hex[0..8],
+        &hex[8..12],
+        &hex[12..16],
+        &hex[16..20],
+        &hex[20..32]
+    )
+}
+
 fn math_random() -> f64 {
     static STATE: AtomicU64 = AtomicU64::new(0x9E37_79B9_7F4A_7C15);
     let mut value = STATE.load(Ordering::Relaxed);
@@ -10862,6 +10886,26 @@ mod tests {
                  Object.isExtensible(1)].join(',');"
             ),
             string("1,true,true,false")
+        );
+    }
+
+    #[test]
+    fn evaluates_crypto_random_uuid() {
+        assert_eq!(
+            run_value(
+                "const id = crypto.randomUUID(); \
+                 return [typeof crypto, typeof crypto.randomUUID, id.length, id[8], id[13], \
+                 id[14], id[18], id[23]].join(',');"
+            ),
+            string("object,function,36,-,-,4,-,-")
+        );
+        assert_eq!(
+            run_value("const id = crypto.randomUUID(); return '89ab'.includes(id[19]);"),
+            Value::Boolean(true)
+        );
+        assert_eq!(
+            run_value("return crypto.randomUUID() !== crypto.randomUUID();"),
+            Value::Boolean(true)
         );
     }
 
