@@ -151,6 +151,7 @@ shadowingできる。
   (`1e400` など) は `Infinity` / `-Infinity` としてparseする。stringifyは
   `undefined` をobjectから省略、arrayでは `null` にする。関数・callable・
   未await Promise・循環参照・深すぎる値は `InvalidDataValue` にする。
+  parse結果もdata境界を通すため、深すぎるネストは `InvalidDataValue` になる。
   第3引数のindent (数値0..10または先頭10文字の文字列) を受け付ける。
   replacerの配列・関数は `UnsupportedSyntax` にする。Errorはindent指定時も
   整形する。
@@ -189,8 +190,9 @@ shadowingできる。
   Map/Set・数値lengthを持つobjectを変換し、それ以外 (数値、null、
   lengthのないobject、文字列lengthなど) は `TypeError` にする。
   入力はdata境界で深く検証し、ネストしたcallable/Promiseは
-  `InvalidDataValue` にする。array-likeのlengthが上限を超える場合は
-  `TypeError` にする。第2引数の
+  `InvalidDataValue` にする。array-likeのlengthは `ToLength` と同じく
+  NaNと負数を0、小数を切り捨てとして扱い、`+Infinity` と上限
+  (1,000,000) を超える値は `RangeError` にする。第2引数の
   map関数はupstreamに合わせて `UnsupportedSyntax` にする。インスタンスmethodは
   map、filter、forEach、
   reduce、reduceRight、find、findIndex、findLast、findLastIndex、some、
@@ -238,9 +240,9 @@ shadowingできる。
   (U+FEFF) も除去し、`<` / `>` の文字列比較はUTF-16 code unit順になる。
   `normalize` とRegExp依存のmatch系は未実装。
 - `Number` instance methods: toFixed、toPrecision、toExponential、toString
-  (radix 2..36の整数)、valueOf。digits/radixはnumberまたは `undefined` だけを
-  受け、他型は `TypeError` にする。`toString(NaN)` はbase 10として扱い、
-  範囲外のradixは `RangeError` にする。digitsが範囲外なら `RangeError` に
+  (radix 2..36)、valueOf。digits/radixはnumberまたは `undefined` だけを
+  受け、他型は `TypeError` にする。radixはtruncateし、NaNを含む範囲外の
+  radixは `RangeError` にする。digitsが範囲外なら `RangeError` に
   する。丸めはECMAScriptと同じround-half-away (0.5は0から遠い側) で行う。
   `toPrecision` / `toExponential` は最短表記ではなく正確な10進展開から
   指数を決めるため、`(1e-7).toPrecision(17)` は `9.9999999999999995e-8`
@@ -290,7 +292,7 @@ shadowingできる。
   rejected理由をthrowする。空の `Promise.race` はエラーにする。
 - `.then` / `.catch` / `.finally` と、未await Promiseのproperty読み取りは
   awaitを促す診断を返す。
-- 未await Promiseは、境界に加えてbinary operatorと `JSON.stringify` でも
+- 未await Promiseは、境界に加えてbinary/unary operatorと `JSON.stringify` でも
   `InvalidDataValue` として拒否する。`typeof` と `instanceof` はcoercion
   しないため、そのまま観察できる。
 - 真の非同期実行、tool呼び出しの同時実行制御、未await rejectionの診断は

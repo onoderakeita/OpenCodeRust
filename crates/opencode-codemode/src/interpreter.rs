@@ -1099,9 +1099,20 @@ impl<'a> Interpreter<'a> {
         match operator {
             UnaryOperator::LogicalNot => Ok(Value::Boolean(!is_truthy(&value))),
             UnaryOperator::Typeof => Ok(Value::String(type_of(&value).to_owned())),
-            UnaryOperator::UnaryPlus => Ok(Value::Number(to_number(&value))),
-            UnaryOperator::UnaryNegation => Ok(Value::Number(-to_number(&value))),
-            UnaryOperator::BitwiseNot => Ok(Value::Number(f64::from(!to_int32(to_number(&value))))),
+            UnaryOperator::UnaryPlus | UnaryOperator::UnaryNegation | UnaryOperator::BitwiseNot => {
+                if contains_opaque_reference(&value, &mut Vec::new()) {
+                    return Err(RuntimeError::new(
+                        RuntimeErrorKind::InvalidDataValue,
+                        "Unary operators require data values in CodeMode.",
+                        span,
+                    ));
+                }
+                Ok(match operator {
+                    UnaryOperator::UnaryPlus => Value::Number(to_number(&value)),
+                    UnaryOperator::UnaryNegation => Value::Number(-to_number(&value)),
+                    _ => Value::Number(f64::from(!to_int32(to_number(&value)))),
+                })
+            }
             UnaryOperator::Void => Err(RuntimeError::unsupported("void", span)),
             UnaryOperator::Delete => Err(RuntimeError::unsupported("delete", span)),
         }
@@ -1653,7 +1664,9 @@ impl<'a> Interpreter<'a> {
                             _span,
                         )
                     })?;
-                json_to_value_with_overflow(&json, _span, repaired.is_some())
+                let value = json_to_value_with_overflow(&json, _span, repaired.is_some())?;
+                check_data_argument(&value, "JSON.parse result", _span)?;
+                Ok(value)
             }
             "JSON.stringify" => {
                 if let Some(Value::Array(_)) | Some(Value::Function(_)) = arguments.get(1) {
@@ -1975,7 +1988,9 @@ impl<'a> Interpreter<'a> {
                     }
                     object.insert(key, entry.get(1).cloned().unwrap_or(Value::Undefined));
                 }
-                Ok(Value::Object(Rc::new(RefCell::new(object))))
+                let value = Value::Object(Rc::new(RefCell::new(object)));
+                check_data_argument(&value, "Object.fromEntries result", _span)?;
+                Ok(value)
             }
             "Object.assign" => {
                 let mut merged = IndexMap::new();
@@ -2036,7 +2051,11 @@ impl<'a> Interpreter<'a> {
                 Ok(Value::Object(Rc::new(RefCell::new(merged))))
             }
             "Array.isArray" => Ok(Value::Boolean(matches!(argument(0), Value::Array(_)))),
-            "Array.of" => Ok(Value::array(arguments.to_vec())),
+            "Array.of" => {
+                let value = Value::array(arguments.to_vec());
+                check_data_argument(&value, "Array.of result", _span)?;
+                Ok(value)
+            }
             "Array.from" => {
                 if arguments.len() > 1 {
                     return Err(RuntimeError::unsupported("Array.from map function", _span));
@@ -2060,9 +2079,16 @@ impl<'a> Interpreter<'a> {
                                 ))
                             }
                         };
+                        // `ToLength` semantics: NaN and negative lengths clamp to
+                        // zero, +Infinity is an invalid array length, and finite
+                        // lengths truncate. The supported-size cap is a deliberate
+                        // resource guard because the interpreter cannot spin up a
+                        // multi-gigabyte array before the timeout fires.
                         let normalized = if length.is_nan() { 0.0 } else { length.trunc() };
-                        if !normalized.is_finite() || normalized > MAX_ARRAY_LIKE_LENGTH as f64 {
-                            return Err(RuntimeError::type_error(
+                        if normalized == f64::INFINITY || normalized > MAX_ARRAY_LIKE_LENGTH as f64
+                        {
+                            return Err(RuntimeError::new(
+                                RuntimeErrorKind::RangeError,
                                 "Array.from array-like length exceeds the supported limit.",
                                 _span,
                             ));
@@ -2085,7 +2111,9 @@ impl<'a> Interpreter<'a> {
                         ))
                     }
                 };
-                Ok(Value::array(items))
+                let value = Value::array(items);
+                check_data_argument(&value, "Array.from result", _span)?;
+                Ok(value)
             }
             "console.log" | "console.info" | "console.warn" | "console.error" | "console.debug" => {
                 let prefix = match name {
@@ -3180,9 +3208,8 @@ impl<'a> Interpreter<'a> {
                 let number = as_number(receiver, span)?;
                 let radix = match arguments.first() {
                     None | Some(Value::Undefined) => 10,
-                    Some(Value::Number(value)) if value.is_nan() => 10,
                     Some(Value::Number(value)) => {
-                        if *value < 2.0 || *value > 36.0 {
+                        if value.is_nan() || *value < 2.0 || *value > 36.0 {
                             return Err(RuntimeError::new(
                                 RuntimeErrorKind::RangeError,
                                 "Number.toString radix must be between 2 and 36.",
@@ -4938,7 +4965,7 @@ fn stringify_json_inner(
             if ancestors.contains(&identity) {
                 return Err(JsonStringifyError::Circular);
             }
-            if ancestors.len() >= crate::value::MAX_VALUE_DEPTH * 2 {
+            if ancestors.len() > crate::value::MAX_VALUE_DEPTH {
                 return Err(JsonStringifyError::TooDeep);
             }
             ancestors.push(identity);
@@ -4971,7 +4998,7 @@ fn stringify_json_inner(
             if ancestors.contains(&identity) {
                 return Err(JsonStringifyError::Circular);
             }
-            if ancestors.len() >= crate::value::MAX_VALUE_DEPTH * 2 {
+            if ancestors.len() > crate::value::MAX_VALUE_DEPTH {
                 return Err(JsonStringifyError::TooDeep);
             }
             ancestors.push(identity);
@@ -5389,9 +5416,11 @@ fn has_property(value: &Value, key: &str) -> bool {
                     .is_ok_and(|index| index < value.chars().count())
         }
         Value::Error(_) => key == "name" || key == "message",
-        Value::Map(_) => key == "size" || map_method(key).is_some(),
-        Value::Set(_) => key == "size" || set_method(key).is_some(),
-        Value::Date(_) => date_method(key).is_some(),
+        // Sandbox classes expose their storage fields as own properties upstream;
+        // prototype-level accessors and methods are not "in" the object.
+        Value::Map(_) => key == "map",
+        Value::Set(_) => key == "set",
+        Value::Date(_) => key == "time",
         _ => false,
     }
 }
@@ -6810,6 +6839,18 @@ mod tests {
             let error = run(source).expect_err("non-array-like input is rejected");
             assert_eq!(error.kind(), super::RuntimeErrorKind::TypeError, "{source}");
         }
+        let error = run("return Array.from({ length: Infinity });")
+            .expect_err("infinite array-like length is invalid");
+        assert_eq!(error.kind(), super::RuntimeErrorKind::RangeError);
+        for (source, expected) in [
+            ("return Array.from({ length: -Infinity }).length;", 0.0),
+            ("return Array.from({ length: NaN }).length;", 0.0),
+            ("return Array.from({ length: -1 }).length;", 0.0),
+            ("return Array.from({ length: -0.5 }).length;", 0.0),
+            ("return Array.from({ length: 1.9 }).length;", 1.0),
+        ] {
+            assert_eq!(run_value(source), number(expected), "{source}");
+        }
         assert_eq!(
             run_value("return String(Number.MIN_VALUE);"),
             string("5e-324")
@@ -7079,6 +7120,14 @@ mod tests {
         );
         assert_eq!(
             run_value(
+                "return ['time' in new Date(0), 'getTime' in new Date(0), \
+                 'map' in new Map(), 'size' in new Map(), \
+                 'set' in new Set(), 'size' in new Set()].join(',');"
+            ),
+            string("true,false,true,false,true,false")
+        );
+        assert_eq!(
+            run_value(
                 "const dates = [new Date(3000), new Date(1000), new Date(2000)]; \
                  return dates.sort((a, b) => a - b).map((d) => d.getTime()).join(',');"
             ),
@@ -7256,6 +7305,19 @@ mod tests {
                 .message()
                 .contains("Binary operators require data values"));
         }
+        for source in [
+            "return +Promise.resolve(1);",
+            "return -(Promise.resolve(1));",
+            "const f = () => 1; return ~f;",
+            "const f = () => 1; return +[f];",
+            "return +tools;",
+        ] {
+            let error = run(source).expect_err("opaque unary operands must be rejected");
+            assert_eq!(error.kind(), super::RuntimeErrorKind::InvalidDataValue);
+            assert!(error
+                .message()
+                .contains("Unary operators require data values"));
+        }
         let error = run("return JSON.stringify(Promise.resolve(1));")
             .expect_err("un-awaited promise serialization");
         assert_eq!(error.kind(), super::RuntimeErrorKind::InvalidDataValue);
@@ -7268,6 +7330,13 @@ mod tests {
         let error = run("let v = 1; for (let i = 0; i < 70; i += 1) { v = [v]; } \
              return JSON.stringify(v);")
         .expect_err("over-deep serialization");
+        assert_eq!(error.kind(), super::RuntimeErrorKind::InvalidDataValue);
+
+        let error = run(
+            "let s = '1'; for (let i = 0; i < 40; i += 1) { s = '[' + s + ']'; } \
+             return JSON.parse(s);",
+        )
+        .expect_err("over-deep parse result");
         assert_eq!(error.kind(), super::RuntimeErrorKind::InvalidDataValue);
 
         assert_eq!(
@@ -8008,6 +8077,12 @@ mod tests {
             "return String({ nested: Promise.resolve(1) });",
             "return Number([() => 1]);",
             "return encodeURIComponent({ nested: () => 1 });",
+            "return Array.of(() => 1);",
+            "return Array.of(Promise.resolve(1));",
+            "return Array.from(new Map([['a', () => 1]]));",
+            "return Array.from(new Set([() => 1]));",
+            "return Object.fromEntries(new Map([['a', () => 1]]));",
+            "return Object.fromEntries(new Map([['a', Promise.resolve(1)]]));",
         ] {
             let error = run(source).expect_err("nested opaque data must be rejected");
             assert_eq!(
@@ -8016,6 +8091,10 @@ mod tests {
                 "{source}"
             );
         }
+        assert_eq!(
+            run_value("return Array.of(new Map([['a', () => 1]])).length;"),
+            number(1.0)
+        );
     }
 
     #[test]
@@ -8051,7 +8130,7 @@ mod tests {
         assert_eq!(error.kind(), super::RuntimeErrorKind::UnsupportedSyntax);
         let error = run(r#"return Array.from({ length: 1000001 });"#)
             .expect_err("oversized array-like should fail");
-        assert_eq!(error.kind(), super::RuntimeErrorKind::TypeError);
+        assert_eq!(error.kind(), super::RuntimeErrorKind::RangeError);
     }
 
     #[test]
@@ -8129,7 +8208,8 @@ mod tests {
         assert_eq!(run_value("return typeof isFinite;"), string("undefined"));
         let error = run("return isNaN(1);").expect_err("isNaN is not a CodeMode global");
         assert_eq!(error.kind(), super::RuntimeErrorKind::ReferenceError);
-        assert_eq!(run_value("return (255).toString(NaN);"), string("255"));
+        let error = run("return (255).toString(NaN);").expect_err("NaN radix");
+        assert_eq!(error.kind(), super::RuntimeErrorKind::RangeError);
         assert_eq!(run_value("return (255).toString(2.9);"), string("11111111"));
         assert_eq!(
             run_value("return Number.parseInt('10', undefined);"),
