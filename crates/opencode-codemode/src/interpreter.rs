@@ -2229,6 +2229,25 @@ impl<'a> Interpreter<'a> {
                 })
             }
             "Promise.reject" => Ok(Value::promise_rejected(argument(0))),
+            "Promise.try" => {
+                let callable = argument(0);
+                if type_of(&callable) != "function" {
+                    return Err(RuntimeError::type_error(
+                        "Promise.try expects a function.",
+                        _span,
+                    ));
+                }
+                match self.invoke_value(&callable, arguments[1..].to_vec(), _span) {
+                    Ok(Value::Promise(promise)) => Ok(Value::Promise(promise)),
+                    Ok(value) => Ok(Value::promise_fulfilled(value)),
+                    Err(error) => {
+                        if error.kind() == RuntimeErrorKind::Timeout {
+                            return Err(error);
+                        }
+                        Ok(Value::promise_rejected(error.caught_value()))
+                    }
+                }
+            }
             "Promise.all" | "Promise.allSettled" | "Promise.race" => {
                 let source = argument(0);
                 // Upstream accepts arrays plus the spreadable sandbox values
@@ -4904,7 +4923,10 @@ impl<'a> Interpreter<'a> {
             }
             Value::Builtin(name) => {
                 if *name == "Promise"
-                    && !matches!(key, "resolve" | "reject" | "all" | "allSettled" | "race")
+                    && !matches!(
+                        key,
+                        "resolve" | "reject" | "all" | "allSettled" | "race" | "try"
+                    )
                 {
                     return Err(RuntimeError::new(
                         RuntimeErrorKind::ExecutionFailure,
@@ -5251,6 +5273,7 @@ fn builtin_property(name: &str, key: &str) -> Value {
         ("Promise", "all") => Value::Builtin("Promise.all"),
         ("Promise", "allSettled") => Value::Builtin("Promise.allSettled"),
         ("Promise", "race") => Value::Builtin("Promise.race"),
+        ("Promise", "try") => Value::Builtin("Promise.try"),
         ("Date", "now") => Value::Builtin("Date.now"),
         ("Date", "parse") => Value::Builtin("Date.parse"),
         ("Date", "UTC") => Value::Builtin("Date.UTC"),
@@ -9503,6 +9526,35 @@ mod tests {
             run_value("return await Promise.resolve(1).then(() => () => 2).then((f) => f());"),
             number(2.0)
         );
+    }
+
+    #[test]
+    fn evaluates_promise_try() {
+        assert_eq!(run_value("return await Promise.try(() => 3);"), number(3.0));
+        assert_eq!(
+            run_value("return await Promise.try((a, b) => a + b, 1, 2);"),
+            number(3.0)
+        );
+        assert_eq!(
+            run_value(
+                "try { await Promise.try(() => { throw new Error('t'); }); return 'no'; } \
+                 catch (e) { return e.message; }"
+            ),
+            string("t")
+        );
+        assert_eq!(
+            run_value("return await Promise.try(() => Promise.resolve(4));"),
+            number(4.0)
+        );
+        assert_eq!(
+            run_value(
+                "try { await Promise.try(() => Promise.reject('r')); return 'no'; } \
+                 catch (e) { return e; }"
+            ),
+            string("r")
+        );
+        let error = run("return Promise.try(1);").expect_err("non-function callback");
+        assert_eq!(error.kind(), super::RuntimeErrorKind::TypeError);
     }
 
     #[test]

@@ -339,9 +339,11 @@ shadowingできる。
 - `maxToolCalls` は `set_limits` / `set_tool_call_limit` で適用し、超過は
   `ToolCallLimitExceeded` を返す。
 - `Promise.resolve`、`Promise.reject`、`Promise.all`、`Promise.allSettled`、
-  `Promise.race` は同期的に評価する。組み合わせ関数は配列に加えて文字列・
-  Map・Setも受け、Mapはentryの配列に展開する。`await` はfulfilled値を
-  取り出し、rejected理由をthrowする。空の `Promise.race` はエラーにする。
+  `Promise.race`、`Promise.try` は同期的に評価する。組み合わせ関数は配列に
+  加えて文字列・Map・Setも受け、Mapはentryの配列に展開する。`Promise.try` は
+  callbackを残り引数で呼び、throwをreject、返却Promiseをadoptする。
+  `await` はfulfilled値を取り出し、rejected理由をthrowする。空の
+  `Promise.race` はエラーにする。
 - settled Promiseは `.then` / `.catch` / `.finally` を同期的にチェーンできる。
   handlerはユーザー関数とcoercion/URI builtinだけを受け、他のcallableは
   `TypeError`、非callableはpass-throughになる。handlerのthrowと返却Promiseは
