@@ -206,8 +206,13 @@ shadowingできる。
   `InvalidDataValue` にする。
   `parseInt` のradixはnumberまたは `undefined` だけを受け、他型は
   `TypeError` にする。Date/Map/Set/Errorはdataとしてcoercionする。
-- `Object`: keys、values、entries、hasOwn、is、groupBy、fromEntries (配列とMap)、
+- `Object`: keys、values、entries、hasOwn、is、groupBy、freeze、seal、
+  preventExtensions、isFrozen、isSealed、isExtensible、fromEntries (配列とMap)、
   assign。`is` はSameValue (`NaN`同士はtrue、`+0`/`-0`はfalse)。
+  `freeze` / `seal` / `preventExtensions` はobject/arrayのintegrityを記録し、
+  frozenへの書き込み、non-extensibleへの新規property/array要素追加を
+  `TypeError` にする。sealed arrayは既存要素の書き換えと同lengthのspliceを
+  許可する。Map/Set/Dateの内部slotはfreeze後も変更できる。
   `groupBy` はiterableをcallbackの戻り値キーでObjectへまとめ、値は配列。
   object/array/Map/Set/Date/Errorは `hasOwnProperty`、`propertyIsEnumerable`、
   `isPrototypeOf`、`toString` / `toLocaleString`、`valueOf` をfallbackで持つ。

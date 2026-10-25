@@ -270,6 +270,13 @@ impl ForEachSource {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+enum IntegrityLevel {
+    PreventExtensions,
+    Sealed,
+    Frozen,
+}
+
 /// View over a Set-like argument used by the ES2025 Set methods.
 enum SetLikeView {
     Set(crate::value::SetRef),
@@ -328,6 +335,8 @@ pub struct Interpreter<'a> {
     /// explicit `return` (upstream `lastValue`).
     last_value: Value,
     last_value_span: Span,
+    /// Object/array integrity levels for Object.freeze/seal/preventExtensions.
+    integrity: HashMap<usize, IntegrityLevel>,
     /// Math/JSON/console are plain objects in the Rust model but immutable
     /// GlobalNamespaces upstream; reject writes to their identities.
     frozen_namespaces: Vec<usize>,
@@ -356,6 +365,7 @@ impl<'a> Interpreter<'a> {
             eval_depth: 0,
             last_value: Value::Undefined,
             last_value_span: Span::default(),
+            integrity: HashMap::new(),
             frozen_namespaces: Vec::new(),
         };
         interpreter.install_globals();
@@ -2440,6 +2450,19 @@ impl<'a> Interpreter<'a> {
                 }
             }
             "Object.is" => Ok(Value::Boolean(same_value(&argument(0), &argument(1)))),
+            "Object.freeze" | "Object.seal" | "Object.preventExtensions" => {
+                let value = argument(0);
+                let level = match name {
+                    "Object.freeze" => IntegrityLevel::Frozen,
+                    "Object.seal" => IntegrityLevel::Sealed,
+                    _ => IntegrityLevel::PreventExtensions,
+                };
+                self.apply_integrity(&value, level);
+                Ok(value)
+            }
+            "Object.isFrozen" => Ok(Value::Boolean(self.is_frozen_value(&argument(0)))),
+            "Object.isSealed" => Ok(Value::Boolean(self.is_sealed_value(&argument(0)))),
+            "Object.isExtensible" => Ok(Value::Boolean(self.is_extensible_value(&argument(0)))),
             "Object.groupBy" | "Map.groupBy" => {
                 let source = argument(0);
                 let items = spread_items(&source).ok_or_else(|| {
@@ -3591,6 +3614,12 @@ impl<'a> Interpreter<'a> {
         };
         match method {
             "Array.push" => {
+                if self.integrity_of(receiver).is_some() {
+                    return Err(RuntimeError::type_error(
+                        "Cannot modify a non-extensible array.",
+                        span,
+                    ));
+                }
                 let array = as_array_ref(receiver, span)?;
                 let target = Rc::as_ptr(&array) as *const () as usize;
                 for value in arguments {
@@ -3607,11 +3636,23 @@ impl<'a> Interpreter<'a> {
                 Ok(Value::Number(array.len() as f64))
             }
             "Array.pop" => {
+                if self.integrity_of(receiver).is_some() {
+                    return Err(RuntimeError::type_error(
+                        "Cannot modify a non-extensible array.",
+                        span,
+                    ));
+                }
                 let array = as_array_ref(receiver, span)?;
                 let value = array.borrow_mut().pop();
                 Ok(value.unwrap_or(Value::Undefined))
             }
             "Array.shift" => {
+                if self.integrity_of(receiver).is_some() {
+                    return Err(RuntimeError::type_error(
+                        "Cannot modify a non-extensible array.",
+                        span,
+                    ));
+                }
                 let array = as_array_ref(receiver, span)?;
                 let mut array = array.borrow_mut();
                 if array.is_empty() {
@@ -3621,6 +3662,12 @@ impl<'a> Interpreter<'a> {
                 }
             }
             "Array.unshift" => {
+                if self.integrity_of(receiver).is_some() {
+                    return Err(RuntimeError::type_error(
+                        "Cannot modify a non-extensible array.",
+                        span,
+                    ));
+                }
                 let array = as_array_ref(receiver, span)?;
                 let target = Rc::as_ptr(&array) as *const () as usize;
                 for value in arguments {
@@ -4039,6 +4086,14 @@ impl<'a> Interpreter<'a> {
                     (length as usize) - start
                 };
                 let inserted = arguments.iter().skip(2).cloned().collect::<Vec<_>>();
+                if let Some(level) = self.integrity_of(receiver) {
+                    if level == IntegrityLevel::Frozen || delete_count != inserted.len() {
+                        return Err(RuntimeError::type_error(
+                            "Cannot modify a non-extensible array.",
+                            span,
+                        ));
+                    }
+                }
                 let target = Rc::as_ptr(&array) as *const () as usize;
                 if inserted
                     .iter()
@@ -4108,6 +4163,12 @@ impl<'a> Interpreter<'a> {
                 Ok(Value::String(self.locale_join(items, span)?))
             }
             "Array.fill" => {
+                if self.integrity_of(receiver) == Some(IntegrityLevel::Frozen) {
+                    return Err(RuntimeError::type_error(
+                        "Cannot modify a frozen array.",
+                        span,
+                    ));
+                }
                 let array = as_array_ref(receiver, span)?;
                 let length = array.borrow().len() as i64;
                 let value = argument(0);
@@ -4137,6 +4198,12 @@ impl<'a> Interpreter<'a> {
                 Ok(receiver.clone())
             }
             "Array.copyWithin" => {
+                if self.integrity_of(receiver) == Some(IntegrityLevel::Frozen) {
+                    return Err(RuntimeError::type_error(
+                        "Cannot modify a frozen array.",
+                        span,
+                    ));
+                }
                 let array = as_array_ref(receiver, span)?;
                 let length = array.borrow().len() as i64;
                 let target_number = opt_number(&argument(0), "target index")?.unwrap_or(0.0);
@@ -5362,6 +5429,70 @@ impl<'a> Interpreter<'a> {
         }
     }
 
+    fn integrity_of(&self, value: &Value) -> Option<IntegrityLevel> {
+        value_identity(value).and_then(|identity| self.integrity.get(&identity).copied())
+    }
+
+    fn apply_integrity(&mut self, value: &Value, level: IntegrityLevel) {
+        if let Some(identity) = value_identity(value) {
+            let entry = self.integrity.entry(identity).or_insert(level);
+            if level > *entry {
+                *entry = level;
+            }
+        }
+    }
+
+    fn is_extensible_value(&self, value: &Value) -> bool {
+        match value {
+            Value::Undefined
+            | Value::Null
+            | Value::Boolean(_)
+            | Value::Number(_)
+            | Value::String(_) => false,
+            _ => self.integrity_of(value).is_none(),
+        }
+    }
+
+    fn is_frozen_value(&self, value: &Value) -> bool {
+        match value {
+            Value::Undefined
+            | Value::Null
+            | Value::Boolean(_)
+            | Value::Number(_)
+            | Value::String(_) => true,
+            _ => match self.integrity_of(value) {
+                None => false,
+                Some(IntegrityLevel::Frozen) => true,
+                Some(IntegrityLevel::Sealed | IntegrityLevel::PreventExtensions) => match value {
+                    Value::Array(_) | Value::Error(_) => false,
+                    Value::Object(object) => object.borrow().is_empty(),
+                    Value::Map(_) | Value::Set(_) | Value::Date(_) | Value::Promise(_) => true,
+                    _ => false,
+                },
+            },
+        }
+    }
+
+    fn is_sealed_value(&self, value: &Value) -> bool {
+        match value {
+            Value::Undefined
+            | Value::Null
+            | Value::Boolean(_)
+            | Value::Number(_)
+            | Value::String(_) => true,
+            _ => match self.integrity_of(value) {
+                None => false,
+                Some(IntegrityLevel::Frozen | IntegrityLevel::Sealed) => true,
+                Some(IntegrityLevel::PreventExtensions) => match value {
+                    Value::Array(_) | Value::Error(_) => false,
+                    Value::Object(object) => object.borrow().is_empty(),
+                    Value::Map(_) | Value::Set(_) | Value::Date(_) | Value::Promise(_) => true,
+                    _ => false,
+                },
+            },
+        }
+    }
+
     fn set_property(
         &self,
         object: &Value,
@@ -5376,14 +5507,31 @@ impl<'a> Interpreter<'a> {
             ));
         }
         match object {
-            Value::Object(object) => {
-                let target = Rc::as_ptr(object) as *const () as usize;
+            Value::Object(map) => {
+                let target = Rc::as_ptr(map) as *const () as usize;
                 if self.frozen_namespaces.contains(&target) {
                     return Err(RuntimeError::new(
                         RuntimeErrorKind::ExecutionFailure,
                         "Only data fields may be assigned in CodeMode.",
                         span,
                     ));
+                }
+                match self.integrity_of(object) {
+                    Some(IntegrityLevel::Frozen) => {
+                        return Err(RuntimeError::type_error(
+                            format!("Cannot assign to read only property '{key}' of object."),
+                            span,
+                        ))
+                    }
+                    Some(IntegrityLevel::Sealed | IntegrityLevel::PreventExtensions)
+                        if !map.borrow().contains_key(key) =>
+                    {
+                        return Err(RuntimeError::type_error(
+                            format!("Cannot add property '{key}', object is not extensible."),
+                            span,
+                        ))
+                    }
+                    _ => {}
                 }
                 if contains_identity(&value, target, &mut Vec::new()) {
                     return Err(RuntimeError::new(
@@ -5392,12 +5540,25 @@ impl<'a> Interpreter<'a> {
                         span,
                     ));
                 }
-                object.borrow_mut().insert(key.to_owned(), value);
+                map.borrow_mut().insert(key.to_owned(), value);
                 Ok(())
             }
             Value::Array(array) => match key.parse::<usize>() {
                 Ok(index) => {
                     let target = Rc::as_ptr(array) as *const () as usize;
+                    let level = self.integrity_of(object);
+                    if level == Some(IntegrityLevel::Frozen) {
+                        return Err(RuntimeError::type_error(
+                            format!("Cannot assign to read only property '{key}' of object."),
+                            span,
+                        ));
+                    }
+                    if level.is_some() && index >= array.borrow().len() {
+                        return Err(RuntimeError::type_error(
+                            format!("Cannot add property '{key}', object is not extensible."),
+                            span,
+                        ));
+                    }
                     if contains_identity(&value, target, &mut Vec::new()) {
                         return Err(RuntimeError::new(
                             RuntimeErrorKind::InvalidDataValue,
@@ -5653,6 +5814,12 @@ fn builtin_property(name: &str, key: &str) -> Value {
         ("Object", "groupBy") => Value::Builtin("Object.groupBy"),
         ("Map", "groupBy") => Value::Builtin("Map.groupBy"),
         ("Object", "assign") => Value::Builtin("Object.assign"),
+        ("Object", "freeze") => Value::Builtin("Object.freeze"),
+        ("Object", "seal") => Value::Builtin("Object.seal"),
+        ("Object", "preventExtensions") => Value::Builtin("Object.preventExtensions"),
+        ("Object", "isFrozen") => Value::Builtin("Object.isFrozen"),
+        ("Object", "isSealed") => Value::Builtin("Object.isSealed"),
+        ("Object", "isExtensible") => Value::Builtin("Object.isExtensible"),
         ("Array", "isArray") => Value::Builtin("Array.isArray"),
         ("Array", "from") => Value::Builtin("Array.from"),
         ("Array", "of") => Value::Builtin("Array.of"),
@@ -5740,6 +5907,19 @@ fn enumerable_own_property(value: &Value, key: &str) -> bool {
             .parse::<usize>()
             .is_ok_and(|index| index < value.chars().count()),
         _ => false,
+    }
+}
+
+fn value_identity(value: &Value) -> Option<usize> {
+    match value {
+        Value::Object(object) => Some(Rc::as_ptr(object) as *const () as usize),
+        Value::Array(array) => Some(Rc::as_ptr(array) as *const () as usize),
+        Value::Error(error) => Some(Rc::as_ptr(error) as *const () as usize),
+        Value::Promise(promise) => Some(Rc::as_ptr(promise) as *const () as usize),
+        Value::Map(map) => Some(Rc::as_ptr(map) as *const () as usize),
+        Value::Set(set) => Some(Rc::as_ptr(set) as *const () as usize),
+        Value::Date(date) => Some(Rc::as_ptr(date) as *const () as usize),
+        _ => None,
     }
 }
 
@@ -10570,6 +10750,77 @@ mod tests {
         }
         let error = run("return structuredClone();").expect_err("missing argument");
         assert_eq!(error.kind(), super::RuntimeErrorKind::TypeError);
+    }
+
+    #[test]
+    fn evaluates_object_integrity_levels() {
+        assert_eq!(
+            run_value(
+                "const o = { a: 1 }; const same = Object.freeze(o) === o; \
+                 let blocked = false; try { o.a = 2; } catch (e) { blocked = true; } \
+                 return [same, blocked, o.a, Object.isFrozen(o), Object.isSealed(o), \
+                 Object.isExtensible(o)].join(',');"
+            ),
+            string("true,true,1,true,true,false")
+        );
+        assert_eq!(
+            run_value(
+                "const o = { a: 1 }; Object.seal(o); o.a = 2; \
+                 let blocked = false; try { o.b = 3; } catch (e) { blocked = true; } \
+                 return [o.a, blocked, Object.isSealed(o), Object.isFrozen(o), \
+                 Object.isExtensible(o)].join(',');"
+            ),
+            string("2,true,true,false,false")
+        );
+        assert_eq!(
+            run_value(
+                "const o = { a: 1 }; Object.preventExtensions(o); o.a = 2; \
+                 let blocked = false; try { o.b = 3; } catch (e) { blocked = true; } \
+                 return [o.a, blocked, Object.isSealed(o), Object.isFrozen(o), \
+                 Object.isExtensible(o)].join(',');"
+            ),
+            string("2,true,false,false,false")
+        );
+        assert_eq!(
+            run_value(
+                "const o = {}; Object.preventExtensions(o); \
+                 return [Object.isSealed(o), Object.isFrozen(o)].join(',');"
+            ),
+            string("true,true")
+        );
+        assert_eq!(
+            run_value(
+                "const a = [1,2]; Object.freeze(a); let write = false; let grow = false; \
+                 try { a[0] = 3; } catch (e) { write = true; } \
+                 try { a.push(3); } catch (e) { grow = true; } \
+                 return [write, grow, a.join(','), Object.isFrozen(a)].join('|');"
+            ),
+            string("true|true|1,2|true")
+        );
+        assert_eq!(
+            run_value(
+                "const a = [1,2]; Object.seal(a); a[0] = 3; a.fill(4, 1); \
+                 let grow = false; try { a.push(3); } catch (e) { grow = true; } \
+                 return [a.join(','), grow, Object.isSealed(a), Object.isFrozen(a)].join('|');"
+            ),
+            string("3,4|true|true|false")
+        );
+        assert_eq!(
+            run_value(
+                "const a = [1,2]; Object.preventExtensions(a); \
+                 a.splice(0, 1, 9); let grow = false; \
+                 try { a.push(3); } catch (e) { grow = true; } \
+                 return [a.join(','), grow, Object.isSealed(a)].join('|');"
+            ),
+            string("9,2|true|false")
+        );
+        assert_eq!(
+            run_value(
+                "return [Object.freeze(1), Object.isFrozen(1), Object.isSealed(1), \
+                 Object.isExtensible(1)].join(',');"
+            ),
+            string("1,true,true,false")
+        );
     }
 
     #[test]
