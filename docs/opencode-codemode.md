@@ -166,9 +166,12 @@ shadowingできる。
   未await Promise・循環参照・深すぎる値は `InvalidDataValue` にする。
   parse結果もdata境界を通すが、upstreamと同じくparse内の失敗として扱い、
   深すぎるネストやblocked propertyは `SyntaxError` になる。
+  第2引数のreviverはuser functionとcoercion/URI builtinだけを受け、
+  childからparentへ `(key, value)` で呼ぶ。objectで `undefined` を返すと
+  propertyを削除し、arrayでは要素を `undefined` にしてlengthを維持する。
   第3引数のindent (数値0..10または先頭10文字の文字列) を受け付ける。
-  replacerの配列・関数は `UnsupportedSyntax` にする。Errorはindent指定時も
-  整形する。
+  stringifyのreplacer配列・関数は `UnsupportedSyntax` にする。Errorは
+  indent指定時も整形する。
 - `Number` statics: `Number.isNaN`、`isFinite`、`isInteger`、`isSafeInteger`、
   `parseInt`、`parseFloat`、定数 (`MAX_SAFE_INTEGER`、`MAX_VALUE`、
   `MIN_VALUE`、`EPSILON`、`NaN`、`POSITIVE_INFINITY`、`NEGATIVE_INFINITY`)。

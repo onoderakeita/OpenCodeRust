@@ -2180,6 +2180,12 @@ impl<'a> Interpreter<'a> {
                         _span,
                     )
                 })?;
+                if let Some(reviver) = arguments.get(1).cloned() {
+                    if type_of(&reviver) == "function" {
+                        ensure_collection_callback(&reviver, "JSON.parse", _span)?;
+                        return self.json_revive_value(value, "", &reviver, _span);
+                    }
+                }
                 Ok(value)
             }
             "JSON.stringify" => {
@@ -3130,6 +3136,52 @@ impl<'a> Interpreter<'a> {
             }
             _ => Ok(to_js_string(item)),
         }
+    }
+
+    fn json_revive_value(
+        &mut self,
+        value: Value,
+        key: &str,
+        reviver: &Value,
+        span: Span,
+    ) -> Result<Value, RuntimeError> {
+        let value = match value {
+            Value::Object(object) => {
+                let keys = ordered_keys(&object.borrow());
+                for child_key in keys {
+                    let child = object
+                        .borrow()
+                        .get(&child_key)
+                        .cloned()
+                        .unwrap_or(Value::Undefined);
+                    let revived = self.json_revive_value(child, &child_key, reviver, span)?;
+                    if revived.is_undefined() {
+                        object.borrow_mut().shift_remove(&child_key);
+                    } else {
+                        object.borrow_mut().insert(child_key, revived);
+                    }
+                }
+                Value::Object(object)
+            }
+            Value::Array(array) => {
+                let length = array.borrow().len();
+                for index in 0..length {
+                    let child = array
+                        .borrow()
+                        .get(index)
+                        .cloned()
+                        .unwrap_or(Value::Undefined);
+                    let revived =
+                        self.json_revive_value(child, &index.to_string(), reviver, span)?;
+                    if index < array.borrow().len() {
+                        array.borrow_mut()[index] = revived;
+                    }
+                }
+                Value::Array(array)
+            }
+            other => other,
+        };
+        self.invoke_value(reviver, vec![Value::String(key.to_owned()), value], span)
     }
 
     fn promise_handler(
@@ -9671,6 +9723,59 @@ mod tests {
                  catch (e) { return [e.name, e.errors.length].join('|'); }"
             ),
             string("AggregateError|0")
+        );
+    }
+
+    #[test]
+    fn evaluates_json_parse_reviver() {
+        assert_eq!(
+            run_value(
+                r#"const o = JSON.parse('{"a":1,"b":2}', (k, v) => k === "a" ? undefined : v);
+                   return [Object.keys(o).join(","), o.b].join("|");"#
+            ),
+            string("b|2")
+        );
+        assert_eq!(
+            run_value(
+                r#"const o = JSON.parse('{"a":1,"nested":{"b":2}}', (k, v) => typeof v === "number" ? v * 2 : v);
+                   return JSON.stringify(o);"#
+            ),
+            string(r#"{"a":2,"nested":{"b":4}}"#)
+        );
+        assert_eq!(
+            run_value(
+                r#"return JSON.parse('[1,2]', (k, v) => typeof v === "number" ? v + 1 : v).join(",");"#
+            ),
+            string("2,3")
+        );
+        assert_eq!(
+            run_value(r#"return JSON.parse("1", (k, v) => k === "" ? "root" : v);"#),
+            string("root")
+        );
+        assert_eq!(
+            run_value("return String(JSON.parse('1', () => undefined));"),
+            string("undefined")
+        );
+        assert_eq!(run_value("return JSON.parse('1', 42);"), number(1.0));
+        let error = run("return JSON.parse('1', Math.abs);").expect_err("unsupported reviver");
+        assert_eq!(error.kind(), super::RuntimeErrorKind::TypeError);
+        assert_eq!(
+            run_value(
+                r#"const seen = []; JSON.parse('{"a":{"b":1},"c":2}', (k, v) => { seen.push(k); return v; });
+                   return seen.join(",");"#
+            ),
+            string("b,a,c,")
+        );
+        assert_eq!(
+            run_value(
+                r#"const a = JSON.parse('[1,2]', (k, v) => k === "0" ? undefined : v);
+                   return [a.length, typeof a[0], a[1]].join(",");"#
+            ),
+            string("2,undefined,2")
+        );
+        assert_eq!(
+            run_value("return typeof JSON.parse('1', () => () => 1);"),
+            string("function")
         );
     }
 
