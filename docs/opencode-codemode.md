@@ -197,6 +197,9 @@ shadowingできる。
   0xFF超の文字は `TypeError` にする。`atob` はASCII whitespaceを無視し、
   省略paddingを補うforgiving base64を復号して各byteをLatin-1文字として返す。
   不正文字・不正padding・引数なしは `TypeError`。
+- `structuredClone` はObject/Array/Map/Set/Date/Error/AggregateErrorを
+  共有参照と循環を保って複製する。callable/Promise/ToolRefは
+  `DataCloneError` 相当の `TypeError` にする。
 - グローバルな `String` / `Number` / `Boolean` / `parseInt` / `parseFloat` は、
   入力 (ネストを含む) のcallableと未await Promiseをdata境界で
   `InvalidDataValue` にする。

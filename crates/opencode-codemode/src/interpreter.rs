@@ -7,6 +7,7 @@
 //! stages and are not implemented here.
 
 use std::cell::RefCell;
+use std::collections::HashMap;
 use std::fmt::{self, Display, Formatter};
 use std::rc::Rc;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -519,6 +520,7 @@ impl<'a> Interpreter<'a> {
             ("decodeURIComponent", Value::Builtin("decodeURIComponent")),
             ("atob", Value::Builtin("atob")),
             ("btoa", Value::Builtin("btoa")),
+            ("structuredClone", Value::Builtin("structuredClone")),
         ] {
             scope.bindings.insert(
                 name.to_owned(),
@@ -1862,6 +1864,16 @@ impl<'a> Interpreter<'a> {
                     bytes.push(character as u8);
                 }
                 Ok(Value::String(base64_encode(&bytes)))
+            }
+            "structuredClone" => {
+                if arguments.is_empty() {
+                    return Err(RuntimeError::type_error(
+                        "structuredClone requires 1 argument.",
+                        _span,
+                    ));
+                }
+                let mut memo = HashMap::new();
+                structured_clone_value(&argument(0), &mut memo, _span)
             }
             "encodeURI" | "encodeURIComponent" | "decodeURI" | "decodeURIComponent" => {
                 let text = to_js_string(&argument(0));
@@ -8030,6 +8042,129 @@ fn format_number(value: f64) -> String {
     output
 }
 
+fn structured_clone_value(
+    value: &Value,
+    memo: &mut HashMap<usize, Value>,
+    span: Span,
+) -> Result<Value, RuntimeError> {
+    match value {
+        Value::Undefined
+        | Value::Null
+        | Value::Boolean(_)
+        | Value::Number(_)
+        | Value::String(_) => Ok(value.clone()),
+        Value::Function(_) | Value::Builtin(_) | Value::BoundMethod { .. } => Err(
+            RuntimeError::type_error("DataCloneError: a function could not be cloned.", span),
+        ),
+        Value::ToolRef(_) => Err(RuntimeError::type_error(
+            "DataCloneError: a tool reference could not be cloned.",
+            span,
+        )),
+        Value::Promise(_) => Err(RuntimeError::type_error(
+            "DataCloneError: a promise could not be cloned.",
+            span,
+        )),
+        Value::Array(array) => {
+            let identity = Rc::as_ptr(array) as *const () as usize;
+            if let Some(clone) = memo.get(&identity) {
+                return Ok(clone.clone());
+            }
+            let clone = Rc::new(RefCell::new(Vec::new()));
+            let result = Value::Array(Rc::clone(&clone));
+            memo.insert(identity, result.clone());
+            let items = array.borrow().clone();
+            let mut cloned = Vec::with_capacity(items.len());
+            for item in items {
+                cloned.push(structured_clone_value(&item, memo, span)?);
+            }
+            *clone.borrow_mut() = cloned;
+            Ok(result)
+        }
+        Value::Object(object) => {
+            let identity = Rc::as_ptr(object) as *const () as usize;
+            if let Some(clone) = memo.get(&identity) {
+                return Ok(clone.clone());
+            }
+            let clone = Rc::new(RefCell::new(IndexMap::new()));
+            let result = Value::Object(Rc::clone(&clone));
+            memo.insert(identity, result.clone());
+            let entries = object.borrow().clone();
+            let mut copied = IndexMap::with_capacity(entries.len());
+            for (key, item) in entries {
+                copied.insert(key, structured_clone_value(&item, memo, span)?);
+            }
+            *clone.borrow_mut() = copied;
+            Ok(result)
+        }
+        Value::Map(map) => {
+            let identity = Rc::as_ptr(map) as *const () as usize;
+            if let Some(clone) = memo.get(&identity) {
+                return Ok(clone.clone());
+            }
+            let clone = MapValue::new();
+            let result = Value::Map(Rc::new(clone));
+            memo.insert(identity, result.clone());
+            let Value::Map(clone) = &result else {
+                unreachable!("map clone type");
+            };
+            for (key, item) in map.entries() {
+                clone.insert(
+                    structured_clone_value(&key, memo, span)?,
+                    structured_clone_value(&item, memo, span)?,
+                );
+            }
+            Ok(result)
+        }
+        Value::Set(set) => {
+            let identity = Rc::as_ptr(set) as *const () as usize;
+            if let Some(clone) = memo.get(&identity) {
+                return Ok(clone.clone());
+            }
+            let clone = SetValue::new();
+            let result = Value::Set(Rc::new(clone));
+            memo.insert(identity, result.clone());
+            let Value::Set(clone) = &result else {
+                unreachable!("set clone type");
+            };
+            for item in set.values() {
+                clone.add(structured_clone_value(&item, memo, span)?);
+            }
+            Ok(result)
+        }
+        Value::Date(date) => {
+            let identity = Rc::as_ptr(date) as *const () as usize;
+            if let Some(clone) = memo.get(&identity) {
+                return Ok(clone.clone());
+            }
+            let result = Value::date(date.time_ms.get());
+            memo.insert(identity, result.clone());
+            Ok(result)
+        }
+        Value::Error(error) => {
+            let identity = Rc::as_ptr(error) as *const () as usize;
+            if let Some(clone) = memo.get(&identity) {
+                return Ok(clone.clone());
+            }
+            let errors = match &error.errors {
+                Some(errors) => Some(
+                    errors
+                        .iter()
+                        .map(|item| structured_clone_value(item, memo, span))
+                        .collect::<Result<Vec<_>, _>>()?,
+                ),
+                None => None,
+            };
+            let result = Value::Error(Rc::new(crate::value::ErrorValue {
+                kind: error.kind,
+                message: error.message.clone(),
+                errors,
+            }));
+            memo.insert(identity, result.clone());
+            Ok(result)
+        }
+    }
+}
+
 fn base64_encode(bytes: &[u8]) -> String {
     const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
     let mut output = String::with_capacity(bytes.len().div_ceil(3) * 4);
@@ -10301,6 +10436,60 @@ mod tests {
         let error = run(r#"return btoa("😀");"#).expect_err("non-Latin1 string");
         assert_eq!(error.kind(), super::RuntimeErrorKind::TypeError);
         assert_eq!(run_value(r#"return btoa("a", 1);"#), string("YQ=="));
+    }
+
+    #[test]
+    fn evaluates_structured_clone() {
+        assert_eq!(
+            run_value("return structuredClone(undefined);"),
+            Value::Undefined
+        );
+        assert_eq!(run_value("return structuredClone(1);"), number(1.0));
+        assert_eq!(
+            run_value(
+                "const o = { a: 1 }; const c = structuredClone(o); c.a = 2; \
+                 return [c !== o, o.a, c.a].join(',');"
+            ),
+            string("true,1,2")
+        );
+        assert_eq!(
+            run_value(
+                "const a = { x: 1 }; const c = structuredClone({ a, b: a }); \
+                 return [c.a === c.b, c.a !== a].join(',');"
+            ),
+            string("true,true")
+        );
+        assert_eq!(
+            run_value(
+                "const m = new Map(); m.set('self', m); const c = structuredClone(m); \
+                 return c.get('self') === c;"
+            ),
+            Value::Boolean(true)
+        );
+        assert_eq!(
+            run_value(
+                "const d = new Date(5); const c = structuredClone(d); \
+                 return [c !== d, c.getTime()].join(',');"
+            ),
+            string("true,5")
+        );
+        assert_eq!(
+            run_value(
+                "const e = new AggregateError([1, 2], 'x'); const c = structuredClone(e); \
+                 return [c instanceof AggregateError, c.message, c.errors.join(',')].join('|');"
+            ),
+            string("true|x|1,2")
+        );
+        for source in [
+            "return structuredClone(() => 1);",
+            "return structuredClone(Promise.resolve(1));",
+            "return structuredClone(tools);",
+        ] {
+            let error = run(source).expect_err("non-cloneable value");
+            assert_eq!(error.kind(), super::RuntimeErrorKind::TypeError, "{source}");
+        }
+        let error = run("return structuredClone();").expect_err("missing argument");
+        assert_eq!(error.kind(), super::RuntimeErrorKind::TypeError);
     }
 
     #[test]
