@@ -49,6 +49,9 @@ pub fn clip(time_ms: f64) -> f64 {
         return f64::NAN;
     }
     let time_ms = time_ms.trunc();
+    if time_ms == 0.0 {
+        return 0.0;
+    }
     if time_ms.abs() > MAX_TIME_MS {
         f64::NAN
     } else {
@@ -402,6 +405,7 @@ mod tests {
     fn clips_fractional_and_out_of_range_values() {
         assert_eq!(clip(1.9), 1.0);
         assert_eq!(clip(-1.9), -1.0);
+        assert_eq!(clip(-0.0).to_bits(), 0.0f64.to_bits());
         assert!(clip(9.0e15).is_nan());
         assert!(clip(f64::INFINITY).is_nan());
     }

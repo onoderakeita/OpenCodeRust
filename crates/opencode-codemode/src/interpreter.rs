@@ -232,6 +232,23 @@ impl Scope {
     }
 }
 
+/// Source for `for...of` / `for...in`: arrays are read live by index so
+/// mutations during the loop are observed, while other iterables use the
+/// snapshot produced by `spread_items`/`enumerable_keys`.
+enum ForEachSource {
+    Snapshot(Vec<Value>),
+    Array(crate::value::ArrayRef),
+}
+
+impl ForEachSource {
+    fn at(&self, index: usize) -> Option<Value> {
+        match self {
+            Self::Snapshot(items) => items.get(index).cloned(),
+            Self::Array(array) => array.borrow().get(index).cloned(),
+        }
+    }
+}
+
 /// Completion produced by evaluating a statement.
 #[derive(Debug, Clone)]
 enum Flow {
@@ -597,7 +614,7 @@ impl<'a> Interpreter<'a> {
             }
             Statement::ForInStatement(statement) => {
                 let value = self.eval_expression(&statement.right)?;
-                let keys = if let Some(path) = value.tool_path() {
+                let keys: Vec<Value> = if let Some(path) = value.tool_path() {
                     self.tool_host
                         .as_ref()
                         .map(|host| host.keys(path))
@@ -608,11 +625,18 @@ impl<'a> Interpreter<'a> {
                 } else {
                     enumerable_keys(&value, statement.right.span())?
                 };
-                self.eval_for_each(&statement.left, keys, &statement.body)
+                self.eval_for_each(
+                    &statement.left,
+                    ForEachSource::Snapshot(keys),
+                    &statement.body,
+                )
             }
             Statement::ForOfStatement(statement) => {
                 let value = self.eval_expression(&statement.right)?;
-                let items = iterable_items(&value, statement.span)?;
+                let items = match &value {
+                    Value::Array(array) => ForEachSource::Array(Rc::clone(array)),
+                    _ => ForEachSource::Snapshot(iterable_items(&value, statement.span)?),
+                };
                 self.eval_for_each(&statement.left, items, &statement.body)
             }
             Statement::ForStatement(statement) => self.eval_for_statement(statement),
@@ -817,10 +841,12 @@ impl<'a> Interpreter<'a> {
     fn eval_for_each(
         &mut self,
         left: &'a ForStatementLeft<'a>,
-        items: Vec<Value>,
+        items: ForEachSource,
         body: &'a Statement<'a>,
     ) -> Result<Flow, RuntimeError> {
-        for item in items {
+        let mut index = 0;
+        while let Some(item) = items.at(index) {
+            index += 1;
             let saved = Rc::clone(&self.scope);
             self.scope = Rc::new(RefCell::new(Scope::child(saved.clone())));
             let iteration = (|| {
@@ -4385,7 +4411,7 @@ fn construct_date(arguments: &[Value]) -> Value {
         [] => crate::date::now_ms(),
         [value] => match value {
             Value::Date(date) => date.time_ms,
-            Value::Number(number) => *number,
+            Value::Number(number) => crate::date::clip(*number),
             Value::String(text) => crate::date::parse_iso(text),
             _ => f64::NAN,
         },
@@ -6753,6 +6779,14 @@ mod tests {
             ),
             number(4.0)
         );
+        assert_eq!(
+            run_value(
+                "const a = [1, 2]; const seen = []; \
+                 for (const x of a) { seen.push(x); if (x === 1) a.push(3); } \
+                 return seen.join(',');"
+            ),
+            string("1,2,3")
+        );
     }
 
     #[test]
@@ -7728,6 +7762,13 @@ mod tests {
         assert_eq!(
             run_value("return new Date('2024-01-02T03:04:05.000Z').getTime();"),
             number(1_704_164_645_000.0)
+        );
+        assert_eq!(
+            run_value(
+                "return [new Date(1.9).getTime(), new Date(-1.9).getTime(), \
+                 String(1 / new Date(-0).getTime())].join(',');"
+            ),
+            string("1,-1,Infinity")
         );
         assert_eq!(run_value("return +new Date(42);"), number(42.0));
         assert_eq!(
