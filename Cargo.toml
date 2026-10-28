@@ -63,12 +63,12 @@ regex = "1"
 glob = "0.3"
 hex = "0.4"
 clap = { version = "4", features = ["derive"] }
-notify = "7"
+notify = "8"
 walkdir = "2"
 nucleo-matcher = "=0.3.1"
 syntect = { version = "=5.3.0", default-features = false, features = ["default-syntaxes", "default-themes", "regex-onig"] }
 similar = "=2.7.0"
-dirs = "6"
+dirs = "7"
 async-trait = "0.1"
 futures = "0.3"
 reqwest = { version = "0.12", features = ["json", "stream", "rustls-tls"] }
@@ -79,35 +79,25 @@ pin-project-lite = "0.2"
 axum = "0.8"
 axum-extra = { version = "0.10", features = ["typed-header"] }
 tower = "0.5"
-tower-http = { version = "0.6", features = ["cors", "fs", "trace"] }
+tower-http = { version = "0.7", features = ["cors", "fs", "trace"] }
 hyper = { version = "1", features = ["full"] }
 http-body-util = "0.1"
 async-process = "2"
-which = "7"
+which = "8"
 content_inspector = "0.2"
-parking_lot = "0.12"
+parking_lot = "0.13"
 dashmap = "6.1"
 url = "2.5"
 lsp-types = "0.97"
 sqlx = { version = "0.8", features = ["runtime-tokio", "sqlite"] }
-portable-pty = "0.8"
+portable-pty = "0.9"
 oauth2 = "5"
-sha2 = "0.10"
-base64 = "0.22"
-tree-sitter = "0.24"
-tree-sitter-bash = "0.23"
+sha2 = "0.11"
+base64 = "0.23"
+tree-sitter = "0.27"
+tree-sitter-bash = "0.25"
 tempfile = "3.16.0"
 time = "0.3"
 rustls = { version = "0.23", features = ["std"] }
 rustls-webpki = "0.103"
 h2 = "0.4"
-
-# Termux/Android workarounds.
-# termios 0.2.2 does not ship an Android target module; on Android (target_os
-# = "android") the crate fails to compile because `os::target` is unresolved
-# for serial's transitive dependency chain (portable-pty -> serial ->
-# serial-unix -> termios). The vendored copy adds `os/android.rs` mirroring
-# the Linux definitions, which matches the bionic libc termios ABI.
-# See docs/TERMUX_BUILD.md.
-[patch.crates-io]
-termios = { path = "vendor/termios-0.2.2" }

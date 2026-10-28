@@ -40,7 +40,7 @@ content_inspector = { workspace = true }
 reqwest = { workspace = true }
 uuid = { workspace = true }
 urlencoding = "2.1"
-base64 = "0.22"
+base64 = "0.23"
 
 [dev-dependencies]
 tempfile = "3"

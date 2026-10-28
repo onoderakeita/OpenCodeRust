@@ -481,7 +481,7 @@ fn parse_jsonc(content: &str) -> Result<Config> {
         allow_trailing_commas: true,
         ..Default::default()
     };
-    let parsed = parse_to_serde_value(content, &parse_options)
+    let parsed = parse_to_serde_value::<Option<serde_json::Value>>(content, &parse_options)
         .with_context(|| "Failed to parse JSONC")?
         .context("Config content is empty")?;
     serde_json::from_value(parsed).with_context(|| "Failed to parse config JSON")

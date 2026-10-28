@@ -12,21 +12,8 @@ OpenCodeRust in Termux.
 
 ## Vendored Patches (workspace level)
 
-Patched third-party crates live under `vendor/` and are wired in via
-`[patch.crates-io]` in the workspace `Cargo.toml`. This keeps the fixes
-reproducible without editing `~/.cargo/registry` by hand.
-
-### termios v0.2.2 (`vendor/termios-0.2.2`)
-
-- **Problem:** The crate ships `os/{linux,macos,freebsd,openbsd}.rs` but no
-  `os/android.rs`. On `target_os = "android"` the module resolution for
-  `os::target` fails and the crate does not compile. It is pulled in through
-  `portable-pty -> serial -> serial-unix -> termios`, and `serial` is a
-  non-optional dependency, so it cannot be avoided via feature flags.
-- **Solution:** Vendor the crate and add `os/android.rs` mirroring the Linux
-  definitions. Android's bionic libc follows the Linux termios ABI
-  (`NCCS = 32`, same struct layout and constant values), so the Linux
-  definitions are the correct target behavior.
+現在なし。以前の `termios 0.2.2` Android workaround は、`portable-pty 0.9`
+が `serial2`/`nix` ベースへ移行して `termios` 依存が消えたため削除した。
 
 ## Removed Dependencies
 
@@ -40,6 +27,7 @@ reproducible without editing `~/.cargo/registry` by hand.
 
 ## Lifecycle Standards
 
-- After changing `vendor/`, run `cargo clean -p <crate>` before rebuilding.
+- After changing a dependency version, run `cargo clean -p <crate>` if stale
+  build artifacts cause confusion.
 - Verify binary location using find ./target/release -name <binary_name>.
 - Use --release for production builds to ensure binary stripping and optimization.
