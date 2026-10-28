@@ -25,11 +25,9 @@ tracing = { workspace = true }
 futures = { workspace = true }
 async-trait = { workspace = true }
 axum = { version = "0.8", features = ["ws"] }
-axum-extra = { workspace = true }
 tower = { workspace = true }
 tower-http = { workspace = true }
 tokio-stream = { workspace = true, features = ["sync"] }
-tokio-tungstenite = "0.26"
 dirs = { workspace = true }
 chrono = { workspace = true }
 uuid = { workspace = true }

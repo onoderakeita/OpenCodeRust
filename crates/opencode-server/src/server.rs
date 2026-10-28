@@ -41,7 +41,7 @@ const DEFAULT_SERVER_URL: &str = "http://127.0.0.1:4096";
 
 fn generate_auth_token() -> String {
     use base64::Engine;
-    use rand::RngCore;
+    use rand::Rng;
     let mut bytes = [0u8; 32];
     rand::rng().fill_bytes(&mut bytes);
     base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(bytes)

@@ -1,7 +1,6 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use ratatui::prelude::Stylize;
 use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
     style::Style,

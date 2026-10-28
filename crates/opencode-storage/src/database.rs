@@ -101,13 +101,13 @@ impl Database {
         info!("Running database migrations");
 
         for migration in crate::schema::ALL_MIGRATIONS {
-            sqlx::query(migration)
+            sqlx::raw_sql(*migration)
                 .execute(&self.pool)
                 .await
                 .map_err(|e| DatabaseError::MigrationError(e.to_string()))?;
         }
 
-        match sqlx::query(crate::schema::MIGRATE_SESSION_INPUT_METADATA)
+        match sqlx::raw_sql(crate::schema::MIGRATE_SESSION_INPUT_METADATA)
             .execute(&self.pool)
             .await
         {

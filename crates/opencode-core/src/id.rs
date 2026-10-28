@@ -1,4 +1,4 @@
-use rand::Rng;
+use rand::RngExt;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
 

@@ -3351,7 +3351,7 @@ impl App {
         let mut captured_lines: Vec<String> = Vec::new();
 
         self.terminal.draw(|frame| {
-            let area = frame.size();
+            let area = frame.area();
             if area.width < 10 || area.height < 10 {
                 return;
             }
@@ -3425,7 +3425,7 @@ impl App {
             for y in area.y..area.y + area.height {
                 let mut line = String::with_capacity(area.width as usize);
                 for x in area.x..area.x + area.width {
-                    let cell = buf.get(x, y);
+                    let cell = &buf[(x, y)];
                     line.push_str(cell.symbol());
                 }
                 let trimmed = line.trim_end().to_string();
@@ -3441,13 +3441,13 @@ impl App {
                         if !selection.is_selected(y, x) {
                             continue;
                         }
-                        let cell = buf.get(x, y);
+                        let cell = &buf[(x, y)];
                         let sym = cell.symbol();
                         // Only highlight cells with visible text content
                         if sym.is_empty() || sym.chars().all(|c| c == ' ') {
                             continue;
                         }
-                        let cell = buf.get_mut(x, y);
+                        let cell = &mut buf[(x, y)];
                         // Resolve Reset to concrete terminal defaults before swapping.
                         // Reset fg = terminal default foreground (typically white/light).
                         // Reset bg = terminal default background (typically black/dark).

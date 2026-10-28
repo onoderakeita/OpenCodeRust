@@ -1,6 +1,5 @@
 use std::cell::Cell;
 
-use ratatui::prelude::Stylize;
 use ratatui::{
     layout::Rect,
     style::Style,
